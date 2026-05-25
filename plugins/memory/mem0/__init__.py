@@ -52,6 +52,15 @@ def _load_config() -> dict:
         "agent_id": os.environ.get("MEM0_AGENT_ID", "hermes"),
         "rerank": True,
         "keyword_search": False,
+        # --- NORA self-hosted (library) mode: FAISS + Olares OpenAI-compat ---
+        "mode": os.environ.get("MEM0_MODE", "cloud"),
+        "olares_api_key_env": os.environ.get("MEM0_OLARES_KEY_ENV", "OLARES_API_KEY"),
+        "llm_base_url": os.environ.get("MEM0_LLM_BASE_URL", ""),
+        "llm_model": os.environ.get("MEM0_LLM_MODEL", ""),
+        "embedder_base_url": os.environ.get("MEM0_EMBEDDER_BASE_URL", ""),
+        "embedder_model": os.environ.get("MEM0_EMBEDDER_MODEL", ""),
+        "embedding_dims": int(os.environ.get("MEM0_EMBEDDING_DIMS", "0") or 0),
+        "faiss_path": os.environ.get("MEM0_FAISS_PATH", ""),
     }
 
     config_path = get_hermes_home() / "mem0.json"
@@ -141,6 +150,12 @@ class Mem0MemoryProvider(MemoryProvider):
 
     def is_available(self) -> bool:
         cfg = _load_config()
+        if cfg.get("mode") == "library":
+            try:
+                import mem0  # noqa: F401
+            except ImportError:
+                return False
+            return bool(os.environ.get(cfg.get("olares_api_key_env", "OLARES_API_KEY")))
         return bool(cfg.get("api_key"))
 
     def save_config(self, values, hermes_home):
@@ -160,10 +175,18 @@ class Mem0MemoryProvider(MemoryProvider):
 
     def get_config_schema(self):
         return [
-            {"key": "api_key", "description": "Mem0 Platform API key", "secret": True, "required": True, "env_var": "MEM0_API_KEY", "url": "https://app.mem0.ai"},
+            {"key": "mode", "description": "cloud (Mem0 Platform) or library (self-hosted FAISS)", "default": "cloud", "choices": ["cloud", "library"]},
+            {"key": "api_key", "description": "Mem0 Platform API key (cloud mode only)", "secret": True, "required": False, "env_var": "MEM0_API_KEY", "url": "https://app.mem0.ai"},
             {"key": "user_id", "description": "User identifier", "default": "hermes-user"},
             {"key": "agent_id", "description": "Agent identifier", "default": "hermes"},
             {"key": "rerank", "description": "Enable reranking for recall", "default": "true", "choices": ["true", "false"]},
+            {"key": "llm_base_url", "description": "(library) LLM OpenAI-compat base_url", "default": ""},
+            {"key": "llm_model", "description": "(library) LLM model id", "default": ""},
+            {"key": "embedder_base_url", "description": "(library) embeddings OpenAI-compat base_url", "default": ""},
+            {"key": "embedder_model", "description": "(library) embedding model id", "default": ""},
+            {"key": "embedding_dims", "description": "(library) embedding vector dimension", "default": ""},
+            {"key": "faiss_path", "description": "(library) FAISS index path", "default": ""},
+            {"key": "olares_api_key_env", "description": "(library) env var holding the LLM/embedder key", "default": "OLARES_API_KEY"},
         ]
 
     def _get_client(self):
@@ -171,12 +194,72 @@ class Mem0MemoryProvider(MemoryProvider):
         with self._client_lock:
             if self._client is not None:
                 return self._client
+            if (self._config or {}).get("mode") == "library":
+                self._client = self._build_local_memory()
+                return self._client
             try:
                 from mem0 import MemoryClient
                 self._client = MemoryClient(api_key=self._api_key)
                 return self._client
             except ImportError:
                 raise RuntimeError("mem0 package not installed. Run: pip install mem0ai")
+
+    def _build_local_memory(self):
+        """Self-hosted mem0 Memory: FAISS index + Olares OpenAI-compatible LLM/embedder.
+
+        Keeps all user memory on-instance — never hits api.mem0.ai or api.openai.com.
+        The mem0 openai LLM/embedder honour `openai_base_url`, so pointing them at
+        Olares is enough to stay sovereign (verify no OPENROUTER_API_KEY in env, which
+        mem0's OpenAI client would otherwise prefer).
+        """
+        try:
+            from mem0 import Memory
+        except ImportError:
+            raise RuntimeError("mem0 package not installed. Run: pip install mem0ai faiss-cpu")
+        cfg = self._config or {}
+        key_env = cfg.get("olares_api_key_env", "OLARES_API_KEY")
+        olares_key = os.environ.get(key_env, "")
+        if not olares_key:
+            raise RuntimeError(f"mem0 library mode: env var {key_env} is empty")
+        faiss_path = cfg.get("faiss_path")
+        if not faiss_path:
+            from hermes_constants import get_hermes_home
+            faiss_path = str(get_hermes_home() / "memory" / "faiss")
+        parent = os.path.dirname(faiss_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        vs_config = {
+            "collection_name": "nora_mem0",
+            "path": faiss_path,
+            "distance_strategy": "cosine",
+            "normalize_L2": True,
+        }
+        dims = int(cfg.get("embedding_dims") or 0)
+        if dims:
+            vs_config["embedding_model_dims"] = dims
+        mem0_config = {
+            "vector_store": {"provider": "faiss", "config": vs_config},
+            "llm": {
+                "provider": "openai",
+                "config": {
+                    "model": cfg.get("llm_model", ""),
+                    "openai_base_url": cfg.get("llm_base_url", ""),
+                    "api_key": olares_key,
+                    "temperature": 0.1,
+                    "max_tokens": 2000,
+                },
+            },
+            "embedder": {
+                "provider": "openai",
+                "config": {
+                    "model": cfg.get("embedder_model", ""),
+                    "openai_base_url": cfg.get("embedder_base_url", ""),
+                    "api_key": olares_key,
+                },
+            },
+        }
+        from mem0 import Memory as _M
+        return _M.from_config(mem0_config)
 
     def _is_breaker_open(self) -> bool:
         """Return True if the circuit breaker is tripped (too many failures)."""
