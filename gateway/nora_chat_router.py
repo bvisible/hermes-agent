@@ -91,6 +91,53 @@ _CLASSIFIER_SYSTEM = (
 # A classifier reply token → canonical pole (or "DIRECT"). We accept the bare key.
 _TOKEN_RE = re.compile(r"[a-zàâçéèêëîïôûùüÿñæœ]+", re.IGNORECASE)
 
+# ── Keyword fast-path (latency) ──────────────────────────────────────────────
+# Route the OBVIOUS messages WITHOUT the ~1s LLM classifier call → the ack lands
+# instantly. CONSERVATIVE on purpose: only UNAMBIGUOUS triggers are here. Ambiguous
+# words ("facture", "client", "prix", "paiement") are deliberately absent — they fall
+# through to the LLM (with the full SOUL) so routing quality is never sacrificed for
+# speed. The fast-path is SKIPPED entirely when:
+#   - there is a follow-up `prior` pole → the LLM-with-context path must handle it
+#     ("Ceux de Daniel Moret" must stay on the prior pole), and
+#   - the message carries recurrence markers → the 'recurrent' decision belongs to the LLM.
+_RECUR_RE = re.compile(
+    r"(tous les|chaque (jour|matin|soir|semaine|lundi|mardi|mercredi|jeudi|vendredi|mois)|"
+    r"toutes les heures|r[ée]guli[èe]rement|automatiquement|planifie|programme[ -]?(moi|une|une t)|"
+    r"fais[ -]?le tous|chaque fois)",
+    re.IGNORECASE,
+)
+# (regex, pole) — first match wins. ANALYSE is checked FIRST: a chart/visual request goes
+# to analyse regardless of subject (SOUL rule). Then the unambiguous domain keywords.
+_FAST_PATH_RULES = (
+    (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
+    (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
+    (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
+    (re.compile(r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des))", re.IGNORECASE), "rh"),
+)
+# DIRECT only when the WHOLE message is a greeting/thanks/meta (so "Bonjour, quel est mon
+# CA ?" is NOT caught here — the domain rules above match "chiffre d'affaires" first).
+_DIRECT_RE = re.compile(
+    r"^\s*(bonjour|salut|coucou|hello|hey|merci[\s!.]*|ça va|ca va|comment vas[ -]?tu|qui es[ -]?tu|que sais[ -]?tu faire)[\s!.?]*$",
+    re.IGNORECASE,
+)
+
+
+def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
+    """Unambiguous keyword → pole/'DIRECT' without an LLM call; else None (→ LLM classify).
+
+    Never overrides the conversation-context (`prior`) or the 'recurrent' decision.
+    """
+    if prior and prior.get("pole"):
+        return None  # follow-up → keep the context-aware LLM path
+    if _RECUR_RE.search(msg):
+        return None  # recurring request → the LLM owns the 'recurrent' classification
+    for rx, pole in _FAST_PATH_RULES:
+        if rx.search(msg):
+            return pole
+    if _DIRECT_RE.match(msg):
+        return "DIRECT"
+    return None
+
 
 def classify(
     message: str,
@@ -114,6 +161,11 @@ def classify(
     msg = (message or "").strip()
     if not msg:
         return "DIRECT"
+    # Latency: obvious messages skip the ~1s LLM call → the ack lands instantly.
+    fast = _fast_path(msg, prior)
+    if fast:
+        logger.info("nora_chat_router: keyword fast-path → %s (no LLM call)", fast)
+        return fast
     user_content = msg[:2000]
     if prior and prior.get("pole"):
         user_content = (
