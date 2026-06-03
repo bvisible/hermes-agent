@@ -59,9 +59,14 @@ _LAST_ROUTE_MAX = 1000  # bound the dict; cleared wholesale when exceeded (cheap
 # the owning pole). The model must answer with EXACTLY one lowercase token.
 _CLASSIFIER_SYSTEM = (
     "Tu es le routeur de Neoffice. On te donne le message d'un utilisateur. "
-    "Tu réponds par UN SEUL mot parmi : compta, ventes, support, rh, analyse, direct. "
+    "Tu réponds par UN SEUL mot parmi : recurrent, compta, ventes, support, rh, analyse, direct. "
     "Aucune ponctuation, aucune explication, juste le mot.\n\n"
-    "Choisis le pôle métier qui doit traiter la demande :\n"
+    "PRIORITÉ ABSOLUE — 'recurrent' : si la demande doit se RÉPÉTER dans le temps "
+    "(« tous les matins / chaque jour / toutes les heures / chaque lundi / chaque semaine / "
+    "régulièrement / automatiquement / planifie / programme une tâche / fais-le tous les… »), "
+    "réponds 'recurrent' — PEU IMPORTE le sujet (même si ça parle d'emails, de factures ou de "
+    "PDF). Une demande PONCTUELLE (une seule fois, maintenant) n'est PAS 'recurrent'.\n\n"
+    "Sinon, choisis le pôle métier qui doit traiter la demande :\n"
     "- compta : factures, paiements, TVA, chiffre d'affaires, impayés, fournisseurs, "
     "commandes d'achat, rapports financiers (un chiffre demandé en TEXTE).\n"
     "- ventes : devis, commandes clients, factures de vente, articles, clients "
@@ -135,6 +140,8 @@ def classify(
         return "DIRECT"
     tokens = _TOKEN_RE.findall(raw)
     for tok in tokens:
+        if tok == "recurrent":
+            return "recurrent"
         if tok in POLES:
             return tok
         if tok in ("direct", "aucun", "none"):
@@ -193,6 +200,56 @@ def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
         return False
 
 
+def _route_recurrent(
+    message: str, chat_user: Optional[str], deliver_extra: Optional[dict]
+) -> dict:
+    """RECURRENT class: a recurring request ("relève mes mails tous les matins"). We create
+    the scheduled task IN CODE via the nora ``task_router.route_recurrent`` endpoint — it
+    extracts the schedule DETERMINISTICALLY (time/frequency/kind/mailbox), scopes it to the
+    user, and returns a fixed ack we deliver to the desk. Like the kanban path, this takes
+    the action out of the weak model's hands. Any failure (no user, endpoint down, declined)
+    → routed=False so the caller falls back to the normal agent dispatch (zero regression).
+    The Frappe URL + auth are derived from the SAME desk callback the ack POST uses."""
+    extra = deliver_extra or {}
+    cb = (extra.get("callback_url") or "").strip()
+    token = (extra.get("callback_token") or "").strip()
+    cid = (extra.get("conversation_id") or "").strip()
+    user = (chat_user or "").strip()
+    _DELIVER = "nora.api.v2.hermes_callback.deliver"
+    _ROUTE = "nora.api.v2.task_router.route_recurrent"
+    if not (cb and token and user) or _DELIVER not in cb:
+        return {"routed": False, "category": "recurrent", "ack": None, "task_id": None}
+    import json as _json
+    import urllib.request
+
+    url = cb.replace(_DELIVER, _ROUTE)
+    body = _json.dumps({"user": user, "message": message, "conversation_id": cid}).encode()
+    req = urllib.request.Request(
+        url, data=body, method="POST",
+        headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = _json.loads(resp.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("nora_chat_router: recurrent POST failed → agent fallback: %s", exc)
+        return {"routed": False, "category": "recurrent", "ack": None, "task_id": None}
+    if not isinstance(data, dict) or not data.get("ok"):
+        logger.info(
+            "nora_chat_router: recurrent declined (%s) → agent fallback", (data or {}).get("error")
+        )
+        return {"routed": False, "category": "recurrent", "ack": None, "task_id": None}
+    ack = data.get("ack") or "C'est noté, je programme ça."
+    ack_delivered = _post_ack_to_callback(ack, deliver_extra)
+    logger.info(
+        "nora_chat_router: recurrent task=%s ack_delivered=%s", data.get("task_id"), ack_delivered
+    )
+    return {
+        "routed": True, "category": "recurrent", "ack": ack,
+        "task_id": data.get("task_id"), "ack_delivered": ack_delivered,
+    }
+
+
 def route_chat_message(
     *,
     message: str,
@@ -205,6 +262,7 @@ def route_chat_message(
     call_llm_fn: Callable[..., Any],
     main_runtime: Optional[dict],
     deliver_extra: Optional[dict] = None,
+    chat_user: Optional[str] = None,
     board: Optional[str] = None,
     classify_timeout: float = 8.0,
 ) -> dict:
@@ -235,6 +293,12 @@ def route_chat_message(
         }
     if category == "DIRECT":
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
+
+    # RECURRENT — a recurring "do this every X" request. Not a one-shot pole task: create
+    # a scheduled task in code (deterministic, user-scoped) via the nora task_router and
+    # deliver its ack. Falls back to the agent on any failure (zero regression).
+    if category == "recurrent":
+        return _route_recurrent(message, chat_user, deliver_extra)
 
     # Create the task exactly as the kanban_create tool does (assignee + running →
     # the dispatcher spawns the specialist worker). idempotency_key (the webhook

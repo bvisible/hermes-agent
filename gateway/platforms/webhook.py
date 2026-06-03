@@ -617,6 +617,9 @@ class WebhookAdapter(BasePlatformAdapter):
                         call_llm_fn=call_llm,
                         main_runtime=None,
                         deliver_extra=deliver_config.get("deliver_extra"),
+                        # Real end-user (desk payload carries it) — the RECURRENT class
+                        # needs it to scope the scheduled task; the kanban path ignores it.
+                        chat_user=payload.get("user"),
                     )
                     if _decision.get("routed"):
                         # route_chat_message already delivered the immediate ack via the
