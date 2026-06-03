@@ -45,6 +45,15 @@ POLE_LABELS_FR = {
     "analyse": "Analyse",
 }
 
+# Per-conversation last route (in-memory, gateway-process-scoped). Lets the classifier
+# resolve follow-ups IN CONTEXT: "Ceux de Daniel Moret" after "Combien de devis ouverts ?"
+# (→ ventes) is the SAME ventes query filtered by a CLIENT — not an RH question about a
+# person. Without this, each message is classified blind and a name-only follow-up gets
+# mis-routed (verified 2026-06-03: "Ceux de Daniel Moret" → rh). Resets on gateway restart
+# (the first follow-up after a restart degrades to context-free classify — acceptable).
+_LAST_ROUTE: dict = {}
+_LAST_ROUTE_MAX = 1000  # bound the dict; cleared wholesale when exceeded (cheap, rare)
+
 # Classifier system prompt. Mirrors the SOUL roster domains + its two disambiguation
 # rules (any chart/visual → analyse regardless of subject; a plain number in text →
 # the owning pole). The model must answer with EXACTLY one lowercase token.
@@ -66,7 +75,12 @@ _CLASSIFIER_SYSTEM = (
     "Réponds 'direct' UNIQUEMENT si le message est une salutation, un remerciement, du "
     "bavardage, une question sur Nora elle-même, ou une demande à laquelle on répond en "
     "une phrase SANS consulter les données métier. En cas de doute entre un pôle et "
-    "'direct' pour une vraie demande métier, choisis le pôle."
+    "'direct' pour une vraie demande métier, choisis le pôle.\n\n"
+    "SUITE DE CONVERSATION : si un contexte « message précédent → pôle X » t'est donné ET "
+    "que le nouveau message est une PRÉCISION/SUITE (un nom seul, « ceux de … », « et pour … », "
+    "un filtre, un pronom comme « les siens »), garde le MÊME pôle X. Un nom de personne dans un "
+    "contexte ventes/devis ou compta/factures est un CLIENT, PAS un sujet RH (rh = congés, paie, "
+    "employés internes uniquement)."
 )
 
 # A classifier reply token → canonical pole (or "DIRECT"). We accept the bare key.
@@ -78,9 +92,15 @@ def classify(
     *,
     call_llm_fn: Callable[..., Any],
     main_runtime: Optional[dict],
+    prior: Optional[dict] = None,
     timeout: float = 8.0,
 ) -> str:
     """Return a pole in :data:`POLES`, or ``"DIRECT"``.
+
+    ``prior`` (optional ``{"msg", "pole"}``) is the previous turn's user message and the
+    pole it routed to; when present it is fed to the classifier so a follow-up/refinement
+    ("Ceux de Daniel Moret") stays on the same pole instead of being classified blind
+    (a client name in a devis context would otherwise look like an RH/person query).
 
     Defensive by construction: an empty message, an LLM error/timeout, or an
     unrecognized reply all resolve to ``"DIRECT"`` so the caller falls back to the
@@ -89,9 +109,16 @@ def classify(
     msg = (message or "").strip()
     if not msg:
         return "DIRECT"
+    user_content = msg[:2000]
+    if prior and prior.get("pole"):
+        user_content = (
+            f"[Contexte conversation — message précédent : « {(prior.get('msg') or '')[:200]} » "
+            f"→ pôle « {prior['pole']} ». Si ce nouveau message est une suite/précision de ce "
+            f"qui précède, garde le pôle « {prior['pole']} ».]\n{user_content}"
+        )
     messages = [
         {"role": "system", "content": _CLASSIFIER_SYSTEM},
-        {"role": "user", "content": msg[:2000]},
+        {"role": "user", "content": user_content},
     ]
     try:
         resp = call_llm_fn(
@@ -189,9 +216,23 @@ def route_chat_message(
     ``routed=False`` (category ``DIRECT`` or any creation failure) means the caller
     MUST proceed with the normal agent dispatch — the message is never dropped.
     """
+    prior = _LAST_ROUTE.get(conversation_id) if conversation_id else None
     category = classify(
-        message, call_llm_fn=call_llm_fn, main_runtime=main_runtime, timeout=classify_timeout
+        message,
+        call_llm_fn=call_llm_fn,
+        main_runtime=main_runtime,
+        prior=prior,
+        timeout=classify_timeout,
     )
+    # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
+    # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
+    if conversation_id:
+        if len(_LAST_ROUTE) > _LAST_ROUTE_MAX:
+            _LAST_ROUTE.clear()
+        _LAST_ROUTE[conversation_id] = {
+            "msg": (message or "")[:200],
+            "pole": (category if category in POLES else None),
+        }
     if category == "DIRECT":
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
 
