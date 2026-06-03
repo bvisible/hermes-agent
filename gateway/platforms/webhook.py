@@ -587,6 +587,64 @@ class WebhookAdapter(BasePlatformAdapter):
         self._delivery_info_created[session_chat_id] = now
         self._prune_delivery_info(now)
 
+        # ── NORA deterministic pre-router (gateway-side) ─────────
+        # The Qwen orchestrator intermittently emits its routing ack as plain
+        # TEXT without calling kanban_create → no task, no worker, no answer →
+        # the desk poll times out (the "empty promise", proven 2026-06-03).
+        # Prompt-level TOOL_USE_ENFORCEMENT (already active for qwen) is not
+        # enough. For the NORA chat routes we take the routing DECISION and the
+        # task CREATION out of the model's hands: classify the message and, on a
+        # business pole, create the kanban task in code + deliver a fixed ack,
+        # skipping the agent. Anything DIRECT (or any router failure) falls
+        # through to the normal agent dispatch below — zero regression on
+        # greetings / small talk / direct answers.
+        if route_name in ("nora_chat", "whatsapp_inbox") and isinstance(payload, dict):
+            try:
+                from agent.auxiliary_client import call_llm
+                from gateway.nora_chat_router import route_chat_message
+                from hermes_cli.profiles import get_active_profile_name
+
+                _user_msg = str(payload.get("message") or payload.get("text") or "")
+                if _user_msg.strip():
+                    _decision = route_chat_message(
+                        message=_user_msg,
+                        session_chat_id=session_chat_id,
+                        conversation_id=payload.get("conversation_id"),
+                        thread_id=None,
+                        user_id=f"webhook:{route_name}",
+                        notifier_profile=(get_active_profile_name() or "default"),
+                        idempotency_key=delivery_id,
+                        call_llm_fn=call_llm,
+                        main_runtime=None,
+                    )
+                    if _decision.get("routed"):
+                        logger.info(
+                            "[webhook] nora-router %s → %s task=%s (skip agent)",
+                            route_name,
+                            _decision.get("category"),
+                            _decision.get("task_id"),
+                        )
+                        try:
+                            await self._direct_deliver(_decision.get("ack") or "", deliver_config)
+                        except Exception:
+                            logger.exception(
+                                "[webhook] nora-router ack delivery failed route=%s", route_name
+                            )
+                        return web.json_response(
+                            {
+                                "status": "routed",
+                                "route": route_name,
+                                "category": _decision.get("category"),
+                                "task_id": _decision.get("task_id"),
+                                "delivery_id": delivery_id,
+                            },
+                            status=202,
+                        )
+            except Exception:
+                # The router must NEVER block a message — on any error, fall
+                # through to the normal agent dispatch below.
+                logger.exception("[webhook] nora-router errored; agent fallback route=%s", route_name)
+
         # Build source and event
         source = self.build_source(
             chat_id=session_chat_id,
