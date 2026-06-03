@@ -134,6 +134,38 @@ def _add_notify_sub(kanban_db, conn, **kw) -> None:
         kanban_db.add_notify_sub(conn, **kw)
 
 
+def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
+    """Deliver the immediate ack to the desk via the nora callback — the SAME POST the
+    nora-deliver path uses ({conversation_id, text} + X-Hermes-Token). We POST it here
+    rather than via the platform's ``_direct_deliver`` because that routes the custom
+    "nora" deliver type to ``_deliver_cross_platform``, which doesn't know it, so the
+    ack was silently dropped (success=False, no exception). Desk only — when there is no
+    callback_url (e.g. WhatsApp) we skip; the worker's result still delivers via the
+    notifier. Never raises: a failed ack must not break routing."""
+    extra = deliver_extra or {}
+    url = (extra.get("callback_url") or "").strip()
+    token = (extra.get("callback_token") or "").strip()
+    cid = (extra.get("conversation_id") or "").strip()
+    if not (url and token and cid and ack):
+        return False
+    import json as _json
+    import urllib.request
+
+    body = _json.dumps({"conversation_id": cid, "text": ack}).encode()
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return 200 <= getattr(resp, "status", 0) < 300
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("nora_chat_router: ack callback POST failed: %s", exc)
+        return False
+
+
 def route_chat_message(
     *,
     message: str,
@@ -145,6 +177,7 @@ def route_chat_message(
     idempotency_key: Optional[str],
     call_llm_fn: Callable[..., Any],
     main_runtime: Optional[dict],
+    deliver_extra: Optional[dict] = None,
     board: Optional[str] = None,
     classify_timeout: float = 8.0,
 ) -> dict:
@@ -198,8 +231,19 @@ def route_chat_message(
         logger.exception("nora_chat_router: task creation failed (%s) → DIRECT fallback", exc)
         return {"routed": False, "category": category, "ack": None, "task_id": None}
 
+    ack = build_ack(category)
+    # Deliver the immediate ack NOW so the user sees "I'm handing this to <pole>" right
+    # away — it also makes the ~10s worker wait feel responsive. Failure to deliver the
+    # ack must NEVER fail the routing (the worker result still arrives via the notifier).
+    ack_delivered = _post_ack_to_callback(ack, deliver_extra)
     logger.info(
-        "nora_chat_router: routed deterministically chat=%s → %s task=%s",
-        session_chat_id, category, task_id,
+        "nora_chat_router: routed deterministically chat=%s → %s task=%s ack_delivered=%s",
+        session_chat_id, category, task_id, ack_delivered,
     )
-    return {"routed": True, "category": category, "ack": build_ack(category), "task_id": task_id}
+    return {
+        "routed": True,
+        "category": category,
+        "ack": ack,
+        "task_id": task_id,
+        "ack_delivered": ack_delivered,
+    }

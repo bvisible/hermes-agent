@@ -616,20 +616,18 @@ class WebhookAdapter(BasePlatformAdapter):
                         idempotency_key=delivery_id,
                         call_llm_fn=call_llm,
                         main_runtime=None,
+                        deliver_extra=deliver_config.get("deliver_extra"),
                     )
                     if _decision.get("routed"):
+                        # route_chat_message already delivered the immediate ack via the
+                        # desk callback; the worker result follows via the kanban notifier.
                         logger.info(
-                            "[webhook] nora-router %s → %s task=%s (skip agent)",
+                            "[webhook] nora-router %s → %s task=%s ack=%s (skip agent)",
                             route_name,
                             _decision.get("category"),
                             _decision.get("task_id"),
+                            _decision.get("ack_delivered"),
                         )
-                        try:
-                            await self._direct_deliver(_decision.get("ack") or "", deliver_config)
-                        except Exception:
-                            logger.exception(
-                                "[webhook] nora-router ack delivery failed route=%s", route_name
-                            )
                         return web.json_response(
                             {
                                 "status": "routed",
