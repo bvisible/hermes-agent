@@ -244,10 +244,23 @@ def route_chat_message(
 
         conn = kanban_db.connect(board=board)
         try:
+            # Give the WORKER the conversation context too, so a follow-up is executed
+            # as a refinement of the prior turn — "Ceux de Daniel Moret" after "Combien de
+            # devis ouverts ?" must mean "the OPEN DEVIS of client Daniel Moret", not "show
+            # Daniel Moret's profile". The router already kept the right pole; this keeps the
+            # right INTENT. Only when the previous turn routed to the same kind of request.
+            _body = message
+            if prior and prior.get("pole") and prior.get("msg"):
+                _body = (
+                    f"[Suite de conversation — l'utilisateur a d'abord demandé : "
+                    f"« {prior['msg'][:300]} ». Le message ci-dessous précise/poursuit cette "
+                    f"demande, à interpréter dans ce contexte (un nom = un client à filtrer).]"
+                    f"\n\n{message}"
+                )
             task_id = kanban_db.create_task(
                 conn,
                 title=(message or "").strip()[:200] or "Demande",
-                body=message,
+                body=_body,
                 assignee=category,
                 created_by="nora-chat-router",
                 initial_status="running",
