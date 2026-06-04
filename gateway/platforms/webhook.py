@@ -515,6 +515,31 @@ class WebhookAdapter(BasePlatformAdapter):
                 {"status": "ignored", "event": event_type}
             )
 
+        # //// NORA CORE PATCH (divergence vs upstream) — datetime tokens for the prompt ////
+        # The nora_chat / whatsapp route prompts reference {today_fr}, {date}, {time},
+        # {year}. Inject them into the payload (setdefault → an explicit payload key
+        # still wins) so _render_prompt substitutes them like any webhook field;
+        # without this the model sees a literal "{today_fr}" — a malformed prompt that
+        # degrades routing and answers. grep "NORA CORE PATCH" before any rebase.
+        from datetime import datetime as _dt
+        _now = _dt.now()
+        _MONTHS_FR = (
+            "janvier", "février", "mars", "avril", "mai", "juin",
+            "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+        )
+        _DAYS_FR = (
+            "lundi", "mardi", "mercredi", "jeudi",
+            "vendredi", "samedi", "dimanche",
+        )
+        payload.setdefault("date", _now.strftime("%Y-%m-%d"))
+        payload.setdefault("time", _now.strftime("%H:%M"))
+        payload.setdefault("year", str(_now.year))
+        payload.setdefault(
+            "today_fr",
+            f"{_DAYS_FR[_now.weekday()]} {_now.day} "
+            f"{_MONTHS_FR[_now.month - 1]} {_now.year}",
+        )
+        # //// END NORA CORE PATCH ////
         # Format prompt from template
         prompt_template = route_config.get("prompt", "")
         prompt = self._render_prompt(
