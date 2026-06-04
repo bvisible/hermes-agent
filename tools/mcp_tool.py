@@ -2968,6 +2968,20 @@ _servers: Dict[str, MCPServerTask] = {}
 _server_connecting: set[str] = set()
 _server_connect_errors: Dict[str, str] = {}
 
+# //// NeoCompany Modification: multi-tenant MCP isolation. The tool registry
+# (tools/registry.py) is a process-global singleton, so two companies whose
+# configs each define a server of the SAME name would register the same
+# ``mcp_<name>_<tool>`` into the shared registry — last writer wins, and one
+# company could dispatch onto another tenant's MCP server. We fingerprint each
+# connected server's identity-defining config; ``register_mcp_servers`` then
+# REFUSES to reuse an existing same-named server whose fingerprint differs (a
+# different tenant's server) — fail-closed, with a loud alert — instead of
+# silently sharing it. Same-fingerprint reuse (a legitimately shared,
+# instance-level server) stays idempotent. Scoping ``_servers`` alone would not
+# close the leak because the shared tool registry is the real collision point.
+_server_config_fingerprint: Dict[str, str] = {}
+# //// End NeoCompany Modification
+
 # Circuit breaker: consecutive error counts per server.  After
 # _CIRCUIT_BREAKER_THRESHOLD consecutive failures, the handler returns
 # a "server unreachable" message that tells the model to stop retrying,
@@ -4842,6 +4856,25 @@ def _register_server_tools(name: str, server: MCPServerTask, config: dict) -> Li
     return registered_names
 
 
+# //// NeoCompany Modification: identity fingerprint for the cross-tenant guard.
+def _mcp_config_fingerprint(config: dict) -> str:
+    """Stable fingerprint of an MCP server config's identity.
+
+    Captures only the fields that define *which* server this is (command, args,
+    url, env, cwd, headers) so two companies' same-named servers with different
+    configs are distinguishable. Operational knobs (enabled, timeouts, parallel
+    flags) are excluded so they never trigger a false cross-tenant alert.
+    """
+    if not isinstance(config, dict):
+        return ""
+    identity = {k: config.get(k) for k in ("command", "args", "url", "env", "cwd", "headers")}
+    try:
+        return json.dumps(identity, sort_keys=True, default=str)
+    except Exception:
+        return repr(identity)
+# //// End NeoCompany Modification
+
+
 async def _discover_and_register_server(name: str, config: dict) -> List[str]:
     """Connect to a single MCP server, discover tools, and register them.
 
@@ -4856,6 +4889,7 @@ async def _discover_and_register_server(name: str, config: dict) -> List[str]:
         _server_connecting.discard(name)
         _server_connect_errors.pop(name, None)
         _servers[name] = server
+        _server_config_fingerprint[name] = _mcp_config_fingerprint(config)  # //// NeoCompany: record identity for the cross-tenant guard
 
     registered_names = _register_server_tools(name, server, config)
     server._registered_tool_names = list(registered_names)
@@ -4897,21 +4931,40 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
     # Only attempt servers that aren't already connected and are enabled
     # (enabled: false skips the server entirely without removing its config)
     with _lock:
-        new_servers = {
-            k: v
-            for k, v in servers.items()
-            if k not in _servers and _parse_boolish(v.get("enabled", True), default=True)
-        }
-        # Cached entries with no live session are parked or mid-reconnect.
-        # Their tools are deregistered, so nothing else can reach
-        # _signal_reconnect — without this nudge a new session silently
-        # waits up to _PARKED_RETRY_INTERVAL for the next self-probe
-        # (#50170). Wake them now so their tools come back promptly.
-        stale_cached = [
-            _servers[k]
-            for k in servers
-            if k in _servers and getattr(_servers[k], "session", None) is None
-        ]
+        # //// NeoCompany Modification: fail-closed multi-tenant guard. A server
+        # already connected under this name is reused ONLY when its identity
+        # config matches (idempotent re-registration / a legitimately shared
+        # instance-level server). A DIFFERENT config under the same name means
+        # another company's server in this shared process — refuse to expose it
+        # to the current profile (no cross-tenant leak) and raise a loud alert,
+        # instead of the previous silent `k not in _servers` skip that reused
+        # whatever was connected first.
+        new_servers = {}
+        stale_cached = []
+        for k, v in servers.items():
+            if not _parse_boolish(v.get("enabled", True), default=True):
+                continue
+            if k in _servers:
+                if _server_config_fingerprint.get(k) != _mcp_config_fingerprint(v):
+                    logger.warning(
+                        "[NeoCompany] MCP isolation: NOT exposing server %r to the current "
+                        "profile — a different server with the same name is already connected "
+                        "in this process (cross-tenant collision). Give the server a "
+                        "company-unique name, or run a dedicated gateway per company.", k,
+                    )
+                    continue  # different config = refused (and never woken from here)
+                # Same config = idempotent reuse. Upstream #50170: cached entries
+                # with no live session are parked or mid-reconnect — their tools
+                # are deregistered and nothing else reaches _signal_reconnect, so
+                # a new session would silently wait for the next self-probe. Wake
+                # the MATCHING server now so its tools come back promptly.
+                if getattr(_servers[k], "session", None) is None:
+                    stale_cached.append(_servers[k])
+                continue
+            new_servers[k] = v
+        # //// End NeoCompany Modification
+        # Upstream connection-state tracking, applied to the guard-filtered
+        # new_servers so it never tracks a refused cross-tenant server.
         _server_connecting.update(new_servers)
         for srv_name in new_servers:
             _server_connect_errors.pop(srv_name, None)
@@ -5442,6 +5495,7 @@ def shutdown_mcp_servers():
                 )
         with _lock:
             _servers.clear()
+            _server_config_fingerprint.clear()  # //// NeoCompany: keep the cross-tenant guard registry in sync with _servers
 
     with _lock:
         loop = _mcp_loop
