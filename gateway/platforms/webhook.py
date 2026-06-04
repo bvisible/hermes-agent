@@ -697,6 +697,59 @@ class WebhookAdapter(BasePlatformAdapter):
         self._delivery_info_created[session_chat_id] = now
         self._prune_delivery_info(now)
 
+        # //// NORA CORE PATCH (divergence vs upstream) — deterministic chat pre-router ////
+        # Ministral's native routing is only ~1/3 reliable (it narrates an ack WITHOUT
+        # calling kanban_create = the "empty promise" → desk timeout; measured on the
+        # staging soak: soak-ca-004/008 answered directly, no task). For the chat routes,
+        # classify (1-word LLM) then CREATE the kanban task in code + deliver the ack
+        # deterministically. DIRECT (greetings/meta) or any failure falls through to the
+        # normal agent dispatch below — the message is never dropped. grep "NORA CORE PATCH".
+        if route_name in ("nora_chat", "whatsapp_inbox") and isinstance(payload, dict):
+            try:
+                from agent.auxiliary_client import call_llm
+                from gateway.nora_chat_router import route_chat_message
+                from hermes_cli.profiles import get_active_profile_name
+
+                _user_msg = str(payload.get("message") or payload.get("text") or "")
+                if _user_msg.strip():
+                    _decision = route_chat_message(
+                        message=_user_msg,
+                        session_chat_id=session_chat_id,
+                        conversation_id=payload.get("conversation_id"),
+                        thread_id=None,
+                        user_id=(
+                            str(payload.get("user") or payload.get("phone") or "").strip()
+                            or f"webhook:{route_name}"
+                        ),
+                        notifier_profile=(get_active_profile_name() or "default"),
+                        idempotency_key=delivery_id,
+                        call_llm_fn=call_llm,
+                        main_runtime=None,
+                        deliver_extra=deliver_config.get("deliver_extra"),
+                        chat_user=payload.get("user"),
+                    )
+                    if _decision.get("routed"):
+                        logger.info(
+                            "[webhook] nora-router %s → %s task=%s (skip agent)",
+                            route_name, _decision.get("category"),
+                            _decision.get("task_id"),
+                        )
+                        return web.json_response(
+                            {
+                                "status": "routed",
+                                "route": route_name,
+                                "category": _decision.get("category"),
+                                "task_id": _decision.get("task_id"),
+                                "delivery_id": delivery_id,
+                            },
+                            status=202,
+                        )
+            except Exception:
+                logger.exception(
+                    "[webhook] nora-router errored; agent fallback route=%s", route_name
+                )
+        # //// END NORA CORE PATCH ////
+
         # Build source and event
         source = self.build_source(
             chat_id=session_chat_id,
