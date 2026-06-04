@@ -394,6 +394,25 @@ def route_chat_message(
                     f"demande, à interpréter dans ce contexte (un nom = un client à filtrer).]"
                     f"\n\n{message}"
                 )
+            # //// NORA CORE PATCH (divergence vs upstream) — stable worker cwd ////
+            # The new-base dispatcher runs the worker with cwd=<task workspace>. The
+            # default "scratch" workspace is ephemeral (deleted on completion), so the
+            # worker's per-pole MCP server — a stdio subprocess that inherits that cwd —
+            # fails to start: get_mcp_status shows it registered but connected=False /
+            # tools=0, and the worker can't do the metier work (proven on the staging
+            # soak via NORA-DIAG). A persistent "dir" workspace gives the worker a valid,
+            # stable cwd so the MCP server starts + connects. NORA metier workers produce
+            # no files, so a shared work dir is fine. grep "NORA CORE PATCH".
+            import os as _os_ws
+            _nora_work = _os_ws.path.join(_os_ws.path.expanduser("~"), ".hermes-nora-work")
+            try:
+                _os_ws.makedirs(_nora_work, exist_ok=True)
+            except OSError:
+                _nora_work = None
+            _ws_kwargs = (
+                {"workspace_kind": "dir", "workspace_path": _nora_work}
+                if _nora_work else {}
+            )
             task_id = kanban_db.create_task(
                 conn,
                 title=(message or "").strip()[:200] or "Demande",
@@ -402,7 +421,9 @@ def route_chat_message(
                 created_by="nora-chat-router",
                 initial_status="running",
                 idempotency_key=idempotency_key,
+                **_ws_kwargs,
             )
+            # //// END NORA CORE PATCH ////
             _add_notify_sub(
                 kanban_db,
                 conn,
