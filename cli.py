@@ -5088,25 +5088,20 @@ class HermesCLI:
         from hermes_cli.mcp_startup import wait_for_mcp_discovery
 
         # //// NORA CORE PATCH (divergence vs upstream) — kanban worker MCP cold-start ////
-        # A kanban worker (HERMES_KANBAN_TASK set) MUST have its domain MCP tools
-        # loaded before the first tool snapshot. The ~0.75s default join loses the
-        # race — real per-pole MCP startup is 1.5-20s (Python imports + Frappe REST
-        # auth) — so the worker would boot with ONLY kanban_* tools, narrate "je n'ai
-        # pas accès" / complete empty, and self-block (this was the staging soak bug:
-        # worker did kanban_show -> kanban_complete(empty), never revenue_summary).
-        # Wait long enough to cover the cold start (bounded by the join timeout, no
-        # 180s connect-retry pathology); the interactive/orchestrator path keeps the
-        # fast non-blocking default. Then fail LOUD if the domain MCP still didn't
-        # load. grep "NORA CORE PATCH" before any upstream rebase.
+        # The fix lives in hermes_cli/main.py::_should_background_mcp_startup: for a
+        # kanban worker (HERMES_KANBAN_TASK) it returns False so MCP discovery runs the
+        # SYNCHRONOUS/eager path (discover_mcp_tools() blocks until the per-pole server
+        # connects) at CLI startup, BEFORE this _init_agent / the first tool snapshot —
+        # the behaviour the worker had pre-0c6e133c0 (which backgrounds `chat`
+        # discovery; a short-lived `-q` worker would otherwise reach its tool snapshot
+        # before the server connects and boot with ONLY kanban_* tools). By the time we
+        # get here the domain MCP is already connected; wait_for_mcp_discovery() is the
+        # normal bounded join. Then fail LOUD if the domain MCP still didn't load (e.g.
+        # the `mcp` SDK extra missing from the venv — provision.sh installs `.[mcp]`,
+        # but a hand-built venv can miss it). grep "NORA CORE PATCH" before any rebase.
+        wait_for_mcp_discovery()
         if os.environ.get("HERMES_KANBAN_TASK"):
-            try:
-                _kanban_mcp_wait = float(os.environ.get("HERMES_KANBAN_MCP_WAIT") or "20")
-            except (TypeError, ValueError):
-                _kanban_mcp_wait = 20.0
-            wait_for_mcp_discovery(timeout=_kanban_mcp_wait)
             self._warn_if_worker_mcp_missing()
-        else:
-            wait_for_mcp_discovery()
         # //// END NORA CORE PATCH ////
 
         # Initialize SQLite session store for CLI sessions (if not already done in __init__)
