@@ -5389,61 +5389,62 @@ class GatewayRunner:
                         # Identity prefix: attribute terminal pings to the
                         # worker that did the work. Makes fleets (where one
                         # chat subscribes to many tasks) legible at a glance.
+                        # //////////////////////////////////////////////////////////////
+                        # //// NORA CORE PATCH (divergence vs upstream) — branded FR
+                        # //// terminal-event delivery. The user only ever sees "Nora" +
+                        # //// the responsible team; NEVER the kanban task id, "@pole",
+                        # //// "gave up", "protocol violation" or any raw worker/spawn
+                        # //// error (that raw text was the desk leak on a failed task).
+                        # //// grep "NORA CORE PATCH" before any upstream rebase.
+                        # //////////////////////////////////////////////////////////////
                         who = (task.assignee if task and task.assignee else None)
-                        tag = f"@{who} " if who else ""
+                        dom = {"ventes": "Ventes", "compta": "Comptabilité",
+                               "support": "Support", "rh": "RH"}.get(
+                            who or "", "Le service")
                         if kind == "completed":
-                            # Prefer the run's summary (the worker's
-                            # intentional human-facing handoff, carried
-                            # in the event payload), then fall back to
-                            # task.result for legacy rows written before
-                            # runs shipped.
+                            # Prefer the run's summary (the worker's intentional
+                            # human-facing handoff in the event payload), else the
+                            # task.result. Full first paragraph (600 chars) — a metier
+                            # answer spans several sentences, not one line.
                             handoff = ""
                             payload_summary = None
                             if ev.payload and ev.payload.get("summary"):
                                 payload_summary = str(ev.payload["summary"])
                             if payload_summary:
-                                lines = payload_summary.strip().splitlines()
-                                h = lines[0][:200] if lines else payload_summary[:200]
-                                handoff = f"\n{h}"
+                                handoff = f"\n{payload_summary.strip()[:600]}"
                             elif task and task.result:
-                                lines = task.result.strip().splitlines()
-                                r = lines[0][:160] if lines else task.result[:160]
-                                handoff = f"\n{r}"
-                            msg = (
-                                f"✔ {tag}Kanban {sub['task_id']} done"
-                                f" — {title}{handoff}"
-                            )
+                                handoff = f"\n{task.result.strip()[:600]}"
+                            msg = f"✅ {dom} — {title}{handoff}"
                         elif kind == "blocked":
                             reason = ""
                             if ev.payload and ev.payload.get("reason"):
-                                reason = f": {str(ev.payload['reason'])[:160]}"
-                            msg = f"⏸ {tag}Kanban {sub['task_id']} blocked{reason}"
+                                reason = f" : {str(ev.payload['reason']).strip()[:600]}"
+                            msg = f"✋ {dom}{reason}"
                         elif kind == "gave_up":
-                            err = ""
-                            if ev.payload and ev.payload.get("error"):
-                                err = f"\n{str(ev.payload['error'])[:200]}"
+                            # Never surface the raw spawn-failure / protocol-violation
+                            # text — it's an internal mechanism detail, not for the user.
                             msg = (
-                                f"✖ {tag}Kanban {sub['task_id']} gave up "
-                                f"after repeated spawn failures{err}"
+                                f"✋ {dom} — je n'ai pas pu aboutir sur cette demande. "
+                                f"Pouvez-vous la reformuler ?"
                             )
                         elif kind == "crashed":
-                            msg = (
-                                f"✖ {tag}Kanban {sub['task_id']} worker crashed "
-                                f"(pid gone); dispatcher will retry"
-                            )
+                            msg = f"✋ {dom} — incident technique, je réessaie."
                         elif kind == "timed_out":
-                            limit = 0
-                            if ev.payload and ev.payload.get("limit_seconds"):
-                                limit = int(ev.payload["limit_seconds"])
                             msg = (
-                                f"⏱ {tag}Kanban {sub['task_id']} timed out "
-                                f"(max_runtime={limit}s); will retry"
+                                f"⏱ {dom} — la demande a pris trop de temps, "
+                                f"je réessaie."
                             )
                         else:
                             continue
+                        # //// END NORA CORE PATCH ////
                         metadata: dict[str, Any] = {}
                         if sub.get("thread_id"):
                             metadata["thread_id"] = sub["thread_id"]
+                        # //// NORA CORE PATCH — carry the desk conversation_id so the async
+                        # //// worker reply reaches the right desk chat (see webhook.send) ////
+                        if sub.get("conversation_id"):
+                            metadata["conversation_id"] = sub["conversation_id"]
+                        # //// END NORA CORE PATCH ////
                         sub_key = (
                             sub["task_id"], sub["platform"],
                             sub["chat_id"], sub.get("thread_id") or "",
