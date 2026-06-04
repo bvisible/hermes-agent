@@ -5047,6 +5047,38 @@ class HermesCLI:
         except Exception:
             pass
 
+    # //// NORA CORE PATCH (divergence vs upstream) — kanban worker MCP readiness diag ////
+    def _warn_if_worker_mcp_missing(self) -> None:
+        """Fail LOUD (not silent) when a kanban worker's domain MCP didn't load.
+
+        A worker that boots with only kanban_* tools — its domain MCP lost the startup
+        race or crashed — can't read business data: it narrates "je n'ai pas accès" and
+        self-blocks. Best-effort + never raises (a readiness check must not break
+        worker startup)."""
+        try:
+            from tools.mcp_tool import get_mcp_status
+
+            status = get_mcp_status()
+            if not status:
+                return
+            missing = [
+                s.get("name")
+                for s in status
+                if not s.get("connected") or not s.get("tools")
+            ]
+            if missing:
+                logger.error(
+                    "kanban worker MCP NOT loaded (servers=%s) after the startup wait "
+                    "— the worker lacks its business tools and the task will be blocked "
+                    "by the no-progress breaker rather than answered tool-less. Check "
+                    "the MCP server startup/logs (raise HERMES_KANBAN_MCP_WAIT if it is "
+                    "just a slow cold start).",
+                    missing,
+                )
+        except Exception:
+            logger.debug("kanban worker MCP readiness check failed", exc_info=True)
+    # //// END NORA CORE PATCH ////
+
     def _init_agent(self, *, model_override: str = None, runtime_override: dict = None, request_overrides: dict | None = None) -> bool:
         """
         Initialize the agent on first use.
@@ -5067,7 +5099,27 @@ class HermesCLI:
 
         from hermes_cli.mcp_startup import wait_for_mcp_discovery
 
-        wait_for_mcp_discovery()
+        # //// NORA CORE PATCH (divergence vs upstream) — kanban worker MCP cold-start ////
+        # A kanban worker (HERMES_KANBAN_TASK set) MUST have its domain MCP tools
+        # loaded before the first tool snapshot. The ~0.75s default join loses the
+        # race — real per-pole MCP startup is 1.5-20s (Python imports + Frappe REST
+        # auth) — so the worker would boot with ONLY kanban_* tools, narrate "je n'ai
+        # pas accès" / complete empty, and self-block (this was the staging soak bug:
+        # worker did kanban_show -> kanban_complete(empty), never revenue_summary).
+        # Wait long enough to cover the cold start (bounded by the join timeout, no
+        # 180s connect-retry pathology); the interactive/orchestrator path keeps the
+        # fast non-blocking default. Then fail LOUD if the domain MCP still didn't
+        # load. grep "NORA CORE PATCH" before any upstream rebase.
+        if os.environ.get("HERMES_KANBAN_TASK"):
+            try:
+                _kanban_mcp_wait = float(os.environ.get("HERMES_KANBAN_MCP_WAIT") or "20")
+            except (TypeError, ValueError):
+                _kanban_mcp_wait = 20.0
+            wait_for_mcp_discovery(timeout=_kanban_mcp_wait)
+            self._warn_if_worker_mcp_missing()
+        else:
+            wait_for_mcp_discovery()
+        # //// END NORA CORE PATCH ////
 
         # Initialize SQLite session store for CLI sessions (if not already done in __init__)
         if self._session_db is None:
