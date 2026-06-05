@@ -115,6 +115,14 @@ CONCLUDE_SCHEMA = {
         "type": "object",
         "properties": {
             "conclusion": {"type": "string", "description": "The fact to store."},
+            "scope": {
+                "type": "string",
+                "enum": ["user", "company"],
+                "description": (
+                    "user = private to this user (default); "
+                    "company = shared with everyone in the organisation."
+                ),
+            },
         },
         "required": ["conclusion"],
     },
@@ -291,6 +299,13 @@ class Mem0MemoryProvider(MemoryProvider):
         # fall back to config/env default for CLI (single-user) sessions.
         self._user_id = kwargs.get("user_id") or self._config.get("user_id", "hermes-user")
         self._agent_id = self._config.get("agent_id", "hermes")
+        # //// NORA CORE PATCH — shared company-scope memory (re-ported from the dropped
+        # apply_mem0_scoping_patch). A `scope="company"` fact lands in ONE shared bucket
+        # (user_id=company_id) so EVERY user of the instance sees it; personal facts stay
+        # in the per-user bucket and reads merge both. The gateway passes company_id per
+        # call; default "company" = one shared bucket per instance. grep "NORA CORE PATCH".
+        self._company_id = kwargs.get("company_id") or self._config.get("company_id", "company")
+        # //// END NORA CORE PATCH ////
         self._rerank = self._config.get("rerank", True)
 
     def _read_filters(self) -> Dict[str, Any]:
@@ -300,6 +315,32 @@ class Mem0MemoryProvider(MemoryProvider):
     def _write_filters(self) -> Dict[str, Any]:
         """Filters for add — scoped to user + agent for attribution."""
         return {"user_id": self._user_id, "agent_id": self._agent_id}
+
+    # //// NORA CORE PATCH — company-scope memory (shared bucket across the instance's users) ////
+    def _company_write_filters(self) -> Dict[str, Any]:
+        """Filters for writing a company-scoped (shared) fact — lands in the company bucket."""
+        return {"user_id": self._company_id, "agent_id": self._agent_id}
+
+    def _scoped_read_buckets(self) -> List[Dict[str, Any]]:
+        """Buckets a read covers: the caller's per-user bucket + the shared company bucket.
+        Personal facts stay private; company facts are visible to every user of the instance."""
+        buckets = [self._read_filters()]
+        if self._company_id and self._company_id != self._user_id:
+            buckets.append({"user_id": self._company_id})
+        return buckets
+
+    def _merged_read(self, fetch) -> list:
+        """Run fetch(filters) over each scoped bucket and merge, deduped by memory id."""
+        seen, out = set(), []
+        for filt in self._scoped_read_buckets():
+            for item in self._unwrap_results(fetch(filt)):
+                key = item.get("id") or item.get("memory")
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(item)
+        return out
+    # //// END NORA CORE PATCH ////
 
     @staticmethod
     def _unwrap_results(response: Any) -> list:
@@ -335,12 +376,10 @@ class Mem0MemoryProvider(MemoryProvider):
         def _run():
             try:
                 client = self._get_client()
-                results = self._unwrap_results(client.search(
-                    query=query,
-                    filters=self._read_filters(),
-                    rerank=self._rerank,
-                    top_k=5,
-                ))
+                # NORA CORE PATCH — prefetch covers the per-user + shared company buckets
+                results = self._merged_read(
+                    lambda f: client.search(query=query, filters=f, rerank=self._rerank, top_k=5)
+                )
                 if results:
                     lines = [r.get("memory", "") for r in results if r.get("memory")]
                     with self._prefetch_lock:
@@ -394,7 +433,8 @@ class Mem0MemoryProvider(MemoryProvider):
 
         if tool_name == "mem0_profile":
             try:
-                memories = self._unwrap_results(client.get_all(filters=self._read_filters()))
+                # NORA CORE PATCH — merge the per-user bucket + the shared company bucket
+                memories = self._merged_read(lambda f: client.get_all(filters=f))
                 self._record_success()
                 if not memories:
                     return json.dumps({"result": "No memories stored yet."})
@@ -411,12 +451,12 @@ class Mem0MemoryProvider(MemoryProvider):
             rerank = args.get("rerank", False)
             top_k = min(int(args.get("top_k", 10)), 50)
             try:
-                results = self._unwrap_results(client.search(
-                    query=query,
-                    filters=self._read_filters(),
-                    rerank=rerank,
-                    top_k=top_k,
-                ))
+                # NORA CORE PATCH — search the per-user bucket + the shared company bucket, merge
+                results = self._merged_read(
+                    lambda f: client.search(query=query, filters=f, rerank=rerank, top_k=top_k)
+                )
+                results.sort(key=lambda r: r.get("score", 0) or 0, reverse=True)
+                results = results[:top_k]
                 self._record_success()
                 if not results:
                     return json.dumps({"result": "No relevant memories found."})
@@ -430,10 +470,13 @@ class Mem0MemoryProvider(MemoryProvider):
             conclusion = args.get("conclusion", "")
             if not conclusion:
                 return tool_error("Missing required parameter: conclusion")
+            # NORA CORE PATCH — scope="company" stores into the shared company bucket
+            scope = str(args.get("scope") or "user").lower()
+            write_filters = self._company_write_filters() if scope == "company" else self._write_filters()
             try:
                 client.add(
                     [{"role": "user", "content": conclusion}],
-                    **self._write_filters(),
+                    **write_filters,
                     infer=False,
                 )
                 self._record_success()
