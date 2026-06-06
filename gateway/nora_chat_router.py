@@ -1,7 +1,3 @@
-# //// NORA CORE PATCH (divergence vs upstream) — ENTIRE FILE. Upstream has no
-# //// deterministic chat router; this is required because the model's native routing
-# //// is unreliable (~1/3 on Ministral — the "empty promise": it narrates an ack
-# //// without calling kanban_create). grep "NORA CORE PATCH" before any upstream rebase.
 """Deterministic NORA chat pre-router (gateway-side).
 
 ROOT CAUSE THIS FIXES (proven from agent.log on 2026-06-03): the Qwen orchestrator
@@ -27,6 +23,11 @@ function are passed in) so it is unit-testable and the gateway hook stays a thin
 User-facing strings are French (Swiss business audience); code/comments are English.
 """
 
+# //// Neoffice — ENTIRE MODULE is a NORA addition (no upstream equivalent). Merged 2026-06-06
+# from the richer osiris-poc router (RECURRENT class, keyword fast-path, conversation-aware
+# routing, follow-up body, ack-via-desk) + the fork's stable-dir-workspace. Deterministic chat
+# pre-router: classify (1 word) then CREATE the kanban task IN CODE — never rely on the LLM to
+# call kanban_create (the "empty promise" timeout). See hermes-poc/CLAUDE.md. ////
 from __future__ import annotations
 
 import logging
@@ -394,15 +395,13 @@ def route_chat_message(
                     f"demande, à interpréter dans ce contexte (un nom = un client à filtrer).]"
                     f"\n\n{message}"
                 )
-            # //// NORA CORE PATCH (divergence vs upstream) — stable worker cwd ////
-            # The new-base dispatcher runs the worker with cwd=<task workspace>. The
-            # default "scratch" workspace is ephemeral (deleted on completion), so the
-            # worker's per-pole MCP server — a stdio subprocess that inherits that cwd —
-            # fails to start: get_mcp_status shows it registered but connected=False /
-            # tools=0, and the worker can't do the metier work (proven on the staging
-            # soak via NORA-DIAG). A persistent "dir" workspace gives the worker a valid,
-            # stable cwd so the MCP server starts + connects. NORA metier workers produce
-            # no files, so a shared work dir is fine. grep "NORA CORE PATCH".
+            # //// Neoffice — stable worker cwd (re-ported from fork commit c68c362e6 after
+            # taking the richer osiris-poc router). The dispatcher runs the worker with
+            # cwd=<task workspace>; the default "scratch" workspace is ephemeral (deleted on
+            # completion), so the worker's per-pole MCP stdio subprocess fails to start
+            # (connected=False / tools=0, proven on the staging soak). A persistent "dir"
+            # workspace gives a stable cwd so the MCP server connects. NORA metier workers
+            # produce no files → a shared work dir is fine. grep "//// Neoffice".
             import os as _os_ws
             _nora_work = _os_ws.path.join(_os_ws.path.expanduser("~"), ".hermes-nora-work")
             try:
@@ -413,6 +412,7 @@ def route_chat_message(
                 {"workspace_kind": "dir", "workspace_path": _nora_work}
                 if _nora_work else {}
             )
+            # //// END Neoffice ////
             task_id = kanban_db.create_task(
                 conn,
                 title=(message or "").strip()[:200] or "Demande",
@@ -421,9 +421,8 @@ def route_chat_message(
                 created_by="nora-chat-router",
                 initial_status="running",
                 idempotency_key=idempotency_key,
-                **_ws_kwargs,
+                **_ws_kwargs,  # //// Neoffice — stable worker cwd ////
             )
-            # //// END NORA CORE PATCH ////
             _add_notify_sub(
                 kanban_db,
                 conn,
