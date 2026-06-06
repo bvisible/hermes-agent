@@ -6636,7 +6636,15 @@ def _default_spawn(
 
     profile_arg = normalize_profile_name(task.assignee)
 
+    # Include the task title + body in the spawn prompt so a self-contained worker can
+    # act WITHOUT a kanban_show round-trip — that first read is the #1 avoidable latency
+    # cost (each worker LLM turn is ~2.5s). kanban_show stays available (KANBAN_GUIDANCE)
+    # for retries / parent handoffs / comment threads; this only removes the mandatory
+    # first read for tasks that already carry everything in their title+body.
     prompt = f"work kanban task {task.id}"
+    _ctx = ((task.title or "").strip() + "\n\n" + (task.body or "").strip()).strip()
+    if _ctx:
+        prompt += "\n\n" + _ctx[:6000]
     env = dict(os.environ)
 
     # Inject HERMES_HOME so the worker reads the profile-scoped config.yaml
