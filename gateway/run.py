@@ -5053,6 +5053,16 @@ class GatewayRunner:
                                     "task": task,
                                     "board": slug,
                                 })
+                        except Exception as _board_exc:
+                            # Per-board isolation: an empty/corrupt board DB (e.g.
+                            # a leftover test board with 0 tables -> "no such table")
+                            # must NOT crash the whole tick and wedge delivery for
+                            # every other board, incl. the prod `default`. Skip just
+                            # this board; the loop continues to the next one.
+                            logger.warning(
+                                "kanban notifier: board %s skipped this tick: %s",
+                                slug, _board_exc,
+                            )
                         finally:
                             conn.close()
                     return deliveries
@@ -5094,6 +5104,7 @@ class GatewayRunner:
                         # chat subscribes to many tasks) legible at a glance.
                         who = (task.assignee if task and task.assignee else None)
                         tag = f"@{who} " if who else ""
+                        dom = ({"ventes": "Ventes", "compta": "Comptabilité", "support": "Support", "rh": "RH"}.get(who) or "Le service") if who else "Le service"
                         if kind == "completed":
                             # Prefer the run's summary (the worker's
                             # intentional human-facing handoff, carried
@@ -5105,20 +5116,20 @@ class GatewayRunner:
                             if ev.payload and ev.payload.get("summary"):
                                 payload_summary = str(ev.payload["summary"])
                             if payload_summary:
-                                h = payload_summary.strip().splitlines()[0][:200]
+                                h = payload_summary.strip()[:600]
                                 handoff = f"\n{h}"
                             elif task and task.result:
-                                r = task.result.strip().splitlines()[0][:160]
+                                r = task.result.strip()[:600]
                                 handoff = f"\n{r}"
                             msg = (
-                                f"✔ {tag}Kanban {sub['task_id']} done"
+                                f"✅ {dom}"
                                 f" — {title}{handoff}"
                             )
                         elif kind == "blocked":
                             reason = ""
                             if ev.payload and ev.payload.get("reason"):
-                                reason = f": {str(ev.payload['reason'])[:160]}"
-                            msg = f"⏸ {tag}Kanban {sub['task_id']} blocked{reason}"
+                                reason = f" : {str(ev.payload['reason']).strip()[:600]}"
+                            msg = f"✋ {dom}{reason}"
                         elif kind == "gave_up":
                             err = ""
                             if ev.payload and ev.payload.get("error"):
@@ -5145,6 +5156,8 @@ class GatewayRunner:
                         metadata: dict[str, Any] = {}
                         if sub.get("thread_id"):
                             metadata["thread_id"] = sub["thread_id"]
+                        if sub.get("conversation_id"):
+                            metadata["conversation_id"] = sub["conversation_id"]
                         sub_key = (
                             sub["task_id"], sub["platform"],
                             sub["chat_id"], sub.get("thread_id") or "",

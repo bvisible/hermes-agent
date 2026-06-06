@@ -443,3 +443,63 @@ def strip_slash_enum(tools: list[dict]) -> tuple[list[dict], int]:
             stripped,
         )
     return tools, stripped
+
+
+def demote_enums_to_description(tools: list[dict]) -> tuple[list[dict], int]:
+    """Move every ``enum`` keyword into its param ``description`` and remove it.
+
+    Dense Gemma models on llama.cpp emit a literal ``<|tool_call|>`` marker into
+    the assistant ``content`` instead of a real tool call when a parameter schema
+    carries an ``enum`` — so the tool is never actually invoked (observed on
+    Gemma 4 12B with ``kanban_create.assignee``). The enum is only a prompting
+    hint, so we PRESERVE its values by appending them to the param description
+    (``(options: a | b | c)``) and then drop the ``enum`` keyword. This keeps the
+    model informed of the allowed values without the keyword that triggers the
+    leak. Mutates in place (deep-copy upstream if the original must be preserved).
+
+    Returns ``(tools, demoted_count)``.
+    """
+    if not tools:
+        return tools, 0
+
+    demoted = 0
+
+    def _walk(node: Any) -> None:
+        nonlocal demoted
+        if isinstance(node, dict):
+            enum_val = node.get("enum")
+            if isinstance(enum_val, list) and enum_val:
+                vals = " | ".join(str(v) for v in enum_val)
+                hint = f"(options: {vals})"
+                desc = node.get("description")
+                node["description"] = (
+                    f"{desc.rstrip()} {hint}" if isinstance(desc, str) and desc.strip() else hint
+                )
+                node.pop("enum", None)
+                demoted += 1
+            for v in list(node.values()):
+                _walk(v)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        fn = tool.get("function")
+        if isinstance(fn, dict):
+            params = fn.get("parameters")
+            if isinstance(params, dict):
+                _walk(params)
+                continue
+        params = tool.get("parameters")
+        if isinstance(params, dict):
+            _walk(params)
+
+    if demoted:
+        logger.info(
+            "schema_sanitizer: demoted %d enum keyword(s) to description "
+            "(dense-Gemma tool-call-leak recovery)",
+            demoted,
+        )
+    return tools, demoted

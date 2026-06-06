@@ -424,6 +424,20 @@ def sync_skills(quiet: bool = False) -> dict:
         dict with keys: copied (list), updated (list), skipped (int),
                         user_modified (list), cleaned (list), total_bundled (int)
     """
+    # NORA-no-bundled-guard (#41): honour .no-bundled-skills for DIRECT sync_skills()
+    # callers (maybe_sync_skills at CLI/gateway boot, Termux startup) — not just the
+    # seed_profile_skills() wrapper. A worker profile that opted out must NOT get the
+    # bundled skills re-seeded (kanban-worker would make the dispatcher's
+    # `--skills kanban-worker` fatal at spawn). The root HERMES_HOME has no marker.
+    try:
+        if (SKILLS_DIR.parent / ".no-bundled-skills").exists():
+            return {
+                "copied": [], "updated": [], "skipped": 0,
+                "user_modified": [], "cleaned": [], "total_bundled": 0,
+                "optional_provenance_backfilled": [], "skipped_opt_out": True,
+            }
+    except OSError:
+        pass
     bundled_dir = _get_bundled_dir()
     if not bundled_dir.exists():
         return {

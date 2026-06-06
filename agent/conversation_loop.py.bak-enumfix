@@ -3680,17 +3680,6 @@ def run_conversation(
                 for tc in assistant_message.tool_calls:
                     if tc.function.name not in agent.valid_tool_names:
                         repaired = agent._repair_tool_call(tc.function.name)
-                        if not repaired:
-                            # MCP-prefix tolerance: some models (e.g. Mistral) emit the
-                            # BARE tool name (frappe_revenue_summary) instead of the
-                            # registered MCP-prefixed name
-                            # (mcp_<server>_frappe_revenue_summary) → "Unknown tool".
-                            # Resolve by UNIQUE suffix match; a true hallucination
-                            # (frappe.get_all) matches nothing and stays unknown.
-                            _bare = tc.function.name
-                            _cands = [v for v in agent.valid_tool_names if v.endswith("_" + _bare)]
-                            if len(_cands) == 1:
-                                repaired = _cands[0]
                         if repaired:
                             print(f"{agent.log_prefix}🔧 Auto-repaired tool name: '{tc.function.name}' -> '{repaired}'")
                             tc.function.name = repaired
@@ -3946,14 +3935,6 @@ def run_conversation(
                 # net no-ops). Reset-on-progress keeps legit work safe.
                 _kanban_task = os.environ.get("HERMES_KANBAN_TASK")
                 if _kanban_task:
-                    # Defensive: ensure the breaker state exists even when
-                    # reset_session_state wasn't called on this worker path —
-                    # otherwise the ``+= 1`` below AttributeErrors and aborts the
-                    # turn, leaving the worker stuck running (observed in the soak).
-                    if not hasattr(agent, "_kanban_no_progress_streak"):
-                        agent._kanban_no_progress_streak = 0
-                        agent._kanban_no_progress_nudged = False
-                        agent._kanban_made_progress = False
                     _prog = _classify_worker_turn_progress(assistant_message)
                     if _prog in ("progress", "terminal"):
                         agent._kanban_no_progress_streak = 0

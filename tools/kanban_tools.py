@@ -693,9 +693,29 @@ def _handle_heartbeat(args: dict, **kw) -> str:
         return tool_error(f"kanban_heartbeat: {e}")
 
 
+# Per-process hard backstop on kanban_comment volume for dispatcher-spawned
+# workers (a worker = 1 process / 1 task). A weak model (Qwen) can loop
+# kanban_comment narrating intent without ever calling the business tool. The
+# conversation_loop no-progress breaker is the PRIMARY guard (trips at ~3
+# non-progress turns); this cap is a pathological-only backstop — set high
+# enough that a legitimately chatty-but-progressing worker never hits it.
+_WORKER_COMMENT_LIMIT = 12
+_WORKER_COMMENT_COUNT = 0
+
+
 def _handle_comment(args: dict, **kw) -> str:
     """Append a comment to a task's thread."""
     tid = args.get("task_id")
+    # Anti-spam backstop — worker runs only (HERMES_KANBAN_TASK set).
+    if os.environ.get("HERMES_KANBAN_TASK"):
+        global _WORKER_COMMENT_COUNT
+        _WORKER_COMMENT_COUNT += 1
+        if _WORKER_COMMENT_COUNT > _WORKER_COMMENT_LIMIT:
+            return tool_error(
+                "Trop de commentaires sans action dans cette tâche. N'écris pas "
+                "ton intention — appelle directement l'outil métier, ou "
+                "kanban_complete / kanban_block pour terminer."
+            )
     if not tid:
         return tool_error(
             "task_id is required (use the current task id if that's what "

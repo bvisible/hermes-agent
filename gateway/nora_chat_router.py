@@ -352,6 +352,23 @@ def route_chat_message(
     if category == "recurrent":
         return _route_recurrent(message, chat_user, deliver_extra)
 
+    # ── Unify the conversation_id for the ack AND the worker result ──────────────────
+    # The ack is delivered via deliver_extra["conversation_id"] (the cid the webhook
+    # resolved from the inbound payload — provably the thread the desk polls, since the
+    # user sees the ack), while the worker result is delivered via the notify-sub's
+    # conversation_id (the raw payload conversation_id). When these two differ — observed
+    # 2026-06-03 under the per-user session keying: the result landed in a spurious cid
+    # (nora-8f29…) while the ack reached the desk thread — they sit in DIFFERENT desk
+    # buffers, and get_replies returns the non-empty primary without falling back to the
+    # other → the desk shows the ack but the result is stuck on "Nora consulte…" forever.
+    # Force BOTH onto the deliver_extra cid (the ack's, which provably reaches the desk).
+    _de_cid = ((deliver_extra or {}).get("conversation_id") or "").strip()
+    _unified_cid = _de_cid or (conversation_id or None)
+    logger.info(
+        "nora_chat_router cid-unify: session=%s param_cid=%s deliver_extra_cid=%s → unified=%s",
+        session_chat_id, conversation_id, _de_cid or None, _unified_cid,
+    )
+
     # Create the task exactly as the kanban_create tool does (assignee + running →
     # the dispatcher spawns the specialist worker). idempotency_key (the webhook
     # delivery id) makes a retried POST reuse the same task instead of double-routing.
@@ -391,7 +408,7 @@ def route_chat_message(
                 thread_id=thread_id or None,
                 user_id=user_id or None,
                 notifier_profile=notifier_profile,
-                conversation_id=conversation_id or None,
+                conversation_id=_unified_cid,
             )
         finally:
             conn.close()
@@ -405,7 +422,9 @@ def route_chat_message(
     # Deliver the immediate ack NOW so the user sees "I'm handing this to <pole>" right
     # away — it also makes the ~10s worker wait feel responsive. Failure to deliver the
     # ack must NEVER fail the routing (the worker result still arrives via the notifier).
-    ack_delivered = _post_ack_to_callback(ack, deliver_extra)
+    ack_delivered = _post_ack_to_callback(
+        ack, {**(deliver_extra or {}), "conversation_id": _unified_cid}
+    )
     logger.info(
         "nora_chat_router: routed deterministically chat=%s → %s task=%s ack_delivered=%s",
         session_chat_id, category, task_id, ack_delivered,

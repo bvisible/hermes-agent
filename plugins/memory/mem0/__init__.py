@@ -25,6 +25,38 @@ from typing import Any, Dict, List
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
+# NORA perf #41 — process-wide singleton for the FAISS-backed mem0 Memory.
+# A fresh memory provider is registered per agent run and shutdown() nulls its
+# client, so Memory.from_config() (which loads the ~500-vector FAISS index from
+# disk) ran on EVERY turn — ~7s of overhead per message (agent.log showed
+# "Loaded FAISS index" 57x for 77 turns). Caching the Memory at module level
+# loads it ONCE per gateway process and reuses it across runs. _LockedMemory
+# serialises every call so concurrent sessions can't race the shared index
+# (faiss-cpu is not safe for concurrent add/search).
+_MEMORY_SINGLETON: Dict[str, Any] = {}
+_MEMORY_SINGLETON_LOCK = threading.Lock()
+
+
+class _LockedMemory:
+    """Proxy that serialises all method calls on the shared mem0 Memory under
+    one process-wide lock (FAISS add/search are not concurrency-safe)."""
+
+    def __init__(self, mem: Any) -> None:
+        self.__dict__["_mem"] = mem
+        self.__dict__["_op_lock"] = threading.RLock()
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self.__dict__["_mem"], name)
+        if not callable(attr):
+            return attr
+        lock = self.__dict__["_op_lock"]
+
+        def _locked(*args: Any, **kwargs: Any) -> Any:
+            with lock:
+                return attr(*args, **kwargs)
+
+        return _locked
+
 logger = logging.getLogger(__name__)
 
 # Circuit breaker: after this many consecutive failures, pause API calls
@@ -108,13 +140,23 @@ SEARCH_SCHEMA = {
 CONCLUDE_SCHEMA = {
     "name": "mem0_conclude",
     "description": (
-        "Store a durable fact about the user. Stored verbatim (no LLM extraction). "
-        "Use for explicit preferences, corrections, or decisions."
+        "Store a durable fact (verbatim, no LLM extraction). Use for explicit "
+        "preferences, corrections, decisions. Set scope='company' for a fact shared "
+        "by the whole company; omit it (default 'user') for a personal fact."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "conclusion": {"type": "string", "description": "The fact to store."},
+            "scope": {
+                "type": "string",
+                "enum": ["user", "company"],
+                "description": (
+                    "'user' (default) = personal fact about the caller; 'company' = "
+                    "fact shared by everyone in the company (policy, procedure, durable "
+                    "company fact)."
+                ),
+            },
         },
         "required": ["conclusion"],
     },
@@ -259,7 +301,19 @@ class Mem0MemoryProvider(MemoryProvider):
             },
         }
         from mem0 import Memory as _M
-        return _M.from_config(mem0_config)
+        cache_key = faiss_path or "default"
+        with _MEMORY_SINGLETON_LOCK:
+            cached = _MEMORY_SINGLETON.get(cache_key)
+            if cached is not None:
+                return cached
+            mem = _LockedMemory(_M.from_config(mem0_config))
+            _MEMORY_SINGLETON[cache_key] = mem
+            logger.info(
+                "Mem0 FAISS Memory built once as process singleton (key=%s) — "
+                "reused across runs, no per-turn reload",
+                cache_key,
+            )
+            return mem
 
     def _is_breaker_open(self) -> bool:
         """Return True if the circuit breaker is tripped (too many failures)."""
@@ -291,6 +345,9 @@ class Mem0MemoryProvider(MemoryProvider):
         # fall back to config/env default for CLI (single-user) sessions.
         self._user_id = kwargs.get("user_id") or self._config.get("user_id", "hermes-user")
         self._agent_id = self._config.get("agent_id", "hermes")
+        # NORA #41 - shared company bucket (one tenant per instance). Company-wide facts
+        # are written via mem0_conclude(scope="company") and read alongside the user's own.
+        self._company_id = self._config.get("company_id", "company")
         self._rerank = self._config.get("rerank", True)
 
     def _read_filters(self) -> Dict[str, Any]:
@@ -300,6 +357,64 @@ class Mem0MemoryProvider(MemoryProvider):
     def _write_filters(self) -> Dict[str, Any]:
         """Filters for add — scoped to user + agent for attribution."""
         return {"user_id": self._user_id, "agent_id": self._agent_id}
+
+    def _read_scopes(self) -> list:
+        """Buckets to read from: the caller's own + the shared company bucket (NORA #41)."""
+        scopes = [self._user_id]
+        company = getattr(self, "_company_id", "company")
+        if company and company != self._user_id:
+            scopes.append(company)
+        return scopes
+
+    def _search_scopes(self, client, query, *, rerank, top_k) -> list:
+        """Recall across the caller's own bucket + the shared company bucket, merged +
+        deduped by memory text (NORA #41). Reads combine semantic SEARCH (relevance) with
+        GET_ALL on BOTH buckets: mem0's FAISS library-mode search can miss freshly-added
+        infer=False vectors (mem0_conclude), so get_all guarantees an explicit 'remember X'
+        recalls immediately. The user get_all is capped to the most recent slice to bound
+        the injected context; the company bucket (few durable facts) is read whole."""
+        seen, merged = set(), []
+        company = getattr(self, "_company_id", "company")
+        user_hits = []
+        try:
+            user_hits = self._unwrap_results(client.search(
+                query=query, filters={"user_id": self._user_id}, rerank=rerank, top_k=top_k))
+        except Exception as e:
+            logger.debug("Mem0 user search failed: %s", e)
+        user_recent = []
+        try:
+            user_recent = self._unwrap_results(
+                client.get_all(filters={"user_id": self._user_id}))[-40:]
+        except Exception as e:
+            logger.debug("Mem0 user get_all failed: %s", e)
+        company_hits = []
+        if company and company != self._user_id:
+            try:
+                company_hits = self._unwrap_results(client.get_all(filters={"user_id": company}))
+            except Exception as e:
+                logger.debug("Mem0 company get_all failed: %s", e)
+        for r in list(user_hits) + list(user_recent) + list(company_hits):
+            m = r.get("memory", "")
+            if m and m not in seen:
+                seen.add(m)
+                merged.append(r)
+        return merged
+
+    def _getall_scopes(self, client) -> list:
+        """get_all across user + company buckets, merged + deduped (NORA #41)."""
+        seen, merged = set(), []
+        for uid in self._read_scopes():
+            try:
+                res = self._unwrap_results(client.get_all(filters={"user_id": uid}))
+            except Exception as e:
+                logger.debug("Mem0 get_all scope %s failed: %s", uid, e)
+                res = []
+            for r in res:
+                m = r.get("memory", "")
+                if m and m not in seen:
+                    seen.add(m)
+                    merged.append(r)
+        return merged
 
     @staticmethod
     def _unwrap_results(response: Any) -> list:
@@ -335,12 +450,7 @@ class Mem0MemoryProvider(MemoryProvider):
         def _run():
             try:
                 client = self._get_client()
-                results = self._unwrap_results(client.search(
-                    query=query,
-                    filters=self._read_filters(),
-                    rerank=self._rerank,
-                    top_k=5,
-                ))
+                results = self._search_scopes(client, query, rerank=self._rerank, top_k=5)
                 if results:
                     lines = [r.get("memory", "") for r in results if r.get("memory")]
                     with self._prefetch_lock:
@@ -394,7 +504,7 @@ class Mem0MemoryProvider(MemoryProvider):
 
         if tool_name == "mem0_profile":
             try:
-                memories = self._unwrap_results(client.get_all(filters=self._read_filters()))
+                memories = self._getall_scopes(client)
                 self._record_success()
                 if not memories:
                     return json.dumps({"result": "No memories stored yet."})
@@ -411,12 +521,7 @@ class Mem0MemoryProvider(MemoryProvider):
             rerank = args.get("rerank", False)
             top_k = min(int(args.get("top_k", 10)), 50)
             try:
-                results = self._unwrap_results(client.search(
-                    query=query,
-                    filters=self._read_filters(),
-                    rerank=rerank,
-                    top_k=top_k,
-                ))
+                results = self._search_scopes(client, query, rerank=rerank, top_k=top_k)
                 self._record_success()
                 if not results:
                     return json.dumps({"result": "No relevant memories found."})
@@ -430,10 +535,17 @@ class Mem0MemoryProvider(MemoryProvider):
             conclusion = args.get("conclusion", "")
             if not conclusion:
                 return tool_error("Missing required parameter: conclusion")
+            # NORA #41 - scope="company" writes to the shared company bucket; default
+            # "user" writes to the caller's own bucket.
+            scope = (args.get("scope") or "user").strip().lower()
+            write_filters = self._write_filters()
+            if scope == "company":
+                write_filters = {"user_id": getattr(self, "_company_id", "company"),
+                                 "agent_id": self._agent_id}
             try:
                 client.add(
                     [{"role": "user", "content": conclusion}],
-                    **self._write_filters(),
+                    **write_filters,
                     infer=False,
                 )
                 self._record_success()

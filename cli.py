@@ -15173,6 +15173,101 @@ def _run_kanban_goal_loop_q(cli: "HermesCLI", first_response: str) -> None:
     )
 
 
+def _kanban_worker_autocomplete_safety_net(cli: "HermesCLI", response: str = None) -> None:
+    """Deterministic completion net for dispatcher-spawned kanban workers.
+
+    A worker sometimes answers conversationally — it produces the result as its
+    final assistant message but never calls ``kanban_complete`` (Qwen ends with a
+    follow-up question instead of the terminal tool, especially on "list me X"
+    queries). ``detect_crashed_workers`` then sees "clean exit (rc=0) + task still
+    running", flags a protocol violation, trips the breaker, and the user gets
+    "gave up after repeated spawn failures" instead of their data.
+
+    The LLM produced the content; the CODE delivers it. If the task is still
+    ``running`` and we recovered a substantive final assistant message, complete
+    the task with it so the notifier delivers it to the desk exactly like a normal
+    ``kanban_complete``. No-op when the worker did call a terminal tool (status no
+    longer ``running``). Runs in BOTH the quiet (``-Q``) and the human-facing
+    single-query (``-q``) paths — dispatcher workers use the latter (``chat -q``),
+    where ``cli.chat()`` prints but returns nothing, so we recover the text from
+    ``conversation_history``. Never raises — a broken net must not wedge a worker;
+    the dispatcher's crash detection is the backstop.
+    """
+    import os as _os
+
+    task_id = (_os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    if not task_id:
+        return
+    try:
+        ans = (response or "").strip()
+        if not ans:
+            # Human-facing -q path: cli.chat() printed the answer but returned
+            # nothing — recover the last assistant turn from the history.
+            for _m in reversed(getattr(cli, "conversation_history", None) or []):
+                if not isinstance(_m, dict) or _m.get("role") != "assistant":
+                    continue
+                _c = _m.get("content")
+                if isinstance(_c, str):
+                    ans = _c.strip()
+                elif isinstance(_c, list):
+                    ans = " ".join(
+                        p.get("text", "")
+                        for p in _c
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    ).strip()
+                if ans:
+                    break
+        # Deliver ONLY when the worker actually did real work this run — i.e. it
+        # called at least one business/MCP tool. This is a STRUCTURAL signal
+        # tracked deterministically by the no-progress classifier in
+        # conversation_loop (agent._kanban_made_progress), NOT a guess from the
+        # text. A worker that only narrated/commented (kanban_comment + intent
+        # text) without ever calling a real tool has no genuine result — don't
+        # auto-complete its mid-thought ("Let me look up the customer…"); let the
+        # dispatcher surface the task. (The no-progress breaker normally
+        # force-blocks such a worker first → status != running → we no-op below;
+        # this covers the text-only-stop path that slips past the breaker.)
+        if not getattr(getattr(cli, "agent", None), "_kanban_made_progress", False):
+            logger.warning(
+                "kanban worker %s made no real tool call this run — NOT "
+                "auto-completing (no genuine result; letting the dispatcher "
+                "surface the task)",
+                task_id,
+            )
+            return
+        if len(ans) < 12:
+            return  # nothing substantive to deliver; let the reap handle it
+        from hermes_cli import kanban_db as _kb
+        conn = _kb.connect()
+        try:
+            t = _kb.get_task(conn, task_id)
+            if t is not None and t.status == "running":
+                _kb.complete_task(
+                    conn,
+                    task_id,
+                    result=ans,
+                    summary=ans[:200],
+                    metadata={
+                        "auto_completed": True,
+                        "reason": "worker exited without calling kanban_complete",
+                    },
+                )
+                logger.info(
+                    "kanban worker %s auto-completed from final message "
+                    "(no kanban_complete call)",
+                    task_id,
+                )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "kanban auto-complete safety-net failed for %s: %s", task_id, exc
+        )
+
+
 def main(
     query: str = None,
     q: str = None,
@@ -15584,6 +15679,12 @@ def main(
                         except Exception as _goal_exc:
                             logger.debug("kanban goal loop failed: %s", _goal_exc)
 
+                    # Deterministic completion net: a dispatcher worker that
+                    # answered conversationally without calling kanban_complete
+                    # gets its final message delivered as the result. No-op if it
+                    # completed itself or this isn't a kanban worker.
+                    _kanban_worker_autocomplete_safety_net(cli, response)
+
                     # Session ID goes to stderr so piped stdout is clean.
                     print(f"\nsession_id: {cli.session_id}", file=sys.stderr)
                     
@@ -15614,6 +15715,12 @@ def main(
             cli._show_security_advisories()
             cli.chat(query, images=single_query_images or None)
             cli._print_exit_summary()
+            # Dispatcher-spawned kanban workers use THIS human-facing -q path
+            # (``chat -q "<prompt>"``; -q is the query, not --quiet). If the
+            # worker answered without calling kanban_complete, deliver its final
+            # message as the task result so the user never loses a computed
+            # answer to a "protocol violation". No-op otherwise.
+            _kanban_worker_autocomplete_safety_net(cli)
         return
     
     # Run interactive mode
