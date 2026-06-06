@@ -348,6 +348,72 @@ def _get_continuation_prompt(is_partial_stub: bool, dropped_tools: Optional[List
         )
 
 
+# //// Neoffice ─────────────────────────────────────────────────────────────
+# Recovered from the parallel osiris-poc line (2026-06-06); see "État du fork"
+# in hermes-poc/CLAUDE.md. Whole block down to "# //// END Neoffice" is ours.
+# ── Kanban worker no-progress / narration-loop breaker (worker-only) ──────────
+# Deterministic guard for weak-tool-calling workers (e.g. Qwen) that loop
+# kanban_comment narrating intent ("Let me look up the customer…") and never
+# call the business tool, a terminal kanban tool, or complete. Prompt guidance
+# (TOOL_USE_ENFORCEMENT) is ignored by such models, so we break the loop in
+# CODE. Aligned in spirit with upstream PR #38309 (`no_progress` circuit
+# breaker, threshold 5 — open/unmerged) + PR #22061 (runtime nudge — open;
+# bails once a tool message exists, so it never fires for a tool-using worker).
+# Gated on HERMES_KANBAN_TASK at the call site → zero impact on the
+# orchestrator / interactive / DIRECT chat.
+_KANBAN_NONPROGRESS_TOOLS = frozenset({
+    "kanban_comment", "kanban_show", "kanban_list", "kanban_heartbeat",
+    "memory", "todo", "todo_read", "todo_write", "skill_manage",
+    "session_search",
+})
+_KANBAN_TERMINAL_TOOLS = frozenset({"kanban_complete", "kanban_block"})
+
+
+def _classify_worker_turn_progress(assistant_message) -> str:
+    """Classify ONE completed worker turn for the no-progress breaker.
+
+    Returns:
+      'terminal'     — a terminal kanban tool (complete/block) was called; the
+                       loop is ending on its own → treated as progress.
+      'progress'     — at least one REAL (non-housekeeping) tool was called
+                       (frappe_*, mcp__*, read/search/write, the domain tools…).
+      'non_progress' — only housekeeping tools (kanban_comment/show/heartbeat,
+                       memory, todo, …) OR text-only narration with no tool call.
+
+    Source = ``assistant_message.tool_calls[*].function.name`` (post-dedup).
+    """
+    names = [
+        tc.function.name
+        for tc in (getattr(assistant_message, "tool_calls", None) or [])
+    ]
+    if any(n in _KANBAN_TERMINAL_TOOLS for n in names):
+        return "terminal"
+    if not names:
+        return "non_progress"
+    if all(n in _KANBAN_NONPROGRESS_TOOLS for n in names):
+        return "non_progress"
+    return "progress"
+
+
+def _kanban_no_progress_decision(streak: int, nudged: bool) -> str:
+    """Pure breaker decision for a NON-progress worker turn (``streak`` already
+    incremented to include this turn). Extracted so the nudge/block thresholds
+    are unit-testable in isolation.
+
+    Returns:
+      'nudge' — inject the one-shot corrective message, then loop once more;
+      'block' — the nudge was already spent and it's still looping → force
+                kanban_block + break;
+      'count' — first non-progress turn → just keep counting.
+    """
+    if streak >= 3 and nudged:
+        return "block"
+    if streak >= 2 and not nudged:
+        return "nudge"
+    return "count"
+# //// END Neoffice ////
+
+
 def run_conversation(
     agent,
     user_message: str,
@@ -3798,6 +3864,18 @@ def run_conversation(
                 for tc in assistant_message.tool_calls:
                     if tc.function.name not in agent.valid_tool_names:
                         repaired = agent._repair_tool_call(tc.function.name)
+                        if not repaired:
+                            # //// Neoffice — MCP-prefix tolerance: resolve a bare tool name to its unique MCP-prefixed match (recovered from osiris-poc) ////
+                            # MCP-prefix tolerance: some models (e.g. Mistral) emit the
+                            # BARE tool name (frappe_revenue_summary) instead of the
+                            # registered MCP-prefixed name
+                            # (mcp_<server>_frappe_revenue_summary) → "Unknown tool".
+                            # Resolve by UNIQUE suffix match; a true hallucination
+                            # (frappe.get_all) matches nothing and stays unknown.
+                            _bare = tc.function.name
+                            _cands = [v for v in agent.valid_tool_names if v.endswith("_" + _bare)]
+                            if len(_cands) == 1:
+                                repaired = _cands[0]
                         if repaired:
                             print(f"{agent.log_prefix}🔧 Auto-repaired tool name: '{tc.function.name}' -> '{repaired}'")
                             tc.function.name = repaired
@@ -4041,6 +4119,78 @@ def run_conversation(
                             except Exception:
                                 pass
                     break
+
+                # //// Neoffice — kanban worker no-progress breaker hook (recovered from osiris-poc) ////
+                # ── Kanban worker no-progress / narration-loop breaker ───────
+                # Worker-only (HERMES_KANBAN_TASK). A weak model (Qwen) loops
+                # kanban_comment narrating intent without calling the business
+                # tool. After 2 consecutive non-progress turns inject ONE
+                # corrective nudge; if the 3rd is still non-progress, force
+                # kanban_block + break — so the loop can't burn the whole budget
+                # and the auto-complete net (cli.py) never delivers the English
+                # mid-thought (the force-block flips status off "running" →
+                # net no-ops). Reset-on-progress keeps legit work safe.
+                _kanban_task = os.environ.get("HERMES_KANBAN_TASK")
+                if _kanban_task:
+                    # Defensive: ensure the breaker state exists even when
+                    # reset_session_state wasn't called on this worker path —
+                    # otherwise the ``+= 1`` below AttributeErrors and aborts the
+                    # turn, leaving the worker stuck running (observed in the soak).
+                    if not hasattr(agent, "_kanban_no_progress_streak"):
+                        agent._kanban_no_progress_streak = 0
+                        agent._kanban_no_progress_nudged = False
+                        agent._kanban_made_progress = False
+                    _prog = _classify_worker_turn_progress(assistant_message)
+                    if _prog in ("progress", "terminal"):
+                        agent._kanban_no_progress_streak = 0
+                        agent._kanban_no_progress_nudged = False
+                        # Real business/MCP tool called → the run produced
+                        # genuine work; the auto-complete net may deliver its
+                        # result. (Structural signal, not a text guess.)
+                        if _prog == "progress":
+                            agent._kanban_made_progress = True
+                    else:
+                        agent._kanban_no_progress_streak += 1
+                        _streak = agent._kanban_no_progress_streak
+                        _action = _kanban_no_progress_decision(
+                            _streak, agent._kanban_no_progress_nudged
+                        )
+                        if _action == "nudge":
+                            agent._kanban_no_progress_nudged = True
+                            logger.warning(
+                                "kanban worker %s: %d non-progress turns — "
+                                "injecting corrective nudge",
+                                _kanban_task, _streak,
+                            )
+                            messages.append({
+                                "role": "user",
+                                "content": (
+                                    "Tu commentes/narres sans agir. Appelle "
+                                    "directement l'outil métier (ou "
+                                    "kanban_complete / kanban_block) MAINTENANT "
+                                    "— n'écris pas ton intention."
+                                ),
+                                "_kanban_no_progress_nudge": True,
+                            })
+                            agent._stream_needs_break = True
+                            agent._session_messages = messages
+                            continue
+                        if _action == "block":
+                            _turn_exit_reason = (
+                                f"kanban_no_progress_breaker(streak={_streak})"
+                            )
+                            final_response = agent._force_kanban_block_no_progress(
+                                _kanban_task, _streak
+                            )
+                            messages.append(
+                                {"role": "assistant", "content": final_response}
+                            )
+                            agent._emit_status(
+                                "⛔ Worker en boucle (narration) — tâche bloquée "
+                                "pour intervention"
+                            )
+                            break
+                # ── end breaker ──
 
                 # Reset per-turn retry counters after successful tool
                 # execution so a single truncation doesn't poison the
