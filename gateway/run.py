@@ -5455,12 +5455,38 @@ class GatewayRunner:
                                 reason = f" : {str(ev.payload['reason']).strip()[:600]}"
                             msg = f"✋ {dom}{reason}"
                         elif kind == "gave_up":
+                            # //// Neoffice — the gave_up event is an INTERNAL recovery signal
+                            # the spawn-finalize emits ON TOP OF the worker's real terminal
+                            # outcome (kanban_db emits gave_up "on top of" blocked/timed_out/
+                            # crashed; a worker that blocked with a reason or completed with a
+                            # result still trips it). Surfacing a generic "aboutir" then
+                            # double-posted on the desk (user saw "aboutir" + the real answer)
+                            # AND polluted delivery — the desk/soak could pick the figure-less
+                            # "aboutir" over the real result (the "non substantielle" flake).
+                            # Skip it when the task actually produced an outcome; only surface a
+                            # give-up when there is genuinely none. grep "//// Neoffice".
+                            _gu_res = (getattr(task, "result", "") or "").strip() if task else ""
+                            _gu_st = (getattr(task, "status", "") or "") if task else ""
+                            _gu_err = str((ev.payload or {}).get("error", "")).lower() if ev.payload else ""
+                            # Deliver a user-facing give-up ONLY for a GENUINE terminal give-up
+                            # with no result. Skip when: (a) a result/outcome exists; (b) the
+                            # task is being retried — status is anything other than the terminal
+                            # "gave_up" (ready/running/claimed/promoted/done/blocked) so a respawn
+                            # or the real outcome will deliver the answer; (c) it's a mere protocol
+                            # violation (worker exited rc=0 without kanban_complete → always
+                            # retried, an internal worker bug, never a user "reformulate"). Without
+                            # this, a transient spawn-1 protocol violation posted "aboutir" BEFORE
+                            # the respawn's real result — the desk poll broke on the figure-less
+                            # "aboutir" (the soak "non substantielle" flake).
+                            if _gu_res or _gu_st != "gave_up" or "protocol violation" in _gu_err:
+                                continue
                             # Never surface the raw spawn-failure / protocol-violation
                             # text — it's an internal mechanism detail, not for the user.
                             msg = (
                                 f"✋ {dom} — je n'ai pas pu aboutir sur cette demande. "
                                 f"Pouvez-vous la reformuler ?"
                             )
+                            # //// END Neoffice ////
                         elif kind == "crashed":
                             msg = f"✋ {dom} — incident technique, je réessaie."
                         elif kind == "timed_out":
