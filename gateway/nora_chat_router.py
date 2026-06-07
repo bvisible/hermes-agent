@@ -72,11 +72,12 @@ _CLASSIFIER_SYSTEM = (
     "réponds 'recurrent' — PEU IMPORTE le sujet (même si ça parle d'emails, de factures ou de "
     "PDF). Une demande PONCTUELLE (une seule fois, maintenant) n'est PAS 'recurrent'.\n\n"
     "Sinon, choisis le pôle métier qui doit traiter la demande :\n"
-    "- compta : factures, paiements, TVA, chiffre d'affaires, impayés, fournisseurs, "
-    "commandes d'achat, rapports financiers (un chiffre demandé en TEXTE).\n"
+    "- compta : factures, paiements, TVA, chiffre d'affaires, impayés, rappels de paiement / "
+    "relances / rappels de facture, fournisseurs, commandes d'achat, rapports financiers "
+    "(un chiffre demandé en TEXTE).\n"
     "- ventes : devis, commandes clients, factures de vente, articles, clients "
     "(création/recherche), prix.\n"
-    "- support : emails (lecture/rédaction), pièces jointes & OCR, rappels, tickets, "
+    "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     "- rh : congés, paie, employés, contrats, absences.\n"
     "- analyse : graphiques, visuels, dataviz, cartes d'indicateurs, tableaux de bord "
@@ -115,6 +116,16 @@ _RECUR_RE = re.compile(
 # to analyse regardless of subject (SOUL rule). Then the unambiguous domain keywords.
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
+    # //// Neoffice — payment-reminder ("rappel de paiement" / "relance" / "rappel de facture")
+    # routes DETERMINISTICALLY to compta. A dunning/Payment Reminder is a collections matter
+    # (accounting), NOT a support ticket; the frappe_payment_reminder_create tool lives in compta
+    # AND ventes (neoffice-devops commit c933017), never support. The phrasing is lexically
+    # ambiguous to the LLM classifier (rappel→support, paiement/impayé→compta) so the model must
+    # NOT decide it — a misroute to support lands on a pole without the tool → junk draft (observed
+    # live). Placed ABOVE the generic compta rule (which matches "impayé" but not "relance"); a
+    # plain "combien d'impayés ?" still hits compta below. grep "//// Neoffice".
+    (re.compile(r"rappel[s]?\s+de\s+(paiement|facture)|lettre[s]?\s+de\s+relance|\brelanc\w*", re.IGNORECASE), "compta"),
+    # //// END Neoffice ////
     (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
     (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
     (re.compile(r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des))", re.IGNORECASE), "rh"),

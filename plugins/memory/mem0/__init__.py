@@ -25,6 +25,38 @@ from typing import Any, Dict, List
 from agent.memory_provider import MemoryProvider
 from tools.registry import tool_error
 
+# NORA perf #41 — process-wide singleton for the FAISS-backed mem0 Memory.
+# A fresh memory provider is registered per agent run and shutdown() nulls its
+# client, so Memory.from_config() (which loads the ~500-vector FAISS index from
+# disk) ran on EVERY turn — ~7s of overhead per message (agent.log showed
+# "Loaded FAISS index" 57x for 77 turns). Caching the Memory at module level
+# loads it ONCE per gateway process and reuses it across runs. _LockedMemory
+# serialises every call so concurrent sessions can't race the shared index
+# (faiss-cpu is not safe for concurrent add/search).
+_MEMORY_SINGLETON: Dict[str, Any] = {}
+_MEMORY_SINGLETON_LOCK = threading.Lock()
+
+
+class _LockedMemory:
+    """Proxy that serialises all method calls on the shared mem0 Memory under
+    one process-wide lock (FAISS add/search are not concurrency-safe)."""
+
+    def __init__(self, mem: Any) -> None:
+        self.__dict__["_mem"] = mem
+        self.__dict__["_op_lock"] = threading.RLock()
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self.__dict__["_mem"], name)
+        if not callable(attr):
+            return attr
+        lock = self.__dict__["_op_lock"]
+
+        def _locked(*args: Any, **kwargs: Any) -> Any:
+            with lock:
+                return attr(*args, **kwargs)
+
+        return _locked
+
 logger = logging.getLogger(__name__)
 
 # Circuit breaker: after this many consecutive failures, pause API calls
@@ -267,7 +299,19 @@ class Mem0MemoryProvider(MemoryProvider):
             },
         }
         from mem0 import Memory as _M
-        return _M.from_config(mem0_config)
+        cache_key = faiss_path or "default"
+        with _MEMORY_SINGLETON_LOCK:
+            cached = _MEMORY_SINGLETON.get(cache_key)
+            if cached is not None:
+                return cached
+            mem = _LockedMemory(_M.from_config(mem0_config))
+            _MEMORY_SINGLETON[cache_key] = mem
+            logger.info(
+                "Mem0 FAISS Memory built once as process singleton (key=%s) — "
+                "reused across runs, no per-turn reload",
+                cache_key,
+            )
+            return mem
 
     def _is_breaker_open(self) -> bool:
         """Return True if the circuit breaker is tripped (too many failures)."""

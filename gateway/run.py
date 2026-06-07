@@ -5374,6 +5374,16 @@ class GatewayRunner:
                                     "task": task,
                                     "board": slug,
                                 })
+                        except Exception as _board_exc:
+                            # Per-board isolation: an empty/corrupt board DB (e.g.
+                            # a leftover test board with 0 tables -> "no such table")
+                            # must NOT crash the whole tick and wedge delivery for
+                            # every other board, incl. the prod `default`. Skip just
+                            # this board; the loop continues to the next one.
+                            logger.warning(
+                                "kanban notifier: board %s skipped this tick: %s",
+                                slug, _board_exc,
+                            )
                         finally:
                             conn.close()
                     return deliveries

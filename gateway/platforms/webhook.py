@@ -540,6 +540,30 @@ class WebhookAdapter(BasePlatformAdapter):
             f"{_MONTHS_FR[_now.month - 1]} {_now.year}",
         )
         # //// END NORA CORE PATCH ////
+        # NORA #41 - datetime tokens injection (UPD-00248, 2026-05-28)
+        # Qwen3.6 has no current-date awareness and hallucinates the month;
+        # inject {date}, {time}, {year}, {today_fr} into the payload so the
+        # route prompt can reference them like any other webhook field.
+        # setdefault → an explicit payload key from the router wins over ours.
+        from datetime import datetime as _dt
+        _now = _dt.now()
+        _MONTHS_FR = (
+            "janvier", "février", "mars", "avril", "mai", "juin",
+            "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+        )
+        _DAYS_FR = (
+            "lundi", "mardi", "mercredi", "jeudi",
+            "vendredi", "samedi", "dimanche",
+        )
+        payload.setdefault("date", _now.strftime("%Y-%m-%d"))
+        payload.setdefault("time", _now.strftime("%H:%M"))
+        payload.setdefault("year", str(_now.year))
+        payload.setdefault(
+            "today_fr",
+            f"{_DAYS_FR[_now.weekday()]} {_now.day} "
+            f"{_MONTHS_FR[_now.month - 1]} {_now.year}",
+        )
+
         # Format prompt from template
         prompt_template = route_config.get("prompt", "")
         prompt = self._render_prompt(
