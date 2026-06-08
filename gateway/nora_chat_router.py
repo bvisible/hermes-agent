@@ -41,14 +41,33 @@ logger = logging.getLogger(__name__)
 # the orchestrator would have chosen on its good days.
 POLES = ("compta", "ventes", "support", "rh", "analyse")
 
-# Pole → user-facing French label (never leak the internal key or any stack term).
-POLE_LABELS_FR = {
-    "compta": "Comptabilité",
-    "ventes": "Ventes",
-    "support": "Support",
-    "rh": "Ressources Humaines",
-    "analyse": "Analyse",
+# Pole → user-facing label, PER LANGUAGE. NORA names the business "desk" to the user;
+# the internal key (compta/…) is never leaked. French is canonical (Swiss-FR audience)
+# and the default; the other languages mirror it for the multilingual chat path.
+# //// Neoffice — multilingual desk labels + ack templates (was French-only) ////
+POLE_LABELS = {
+    "fr": {"compta": "Comptabilité", "ventes": "Ventes", "support": "Support", "rh": "Ressources Humaines", "analyse": "Analyse"},
+    "de": {"compta": "Buchhaltung", "ventes": "Verkauf", "support": "Support", "rh": "Personalwesen", "analyse": "Analyse"},
+    "it": {"compta": "Contabilità", "ventes": "Vendite", "support": "Supporto", "rh": "Risorse Umane", "analyse": "Analisi"},
+    "en": {"compta": "Accounting", "ventes": "Sales", "support": "Support", "rh": "Human Resources", "analyse": "Analytics"},
 }
+# Backwards-compat alias (the French label map, still referenced by name elsewhere).
+POLE_LABELS_FR = POLE_LABELS["fr"]
+
+# Immediate-ack templates per language ({label} = the localized desk name).
+ACK_TEMPLATES = {
+    "fr": "Je transmets votre demande à votre pôle {label}, je reviens vers vous très vite.",
+    "de": "Ich leite Ihre Anfrage an {label} weiter — ich melde mich gleich.",
+    "it": "Inoltro la sua richiesta al reparto {label}, torno subito da lei.",
+    "en": "I'm passing this to your {label} desk — I'll be right back with you.",
+}
+
+
+def _norm_lang(language: Optional[str]) -> str:
+    """Normalize a Frappe code ('fr', 'fr-CH', 'de'…) to a supported ack language; default 'fr'."""
+    code = (language or "").split("-")[0].strip().lower()
+    return code if code in ACK_TEMPLATES else "fr"
+# //// END Neoffice ////
 
 # Per-conversation last route (in-memory, gateway-process-scoped). Lets the classifier
 # resolve follow-ups IN CONTEXT: "Ceux de Daniel Moret" after "Combien de devis ouverts ?"
@@ -219,10 +238,14 @@ def classify(
     return "DIRECT"
 
 
-def build_ack(pole: str) -> str:
-    """Fixed French acknowledgment naming the business pole (SOUL style)."""
-    label = POLE_LABELS_FR.get(pole, "équipe concernée")
-    return f"Je transmets votre demande à votre pôle {label}, je reviens vers vous très vite."
+def build_ack(pole: str, language: Optional[str] = None) -> str:
+    """Acknowledgment naming the business pole, in the user's language (default French)."""
+    # //// Neoffice — language-aware ack (was French-only) ////
+    lang = _norm_lang(language)
+    labels = POLE_LABELS.get(lang, POLE_LABELS["fr"])
+    label = labels.get(pole) or POLE_LABELS["fr"].get(pole, "support")
+    return ACK_TEMPLATES.get(lang, ACK_TEMPLATES["fr"]).format(label=label)
+    # //// END Neoffice ////
 
 
 def _add_notify_sub(kanban_db, conn, **kw) -> None:
@@ -333,6 +356,7 @@ def route_chat_message(
     chat_user: Optional[str] = None,
     board: Optional[str] = None,
     classify_timeout: float = 8.0,
+    language: Optional[str] = None,  # //// Neoffice — user's response language (multilingual) ////
 ) -> dict:
     """Classify *message* and, when it is a business request, create the kanban task
     in code + subscribe the notifier. Returns a decision dict::
@@ -406,6 +430,14 @@ def route_chat_message(
                     f"demande, à interpréter dans ce contexte (un nom = un client à filtrer).]"
                     f"\n\n{message}"
                 )
+            # //// Neoffice — tell the specialist worker which language to answer in (the
+            # user's), so a DE/IT/EN user gets the RESULT in their language too, not just the
+            # ack. Default FR needs no note (the worker SOUL leans FR). grep "//// Neoffice".
+            _wlang = _norm_lang(language)
+            if _wlang != "fr":
+                _lang_full = {"de": "German", "it": "Italian", "en": "English"}.get(_wlang, _wlang)
+                _body = f"{_body}\n\n[Reply to the user in {_lang_full}.]"
+            # //// END Neoffice ////
             # //// Neoffice — stable worker cwd (re-ported from fork commit c68c362e6 after
             # taking the richer osiris-poc router). The dispatcher runs the worker with
             # cwd=<task workspace>; the default "scratch" workspace is ephemeral (deleted on
@@ -453,7 +485,7 @@ def route_chat_message(
         logger.exception("nora_chat_router: task creation failed (%s) → DIRECT fallback", exc)
         return {"routed": False, "category": category, "ack": None, "task_id": None}
 
-    ack = build_ack(category)
+    ack = build_ack(category, language)
     # Deliver the immediate ack NOW so the user sees "I'm handing this to <pole>" right
     # away — it also makes the ~10s worker wait feel responsive. Failure to deliver the
     # ack must NEVER fail the routing (the worker result still arrives via the notifier).

@@ -727,6 +727,8 @@ class WebhookAdapter(BasePlatformAdapter):
                         main_runtime=None,
                         deliver_extra=deliver_config.get("deliver_extra"),
                         chat_user=payload.get("user"),
+                        # //// Neoffice — user's response language (multilingual ack + worker) ////
+                        language=str((payload or {}).get("language") or "").strip() or None,
                     )
                     if _decision.get("routed"):
                         logger.info(
@@ -763,12 +765,41 @@ class WebhookAdapter(BasePlatformAdapter):
             # //// END NORA CORE PATCH ////
             user_name=route_name,
         )
+        # //// Neoffice — per-user response language (multilingual NORA). Carry it as a
+        # channel_prompt: a per-message ephemeral system line that lands at the BACK of the
+        # prompt (after the cached SOUL), so llama.cpp's prefix cache for the big SOUL prefix
+        # stays warm. The language is stable per conversation → cache-safe. The SOUL itself
+        # says "reply in the user's language; default French", so this just supplies it.
+        # grep "//// Neoffice".
+        _lang_code = str((payload or {}).get("language") or "").strip()
+        _lang_channel_prompt = None
+        _event_text = prompt
+        if _lang_code:
+            _lang_names = {
+                "fr": "French", "de": "German", "it": "Italian", "en": "English",
+                "es": "Spanish", "pt": "Portuguese", "nl": "Dutch", "rm": "Romansh",
+            }
+            _lang_name = _lang_names.get(_lang_code.split("-")[0].lower(), _lang_code)
+            _lang_channel_prompt = (
+                f"User language: {_lang_name}. Reply to the user in {_lang_name}."
+            )
+            # NOTE: channel_prompt is resolved from CHANNEL CONFIG (Discord/Telegram style),
+            # NOT from event.channel_prompt, on the webhook DIRECT path — so it never reaches
+            # the orchestrator here (verified: "User language" was absent from every prompt).
+            # So ALSO carry the directive on the user message for any non-default language: it
+            # reliably reaches the model AND sits after the cached SOUL (the user turn is always
+            # last → cache-safe). The desk shows the user's ORIGINAL text (not event.text), so
+            # this stays invisible to the user.
+            if _lang_code.split("-")[0].lower() != "fr":
+                _event_text = f"(System: reply to the user in {_lang_name}.)\n\n{prompt}"
+        # //// END Neoffice ////
         event = MessageEvent(
-            text=prompt,
+            text=_event_text,
             message_type=MessageType.TEXT,
             source=source,
             raw_message=payload,
             message_id=delivery_id,
+            channel_prompt=_lang_channel_prompt,
         )
 
         logger.info(
