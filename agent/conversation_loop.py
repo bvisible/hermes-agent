@@ -4981,6 +4981,44 @@ def run_conversation(
     # Clear stream callback so it doesn't leak into future calls
     agent._stream_callback = None
 
+    # //// Neoffice — deterministic auto-complete net for kanban workers. A weak model
+    # (Gemma/Qwen) sometimes emits its final answer as TEXT and exits WITHOUT calling
+    # kanban_complete → the dispatcher logs a "protocol violation" and RESPAWNS the task
+    # (2x latency + a delivery flake — observed in the soak: spawn-1 answers but never
+    # completes, spawn-2 redoes the same work). If this worker is on a kanban task that is
+    # STILL 'running' at loop exit, complete it IN CODE with the final answer — exactly what
+    # kanban_complete would have done, incl. the completed event the desk notifier delivers.
+    # We RE-READ the live status and only fire on 'running': a legitimate kanban_block /
+    # kanban_complete must never be overridden (complete_task also transitions blocked->done).
+    # Gated on HERMES_KANBAN_TASK → zero impact on the orchestrator / interactive / DIRECT
+    # chat. The principle: when determinism matters, the CODE acts, not the weak model.
+    # grep "//// Neoffice".
+    _kb_task_id = os.environ.get("HERMES_KANBAN_TASK")
+    _kb_answer = final_response.strip() if isinstance(final_response, str) else ""
+    if _kb_task_id and _kb_answer and _kb_answer != "(empty)":
+        try:
+            from hermes_cli import kanban_db as _kb_net
+            _kb_conn = _kb_net.connect(board=os.environ.get("HERMES_KANBAN_BOARD") or None)
+            try:
+                _kb_row = _kb_conn.execute(
+                    "SELECT status FROM tasks WHERE id = ?", (_kb_task_id,)
+                ).fetchone()
+            finally:
+                _kb_conn.close()
+            if _kb_row and _kb_row[0] == "running":
+                from tools.kanban_tools import _handle_complete as _kb_handle_complete
+                _kb_handle_complete({"summary": _kb_answer[:4000]})
+                logger.info(
+                    "kanban auto-complete net: completed %s in code "
+                    "(worker answered but never called kanban_complete)",
+                    _kb_task_id,
+                )
+        except Exception as _kb_net_exc:  # noqa: BLE001
+            logger.warning(
+                "kanban auto-complete net failed for %s: %s", _kb_task_id, _kb_net_exc
+            )
+    # //// END Neoffice ////
+
     # Check skill trigger NOW — based on how many tool iterations THIS turn used.
     _should_review_skills = False
     if (agent._skill_nudge_interval > 0
