@@ -40,6 +40,39 @@ from tools import file_state
 from tools.terminal_tool import set_approval_callback as _set_subagent_approval_cb
 from utils import base_url_hostname, is_truthy_value
 
+# //// NeoCompany Modification: publish the running sub-agent's toolsets to in-process
+# tools (e.g. the webui email plugin) so per-company resources can be scoped to the
+# delegated specialist. Set by _nc_run_single_child (a thin wrapper around the
+# UNCHANGED _run_single_child), read via get_subagent_toolsets(); None for the
+# orchestrator. Best-effort: any failure degrades to "see everything".
+import contextvars as _nc_contextvars
+_nc_subagent_toolsets = _nc_contextvars.ContextVar("nc_subagent_toolsets", default=None)
+
+
+def get_subagent_toolsets():
+    try:
+        return _nc_subagent_toolsets.get()
+    except Exception:
+        return None
+
+
+def _nc_run_single_child(*args, **kwargs):
+    """Expose the child's toolsets via a ContextVar (in the child's own thread),
+    then run the unchanged _run_single_child; reset in finally."""
+    child = kwargs.get("child")
+    if child is None and len(args) >= 3:
+        child = args[2]
+    ts = getattr(child, "_neocompany_toolsets", None) if child is not None else None
+    tok = _nc_subagent_toolsets.set(ts)
+    try:
+        return _run_single_child(*args, **kwargs)
+    finally:
+        try:
+            _nc_subagent_toolsets.reset(tok)
+        except Exception:
+            pass
+# //// End NeoCompany Modification
+
 
 # Tools that children must never have access to
 DELEGATE_BLOCKED_TOOLS = frozenset(
@@ -2103,6 +2136,7 @@ def delegate_task(
             )
             # Override with correct parent tool names (before child construction mutated global)
             child._delegate_saved_tool_names = _parent_tool_names
+            child._neocompany_toolsets = t.get("toolsets") or toolsets  # //// NeoCompany: per-specialist resource scoping
             children.append((i, t, child))
     finally:
         # Authoritative restore: reset global to parent's tool names after all children built
@@ -2111,7 +2145,7 @@ def delegate_task(
     if n_tasks == 1:
         # Single task -- run directly (no thread pool overhead)
         _i, _t, child = children[0]
-        result = _run_single_child(0, _t["goal"], child, parent_agent)
+        result = _nc_run_single_child(0, _t["goal"], child, parent_agent)  # //// NeoCompany: ContextVar wrapper
         results.append(result)
     else:
         # Batch -- run in parallel with per-task progress lines
@@ -2122,7 +2156,7 @@ def delegate_task(
             futures = {}
             for i, t, child in children:
                 future = executor.submit(
-                    _run_single_child,
+                    _nc_run_single_child,  # //// NeoCompany: ContextVar wrapper
                     task_index=i,
                     goal=t["goal"],
                     child=child,
