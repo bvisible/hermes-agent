@@ -450,25 +450,28 @@ def route_chat_message(
             # the goal stated three turns ago is gone). With the film it re-resolves entities
             # already created (they exist now) and drives to the final goal. Falls back to the
             # single-prior note when there is no longer film. grep "//// Neoffice".
+            # Scaffolding fed to the worker LLM is ENGLISH (better model comprehension);
+            # the user-facing REPLY stays in the user's language via the directive appended
+            # below ([Reply to the user in <lang>]). grep "//// Neoffice".
             _body = message
             _film_prev = (_CONV_HISTORY.get(conversation_id) or [])[:-1]  # prior turns (drop current)
             if _film_prev:
                 _film_lines = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(_film_prev))
                 _body = (
-                    "[FIL DE CONVERSATION EN COURS — l'utilisateur poursuit une demande en "
-                    "plusieurs étapes. Tours précédents (du plus ancien au plus récent) :\n"
+                    "[ONGOING CONVERSATION — the user is carrying out a MULTI-STEP request. "
+                    "Previous turns (oldest to newest):\n"
                     f"{_film_lines}\n"
-                    "Tiens compte de ce qui a déjà été demandé ET créé dans ce fil : NE recommence "
-                    "PAS ce qui est fait (les entités déjà créées EXISTENT — retrouve-les par "
-                    "recherche), et POURSUIS jusqu'à réaliser la demande COMPLÈTE (pas juste une "
-                    "étape isolée). Message actuel ci-dessous.]"
+                    "Take into account what has already been asked AND created in this thread: "
+                    "do NOT redo what is done (entities created in earlier turns ALREADY EXIST — "
+                    "look them up), and CONTINUE until the request is COMPLETE (not just one "
+                    "isolated step). Current message below.]"
                     f"\n\n{message}"
                 )
             elif prior and prior.get("pole") and prior.get("msg"):
                 _body = (
-                    f"[Suite de conversation — l'utilisateur a d'abord demandé : "
-                    f"« {prior['msg'][:300]} ». Le message ci-dessous précise/poursuit cette "
-                    f"demande, à interpréter dans ce contexte (un nom = un client à filtrer).]"
+                    f"[Conversation follow-up — the user first asked: « {prior['msg'][:300]} ». "
+                    "The message below refines/continues that request; interpret it in that "
+                    "context (a bare name = a customer to filter by).]"
                     f"\n\n{message}"
                 )
             # //// Neoffice — tell the specialist worker which language to answer in (the
