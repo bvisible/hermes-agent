@@ -78,6 +78,20 @@ def _norm_lang(language: Optional[str]) -> str:
 _LAST_ROUTE: dict = {}
 _LAST_ROUTE_MAX = 1000  # bound the dict; cleared wholesale when exceeded (cheap, rare)
 
+# //// Neoffice — rolling per-conversation history of recent USER turns (the "film").
+# A ROUTED worker runs as a FRESH, session-less kanban task: it sees ONLY the current
+# message, so a MULTI-STEP request loses its thread (build a subscription → give the
+# client, then the product, then the plan, across turns → by the last turn the worker
+# no longer knows the client/goal from two turns earlier). Observed 2026-06-18: the
+# worker created the client, then forgot it and the goal, then mis-parsed "Parfait" as a
+# client name. We carry the recent user turns into the worker task body so it can pick up
+# the build and continue to completion. In-memory, gateway-process-scoped, bounded like
+# _LAST_ROUTE. (Long-term mem0 memory is per-user and unaffected — a separate mechanism;
+# this only restores the short-term conversation thread for routed workers.) grep "//// Neoffice".
+_CONV_HISTORY: dict = {}
+_CONV_HISTORY_TURNS = 6  # how many recent user turns to carry into the worker
+# //// END Neoffice ////
+
 # Classifier system prompt. Mirrors the SOUL roster domains + its two disambiguation
 # rules (any chart/visual → analyse regardless of subject; a plain number in text →
 # the owning pole). The model must answer with EXACTLY one lowercase token.
@@ -383,6 +397,14 @@ def route_chat_message(
             "msg": (message or "")[:200],
             "pole": (category if category in POLES else None),
         }
+        # //// Neoffice — accumulate the rolling conversation film (INCLUDING DIRECT turns,
+        # which carry the goal, e.g. the opening "créer un abonnement"). grep "//// Neoffice".
+        if len(_CONV_HISTORY) > _LAST_ROUTE_MAX:
+            _CONV_HISTORY.clear()
+        _conv_film = _CONV_HISTORY.setdefault(conversation_id, [])
+        _conv_film.append((message or "")[:240])
+        del _conv_film[:-_CONV_HISTORY_TURNS]
+        # //// END Neoffice ////
     if category == "DIRECT":
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
 
@@ -422,8 +444,27 @@ def route_chat_message(
             # devis ouverts ?" must mean "the OPEN DEVIS of client Daniel Moret", not "show
             # Daniel Moret's profile". The router already kept the right pole; this keeps the
             # right INTENT. Only when the previous turn routed to the same kind of request.
+            # //// Neoffice — give the worker the conversation FILM (recent user turns) so a
+            # MULTI-STEP request is CONTINUED, not restarted. The worker is session-less, so
+            # without this it loses the thread (the client created two turns ago is invisible;
+            # the goal stated three turns ago is gone). With the film it re-resolves entities
+            # already created (they exist now) and drives to the final goal. Falls back to the
+            # single-prior note when there is no longer film. grep "//// Neoffice".
             _body = message
-            if prior and prior.get("pole") and prior.get("msg"):
+            _film_prev = (_CONV_HISTORY.get(conversation_id) or [])[:-1]  # prior turns (drop current)
+            if _film_prev:
+                _film_lines = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(_film_prev))
+                _body = (
+                    "[FIL DE CONVERSATION EN COURS — l'utilisateur poursuit une demande en "
+                    "plusieurs étapes. Tours précédents (du plus ancien au plus récent) :\n"
+                    f"{_film_lines}\n"
+                    "Tiens compte de ce qui a déjà été demandé ET créé dans ce fil : NE recommence "
+                    "PAS ce qui est fait (les entités déjà créées EXISTENT — retrouve-les par "
+                    "recherche), et POURSUIS jusqu'à réaliser la demande COMPLÈTE (pas juste une "
+                    "étape isolée). Message actuel ci-dessous.]"
+                    f"\n\n{message}"
+                )
+            elif prior and prior.get("pole") and prior.get("msg"):
                 _body = (
                     f"[Suite de conversation — l'utilisateur a d'abord demandé : "
                     f"« {prior['msg'][:300]} ». Le message ci-dessous précise/poursuit cette "
