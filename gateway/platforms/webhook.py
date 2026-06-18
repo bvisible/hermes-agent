@@ -810,12 +810,12 @@ class WebhookAdapter(BasePlatformAdapter):
             # NOTE: channel_prompt is resolved from CHANNEL CONFIG (Discord/Telegram style),
             # NOT from event.channel_prompt, on the webhook DIRECT path — so it never reaches
             # the orchestrator here (verified: "User language" was absent from every prompt).
-            # So ALSO carry the directive on the user message for any non-default language: it
-            # reliably reaches the model AND sits after the cached SOUL (the user turn is always
-            # last → cache-safe). The desk shows the user's ORIGINAL text (not event.text), so
-            # this stays invisible to the user.
-            if _lang_code.split("-")[0].lower() != "fr":
-                _event_text = f"(System: reply to the user in {_lang_name}.)\n\n{prompt}"
+            # So ALSO carry the directive on the user message for EVERY language (French
+            # INCLUDED — 2026-06-18: a cold model drifts to English even for fr when nothing is
+            # explicit): it reliably reaches the model AND sits after the cached SOUL (the user
+            # turn is always last → cache-safe). The desk shows the user's ORIGINAL text (not
+            # event.text), so this stays invisible to the user.
+            _event_text = f"(System: reply to the user in {_lang_name}. Do not reply in any other language.)\n\n{prompt}"
         # //// END Neoffice ////
         event = MessageEvent(
             text=_event_text,

@@ -431,12 +431,16 @@ def route_chat_message(
                     f"\n\n{message}"
                 )
             # //// Neoffice — tell the specialist worker which language to answer in (the
-            # user's), so a DE/IT/EN user gets the RESULT in their language too, not just the
-            # ack. Default FR needs no note (the worker SOUL leans FR). grep "//// Neoffice".
+            # user's). ALWAYS carry it, FRENCH INCLUDED: the worker SOUL only "leans" FR, and a
+            # cold model drifts to English without an explicit per-task directive (observed
+            # 2026-06-18: fr user got an English worker summary). Deterministic beats hoping the
+            # SOUL holds — the directive is one line at the BACK of the body (cache-safe, the
+            # user turn is always last). grep "//// Neoffice".
             _wlang = _norm_lang(language)
-            if _wlang != "fr":
-                _lang_full = {"de": "German", "it": "Italian", "en": "English"}.get(_wlang, _wlang)
-                _body = f"{_body}\n\n[Reply to the user in {_lang_full}.]"
+            _lang_full = {"fr": "French", "de": "German", "it": "Italian", "en": "English"}.get(
+                _wlang, _wlang
+            )
+            _body = f"{_body}\n\n[Reply to the user in {_lang_full}. Do not reply in any other language.]"
             # //// END Neoffice ////
             # //// Neoffice — stable worker cwd (re-ported from fork commit c68c362e6 after
             # taking the richer osiris-poc router). The dispatcher runs the worker with
