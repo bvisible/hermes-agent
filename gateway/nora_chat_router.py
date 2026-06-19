@@ -92,6 +92,77 @@ _CONV_HISTORY: dict = {}
 _CONV_HISTORY_TURNS = 6  # how many recent user turns to carry into the worker
 # //// END Neoffice ////
 
+# //// Neoffice — briefing CTA → reply continuity (cross-process bridge).
+# A WhatsApp morning briefing is pushed from Frappe straight to the WhatsApp router,
+# OUTSIDE this gateway, so its call-to-action question ("voulez-vous que je prépare les
+# rappels ?") never entered _LAST_ROUTE/_CONV_HISTORY. When the user replies "oui", we'd
+# classify it blind → DIRECT → generic greeting, with NO continuity (reported 2026-06-19).
+# The briefing records a "pending offer" {pole, action_en, question_fr, ts} keyed by phone
+# in a shared file (Frappe + this gateway run as the SAME local user); we read it here on
+# the FIRST inbound from that phone and continue the thread on the offer's pole. JSON
+# contract mirrors nora/tasks/briefing_followup.py — keep in sync. grep "//// Neoffice".
+import json as _json_off
+import os as _os_off
+import time as _time_off
+
+_PENDING_OFFERS = _os_off.path.join(
+    _os_off.path.expanduser("~"), ".hermes-nora-work", "pending_offers.json"
+)
+_OFFER_TTL_SECONDS = 6 * 3600
+# An affirmative / "go ahead" reply → carry out the offered action. A name-only or new
+# question is NOT here (it falls through to normal classification). Negative → drop it.
+_AFFIRM_RE = re.compile(
+    r"\b(oui|ouais|ok|okay|d'accord|daccord|volontiers|carr[ée]ment|vas[- ]?y|allez[- ]?y|"
+    r"go|bien s[ûu]r|je veux bien|avec plaisir|les deux|pr[ée]pare|montre|envoie|fais[- ]?le|"
+    r"parfait)\b",
+    re.IGNORECASE,
+)
+_NEGATE_RE = re.compile(
+    r"\b(non|nope|pas maintenant|plus tard|laisse tomber|pas besoin|une autre fois)\b",
+    re.IGNORECASE,
+)
+
+
+def _offer_phone_key(phone: Optional[str]) -> str:
+    return "".join(c for c in (phone or "") if c.isdigit())
+
+
+def _read_pending_offer(phone: Optional[str]) -> Optional[dict]:
+    """Return a fresh pending offer for this phone, or None. Never raises."""
+    key = _offer_phone_key(phone)
+    if not key:
+        return None
+    try:
+        with open(_PENDING_OFFERS, encoding="utf-8") as fh:
+            data = _json_off.load(fh) or {}
+    except Exception:
+        return None
+    off = data.get(key)
+    if not isinstance(off, dict) or not off.get("pole"):
+        return None
+    if (_time_off.time() - float(off.get("ts", 0))) > _OFFER_TTL_SECONDS:
+        return None
+    return off
+
+
+def _consume_pending_offer(phone: Optional[str]) -> None:
+    """Delete the offer for this phone so it fires once. Never raises."""
+    key = _offer_phone_key(phone)
+    if not key:
+        return
+    try:
+        with open(_PENDING_OFFERS, encoding="utf-8") as fh:
+            data = _json_off.load(fh) or {}
+        if key in data:
+            del data[key]
+            tmp = _PENDING_OFFERS + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                _json_off.dump(data, fh)
+            _os_off.replace(tmp, _PENDING_OFFERS)
+    except Exception:
+        logger.warning("nora_chat_router: failed to consume pending offer")
+# //// END Neoffice ////
+
 # Classifier system prompt. Mirrors the SOUL roster domains + its two disambiguation
 # rules (any chart/visual → analyse regardless of subject; a plain number in text →
 # the owning pole). The model must answer with EXACTLY one lowercase token.
@@ -371,6 +442,7 @@ def route_chat_message(
     board: Optional[str] = None,
     classify_timeout: float = 8.0,
     language: Optional[str] = None,  # //// Neoffice — user's response language (multilingual) ////
+    chat_phone: Optional[str] = None,  # //// Neoffice — phone, to match a pending briefing offer ////
 ) -> dict:
     """Classify *message* and, when it is a business request, create the kanban task
     in code + subscribe the notifier. Returns a decision dict::
@@ -381,13 +453,34 @@ def route_chat_message(
     MUST proceed with the normal agent dispatch — the message is never dropped.
     """
     prior = _LAST_ROUTE.get(conversation_id) if conversation_id else None
-    category = classify(
-        message,
-        call_llm_fn=call_llm_fn,
-        main_runtime=main_runtime,
-        prior=prior,
-        timeout=classify_timeout,
-    )
+
+    # //// Neoffice — briefing CTA continuity. On the FIRST inbound after an out-of-band
+    # briefing (no in-memory prior yet), an AFFIRMATIVE reply to NORA's recorded offer is
+    # routed straight to the offer's pole, with the offered action injected as context
+    # (below) so "oui" leads to the action instead of a blind DIRECT greeting. A negative
+    # reply just consumes the offer; anything else falls through to normal classification.
+    # grep "//// Neoffice".
+    _offer = None
+    if prior is None and chat_phone:
+        _cand = _read_pending_offer(chat_phone)
+        if _cand:
+            if _AFFIRM_RE.search(message or ""):
+                _offer = _cand
+                _consume_pending_offer(chat_phone)
+            elif _NEGATE_RE.search(message or ""):
+                _consume_pending_offer(chat_phone)
+    # //// END Neoffice ////
+
+    if _offer:
+        category = _offer["pole"]  # //// Neoffice — pole fixed by the accepted offer ////
+    else:
+        category = classify(
+            message,
+            call_llm_fn=call_llm_fn,
+            main_runtime=main_runtime,
+            prior=prior,
+            timeout=classify_timeout,
+        )
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
     if conversation_id:
@@ -455,7 +548,18 @@ def route_chat_message(
             # below ([Reply to the user in <lang>]). grep "//// Neoffice".
             _body = message
             _film_prev = (_CONV_HISTORY.get(conversation_id) or [])[:-1]  # prior turns (drop current)
-            if _film_prev:
+            # //// Neoffice — accepted briefing offer: inject the proposed action so "oui"
+            # leads straight to it. Takes priority over the film/prior context. grep "//// Neoffice".
+            if _offer:
+                _body = (
+                    "[The user is replying to NORA's morning-briefing proposal: "
+                    f"« {(_offer.get('question_fr') or '').strip()} ». "
+                    f"Proposed action: {(_offer.get('action_en') or '').strip()} "
+                    "The user's reply is below; if it is affirmative, carry out the proposed "
+                    "action NOW and present the result — do not merely acknowledge.]"
+                    f"\n\n{message}"
+                )
+            elif _film_prev:
                 _film_lines = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(_film_prev))
                 _body = (
                     "[ONGOING CONVERSATION — the user is carrying out a MULTI-STEP request. "

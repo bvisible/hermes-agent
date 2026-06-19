@@ -753,6 +753,12 @@ class WebhookAdapter(BasePlatformAdapter):
                         chat_user=payload.get("user"),
                         # //// Neoffice — user's response language (multilingual ack + worker) ////
                         language=str((payload or {}).get("language") or "").strip() or None,
+                        # //// Neoffice — phone → match a pending briefing CTA offer (WhatsApp
+                        # reply continuity); falls back to digits from the session chat_id. ////
+                        chat_phone=(
+                            str((payload or {}).get("phone") or "").strip()
+                            or str(session_chat_id or "")
+                        ),
                     )
                     if _decision.get("routed"):
                         logger.info(
