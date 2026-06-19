@@ -531,6 +531,36 @@ class Mem0MemoryProvider(MemoryProvider):
 
         return tool_error(f"Unknown tool: {tool_name}")
 
+    # //// Neoffice — bulk verbatim retain for an explicit user (end-of-day consolidation).
+    # NORA's nightly consolidation extracts high-signal durable facts from the day's chat and
+    # POSTs them to the gateway webhook (event_type "memory_retain"). We store each one VERBATIM
+    # (infer=False — same write path as mem0_conclude) into the user-scoped bucket: NORA has
+    # already extracted + confidence-filtered them, so no LLM extraction here. Scope is set by
+    # initialize(user_id=) on the provider before this call. grep "//// Neoffice".
+    def retain_facts(self, facts: List[str], *, scope: str = "user") -> int:
+        """Store pre-extracted facts verbatim, scoped to self._user_id. Returns count stored."""
+        if self._is_breaker_open():
+            return 0
+        client = self._get_client()
+        write_filters = (
+            self._company_write_filters() if scope == "company" else self._write_filters()
+        )
+        stored = 0
+        for fact in facts:
+            text = (fact or "").strip()
+            if not text:
+                continue
+            try:
+                client.add([{"role": "user", "content": text}], **write_filters, infer=False)
+                stored += 1
+            except Exception as e:
+                self._record_failure()
+                logger.warning("retain_facts: store failed: %s", e)
+        if stored:
+            self._record_success()
+        return stored
+    # //// END Neoffice ////
+
     def shutdown(self) -> None:
         for t in (self._prefetch_thread, self._sync_thread):
             if t and t.is_alive():

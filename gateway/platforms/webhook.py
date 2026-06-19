@@ -409,6 +409,52 @@ class WebhookAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.error("[webhook] Failed to reload dynamic routes: %s", e)
 
+    # //// Neoffice — direct verbatim retain into mem0 for an explicit user (no agent run).
+    # Powers NORA's end-of-day consolidation: facts already extracted + confidence-filtered
+    # Frappe-side are stored verbatim into that user's mem0 bucket. mem0's FAISS store is a
+    # process singleton (keyed by faiss_path), so a throwaway provider re-scoped to this user
+    # writes the SAME store the chat agent reads. mem0 add() blocks on Olares embeddings, so it
+    # runs in an executor — never block the aiohttp loop. Auth = the route HMAC (validated in
+    # _handle_webhook before dispatch). grep "//// Neoffice".
+    async def _handle_memory_retain(self, payload: dict) -> "web.Response":
+        user = str(payload.get("user") or "").strip()
+        raw_facts = payload.get("facts") or []
+        if not user or not isinstance(raw_facts, list):
+            return web.json_response(
+                {"error": "memory_retain requires 'user' and 'facts' (list)"}, status=400
+            )
+        scope = str(payload.get("scope") or "user").lower()
+        texts: List[str] = []
+        for f in raw_facts:
+            raw = f.get("text", "") if isinstance(f, dict) else f
+            text = ("" if raw is None else str(raw)).strip()
+            if text:
+                texts.append(text)
+        if not texts:
+            return web.json_response(
+                {"status": "stored", "user": user, "stored": 0}, status=200
+            )
+
+        def _store() -> int:
+            from plugins.memory.mem0 import Mem0MemoryProvider
+
+            prov = Mem0MemoryProvider()
+            prov.initialize("memory_retain", user_id=user)
+            return prov.retain_facts(texts, scope=scope)
+
+        try:
+            stored = await asyncio.get_running_loop().run_in_executor(None, _store)
+        except Exception as e:  # noqa: BLE001 — surface as 502, never crash the loop
+            logger.exception("[webhook] memory_retain failed user=%s", user)
+            return web.json_response({"status": "error", "error": str(e)}, status=502)
+        logger.info(
+            "[webhook] memory_retain user=%s stored=%d/%d", user, stored, len(texts)
+        )
+        return web.json_response(
+            {"status": "stored", "user": user, "stored": stored}, status=200
+        )
+    # //// END Neoffice ////
+
     async def _handle_webhook(self, request: "web.Request") -> "web.Response":
         """POST /webhooks/{route_name} — receive and process a webhook event."""
         # Hot-reload dynamic subscriptions on each request (mtime-gated, cheap)
@@ -503,6 +549,15 @@ class WebhookAdapter(BasePlatformAdapter):
             or payload.get("type", "")
             or "unknown"
         )
+        # //// Neoffice — end-of-day memory consolidation write-path. NORA's nightly cron POSTs
+        # {event_type:"memory_retain", user:<canonical_id>, facts:[...]} signed with the SAME HMAC
+        # as nora_chat (already validated above). We store each fact verbatim into mem0 scoped to
+        # that user — no agent run, no LLM. Handled here, before the allowlist/idempotency/prompt
+        # path, since it's a pure data write (and so an existing route's event allowlist can't
+        # accidentally drop it). grep "//// Neoffice".
+        if event_type == "memory_retain":
+            return await self._handle_memory_retain(payload)
+        # //// END Neoffice ////
         allowed_events = route_config.get("events", [])
         if allowed_events and event_type not in allowed_events:
             logger.debug(
