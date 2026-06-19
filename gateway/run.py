@@ -5436,19 +5436,29 @@ class GatewayRunner:
                                "support": "Support", "rh": "RH"}.get(
                             who or "", "Le service")
                         if kind == "completed":
-                            # Prefer the run's summary (the worker's intentional
-                            # human-facing handoff in the event payload), else the
-                            # task.result. Full first paragraph (600 chars) — a metier
-                            # answer spans several sentences, not one line.
-                            handoff = ""
-                            payload_summary = None
-                            if ev.payload and ev.payload.get("summary"):
-                                payload_summary = str(ev.payload["summary"])
-                            if payload_summary:
-                                handoff = f"\n{payload_summary.strip()[:600]}"
-                            elif task and task.result:
-                                handoff = f"\n{task.result.strip()[:600]}"
+                            # //// Neoffice — deliver the worker's FULL handoff, not the
+                            # event's first-line preview. The completed-event payload
+                            # "summary" is truncated to the FIRST LINE (kanban_db caps it at
+                            # one line / 400 chars for the dashboard; the full handoff lives
+                            # on task_runs.summary, and tasks.result is left NULL when the
+                            # worker passes only summary=). For a multi-line answer — e.g. a
+                            # dunning list — WhatsApp/desk then showed only the header
+                            # ("Voici les clients … :") with NO list (reported 2026-06-19).
+                            # Pull the FULL run summary (latest_summary), fall back to
+                            # task.result then the event preview, and cap at a messaging-safe
+                            # length (WhatsApp ~4096). grep "//// Neoffice".
+                            full_handoff = None
+                            try:
+                                full_handoff = _kb.latest_summary(conn, sub["task_id"])
+                            except Exception:
+                                full_handoff = None
+                            if not full_handoff and task and task.result:
+                                full_handoff = task.result
+                            if not full_handoff and ev.payload and ev.payload.get("summary"):
+                                full_handoff = str(ev.payload["summary"])
+                            handoff = f"\n{full_handoff.strip()[:3500]}" if full_handoff else ""
                             msg = f"✅ {dom} — {title}{handoff}"
+                            # //// END Neoffice ////
                         elif kind == "blocked":
                             reason = ""
                             if ev.payload and ev.payload.get("reason"):
