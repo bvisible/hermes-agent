@@ -804,7 +804,16 @@ def _handle_complete(args: dict, **kw) -> str:
                     f"could not complete {tid} (unknown id or already terminal)"
                 )
             run = kb.latest_run(conn, tid)
-            return _ok(task_id=tid, run_id=run.id if run else None)
+            # Explicit terminal signal: without it the model often keeps reasoning after a
+            # successful complete and re-calls kanban_complete (the 2nd fails "already
+            # terminal") — a wasted ~2.5s LLM turn. Tell it plainly to stop.
+            return _ok(
+                task_id=tid,
+                run_id=run.id if run else None,
+                terminal=True,
+                note="Task complete — STOP now. Do not call any more tools (including "
+                "kanban_complete); your work is done.",
+            )
         finally:
             conn.close()
     except ValueError as e:

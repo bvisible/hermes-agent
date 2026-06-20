@@ -28,6 +28,23 @@ setup`):
 The matching MEM0_MODE / MEM0_USER_ID / MEM0_AGENT_ID environment variables are
 still read as a backward-compatible fallback, but mem0.json is the canonical
 home for these non-secret settings.
+
+//// Neoffice — fork divergence summary (grep "//// Neoffice"):
+  * OSS backend is wrapped in a process-wide singleton + operation lock:
+    initialize() runs on EVERY agent run, and a fresh qdrant-embedded client
+    per run would re-open (and re-lock) the on-disk store each turn — the
+    same per-turn reload bug we fixed for FAISS (7s/turn), plus qdrant local
+    mode does not tolerate two live clients on one path.
+  * Shared company-scope bucket: scope="company" facts land in ONE bucket
+    (user_id=company_id) visible to every user of the instance; reads merge
+    the per-user bucket + the company bucket.
+  * Per-turn capture stores the RAW turn (infer=False) — reliable, zero LLM
+    load; the nightly consolidation distills durable facts (memory_retain).
+  * retain_facts(): bulk verbatim store used by the gateway webhook
+    (event_type "memory_retain") for NORA's end-of-day consolidation.
+  * mem0_profile / mem0_conclude kept as hidden aliases of mem0_list /
+    mem0_add so pre-v2026.7.1 SOUL prompts and skills keep working.
+//// END Neoffice ////
 """
 
 from __future__ import annotations
@@ -60,6 +77,53 @@ _CLIENT_ERROR_TYPES = ("MemoryNotFoundError", "ValidationError")
 # wrote this exact placeholder) still allow gateway-native ids to flow
 # through instead of silently overriding them with the placeholder.
 _DEFAULT_USER_ID = "hermes-user"
+
+# //// Neoffice — process-wide singleton for the OSS (self-hosted) backend.
+# initialize() runs on EVERY agent run and rebuilds self._backend, so without
+# a cache the embedded vector store would be re-opened each turn: for FAISS
+# that cost ~7s/turn (agent.log showed "Loaded FAISS index" 57x for 77 turns);
+# for qdrant embedded a second live client on the same path conflicts with the
+# storage lock. One backend per oss-config, built once per gateway process.
+# _LockedBackend serialises every operation: sync_turn (thread) + prefetch
+# (thread) + tool calls can hit the store concurrently, and neither FAISS nor
+# qdrant-embedded guarantees concurrent add/search safety. Closed at process
+# exit only (never by a provider's shutdown — other runs share it).
+_OSS_BACKEND_SINGLETON: Dict[str, Any] = {}
+_OSS_SINGLETON_LOCK = threading.Lock()
+
+
+class _LockedBackend:
+    """Proxy that serialises all backend calls under one process-wide lock."""
+
+    def __init__(self, backend: Any) -> None:
+        self.__dict__["_backend"] = backend
+        self.__dict__["_op_lock"] = threading.RLock()
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self.__dict__["_backend"], name)
+        if not callable(attr):
+            return attr
+        lock = self.__dict__["_op_lock"]
+
+        def _locked(*args: Any, **kwargs: Any) -> Any:
+            with lock:
+                return attr(*args, **kwargs)
+
+        return _locked
+
+
+def _close_oss_singletons() -> None:
+    with _OSS_SINGLETON_LOCK:
+        for backend in _OSS_BACKEND_SINGLETON.values():
+            try:
+                backend.close()
+            except Exception:
+                pass
+        _OSS_BACKEND_SINGLETON.clear()
+
+
+atexit.register(_close_oss_singletons)
+# //// END Neoffice ////
 
 
 def _is_client_error(exc: Exception) -> bool:
@@ -148,6 +212,16 @@ ADD_SCHEMA = {
         "type": "object",
         "properties": {
             "content": {"type": "string", "description": "The fact to store."},
+            # //// Neoffice — company-scope: shared bucket across the instance ////
+            "scope": {
+                "type": "string",
+                "enum": ["user", "company"],
+                "description": (
+                    "user = private to this user (default); "
+                    "company = shared with everyone in the organisation."
+                ),
+            },
+            # //// END Neoffice ////
         },
         "required": ["content"],
     },
@@ -279,8 +353,25 @@ class Mem0MemoryProvider(MemoryProvider):
             pass
         try:
             if self._mode == "oss":
+                # //// Neoffice — one OSS backend per config, shared across runs
+                # (see module docstring: per-run rebuild = per-turn store reload
+                # for FAISS / storage-lock conflict for qdrant embedded). The
+                # provider's shutdown() must NOT close it; atexit does.
                 from ._backend import OSSBackend
-                return OSSBackend(self._config.get("oss", {}))
+                oss_cfg = self._config.get("oss", {})
+                cache_key = json.dumps(oss_cfg, sort_keys=True, default=str)
+                with _OSS_SINGLETON_LOCK:
+                    cached = _OSS_BACKEND_SINGLETON.get(cache_key)
+                    if cached is not None:
+                        return cached
+                    backend = _LockedBackend(OSSBackend(oss_cfg))
+                    _OSS_BACKEND_SINGLETON[cache_key] = backend
+                    logger.info(
+                        "Mem0 OSS backend built once as process singleton — "
+                        "reused across runs, no per-turn reload"
+                    )
+                    return backend
+                # //// END Neoffice ////
             if self._host:
                 from ._backend import SelfHostedBackend
                 return SelfHostedBackend(self._api_key, self._host)
@@ -363,6 +454,13 @@ class Mem0MemoryProvider(MemoryProvider):
         self._rerank_default = (
             _rr.lower() in ("true", "1", "yes") if isinstance(_rr, str) else bool(_rr)
         )
+        # //// Neoffice — shared company-scope memory. A scope="company" fact
+        # lands in ONE shared bucket (user_id=company_id) so EVERY user of the
+        # instance sees it; personal facts stay per-user and reads merge both.
+        # The gateway passes company_id per call; default "company" = one
+        # shared bucket per instance. grep "//// Neoffice".
+        self._company_id = kwargs.get("company_id") or self._config.get("company_id", "company")
+        # //// END Neoffice ////
         self._channel = kwargs.get("platform") or "cli"
         self._backend = self._create_backend()
         if self._backend and not self._atexit_registered:
@@ -381,6 +479,48 @@ class Mem0MemoryProvider(MemoryProvider):
         # Tag every write with the gateway channel so the dashboard can offer
         # per-channel filtered views without coupling identity to the channel.
         return {"channel": self._channel} if self._channel else {}
+
+    # //// Neoffice — company-scope memory (shared bucket across the instance's users) ////
+    def _scoped_read_buckets(self) -> List[Dict[str, Any]]:
+        """Buckets a read covers: the caller's per-user bucket + the shared
+        company bucket. Personal facts stay private; company facts are visible
+        to every user of the instance."""
+        buckets = [self._read_filters()]
+        company_id = getattr(self, "_company_id", None)
+        if company_id and company_id != self._user_id:
+            buckets.append({"user_id": company_id})
+        return buckets
+
+    def _merged_search(self, backend, query: str, *, top_k: int, rerank: bool) -> list:
+        """backend.search over the per-user + company buckets, deduped by id,
+        best-score first."""
+        seen, out = set(), []
+        for filt in self._scoped_read_buckets():
+            for item in backend.search(query, filters=filt, top_k=top_k, rerank=rerank) or []:
+                key = item.get("id") or item.get("memory")
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(item)
+        out.sort(key=lambda r: r.get("score", 0) or 0, reverse=True)
+        return out[:top_k]
+
+    def _merged_get_all(self, backend, *, page: int, page_size: int) -> dict:
+        """backend.get_all over the per-user + company buckets, deduped, then
+        paginated in memory (same strategy the OSS backend itself uses)."""
+        seen, out = set(), []
+        for filt in self._scoped_read_buckets():
+            response = backend.get_all(filters=filt, page=1, page_size=10000)
+            for item in (response or {}).get("results", []):
+                key = item.get("id") or item.get("memory")
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(item)
+        total = len(out)
+        start = (page - 1) * page_size
+        return {"results": out[start:start + page_size], "count": total}
+    # //// END Neoffice ////
 
     def system_prompt_block(self) -> str:
         # Mirror the precedence in _create_backend (oss > host > platform) so
@@ -440,9 +580,9 @@ class Mem0MemoryProvider(MemoryProvider):
         def _run():
             body = ""
             try:
-                results = backend.search(
-                    query, filters=self._read_filters(), top_k=10, rerank=False,
-                )
+                # //// Neoffice — prefetch covers the per-user + shared company buckets ////
+                results = self._merged_search(backend, query, top_k=10, rerank=True)
+                # //// END Neoffice ////
                 lines = [r.get("memory", "") for r in (results or []) if r.get("memory")]
                 if lines:
                     body = "## Mem0 Memory\n" + "\n".join(f"- {l}" for l in lines)
@@ -490,13 +630,24 @@ class Mem0MemoryProvider(MemoryProvider):
                     {"role": "user", "content": user_content},
                     {"role": "assistant", "content": assistant_content},
                 ]
+                # //// Neoffice — per-turn capture stores the RAW turn (infer=False).
+                # The mem0 extraction LLM (Olares) is the same GPU the chat and the
+                # workers share: infer=True adds one LLM extraction call per turn and
+                # fails whenever that endpoint is saturated or unconfigured — the
+                # breaker then opens and real-time capture silently stops (desk/
+                # console "forgot" within the same day). Storing raw (embeddings
+                # only, NO chat LLM) makes per-turn capture RELIABLE and immediately
+                # recallable, and puts ZERO load on the chat GPU. The end-of-day
+                # consolidation (consolidate_pending → memory_retain) still distills
+                # the high-signal durable facts. grep "//// Neoffice".
                 backend.add(
                     messages,
                     user_id=self._user_id,
                     agent_id=self._agent_id,
-                    infer=True,
+                    infer=False,
                     metadata=self._write_metadata(),
                 )
+                # //// END Neoffice ////
                 self._record_success()
             except Exception as e:
                 self._record_failure()
@@ -515,6 +666,14 @@ class Mem0MemoryProvider(MemoryProvider):
         return [SEARCH_SCHEMA, ADD_SCHEMA, UPDATE_SCHEMA, DELETE_SCHEMA]
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
+        # //// Neoffice — hidden aliases so pre-v2026.7.1 SOUL prompts and
+        # skills keep working after the upstream tool rename: mem0_profile
+        # was replaced by mem0_list, mem0_conclude by mem0_add. ////
+        if tool_name == "mem0_profile":
+            tool_name = "mem0_list"
+        elif tool_name == "mem0_conclude":
+            tool_name = "mem0_add"
+        # //// END Neoffice ////
         if self._backend is None:
             err = getattr(self, "_init_error", "unknown error")
             hint = ""
@@ -531,7 +690,31 @@ class Mem0MemoryProvider(MemoryProvider):
                 msg += f" Check that your {vs.get('provider', 'vector store')} is running."
             return json.dumps({"error": msg})
 
-        if tool_name == "mem0_search":
+        if tool_name == "mem0_list":
+            try:
+                page = max(1, int(args.get("page", 1)))
+                page_size = min(max(1, int(args.get("page_size", 100))), 200)
+                # //// Neoffice — merge the per-user bucket + the shared company bucket ////
+                response = self._merged_get_all(
+                    self._backend, page=page, page_size=page_size,
+                )
+                self._record_success()
+                results = response.get("results", [])
+                if not results:
+                    return json.dumps({"result": "No memories stored yet."})
+                items = [{"id": m.get("id"), "memory": m.get("memory", "")}
+                         for m in results]
+                return json.dumps({
+                    "results": items,
+                    "count": response.get("count", len(items)),
+                    "page": page, "page_size": page_size,
+                })
+            except Exception as e:
+                if not _is_client_error(e):
+                    self._record_failure()
+                return tool_error(self._format_error("Failed to list memories", e))
+
+        elif tool_name == "mem0_search":
             query = args.get("query", "")
             if not query:
                 return tool_error("Missing required parameter: query")
@@ -542,7 +725,8 @@ class Mem0MemoryProvider(MemoryProvider):
                     rerank = rerank_raw.lower() not in ("false", "0", "no")
                 else:
                     rerank = bool(rerank_raw)
-                results = self._backend.search(query, filters=self._read_filters(), top_k=top_k, rerank=rerank)
+                # //// Neoffice — search the per-user + shared company buckets, merge ////
+                results = self._merged_search(self._backend, query, top_k=top_k, rerank=rerank)
                 self._record_success()
                 if not results:
                     return json.dumps({"result": "No relevant memories found."})
@@ -555,13 +739,19 @@ class Mem0MemoryProvider(MemoryProvider):
                 return tool_error(self._format_error("Search failed", e))
 
         elif tool_name == "mem0_add":
-            content = args.get("content", "")
+            # //// Neoffice — legacy alias: pre-v2026.7.1 SOUL prompts say
+            # mem0_conclude(conclusion=...); accept both spellings. ////
+            content = args.get("content", "") or args.get("conclusion", "")
             if not content:
                 return tool_error("Missing required parameter: content")
+            # scope="company" stores into the shared company bucket
+            scope = str(args.get("scope") or "user").lower()
+            write_user_id = self._company_id if scope == "company" else self._user_id
+            # //// END Neoffice ////
             try:
                 result = self._backend.add(
                     [{"role": "user", "content": content}],
-                    user_id=self._user_id,
+                    user_id=write_user_id,
                     agent_id=self._agent_id,
                     infer=False,
                     metadata=self._write_metadata(),
@@ -608,10 +798,52 @@ class Mem0MemoryProvider(MemoryProvider):
 
         return tool_error(f"Unknown tool: {tool_name}")
 
+    # //// Neoffice — bulk verbatim retain for an explicit user (end-of-day
+    # consolidation). NORA's nightly consolidation extracts high-signal durable
+    # facts from the day's chat and POSTs them to the gateway webhook
+    # (event_type "memory_retain"). We store each one VERBATIM (infer=False —
+    # same write path as mem0_add): NORA has already extracted +
+    # confidence-filtered them, so no LLM extraction here. Scope is set by
+    # initialize(user_id=) on the provider before this call. grep "//// Neoffice".
+    def retain_facts(self, facts: List[str], *, scope: str = "user") -> int:
+        """Store pre-extracted facts verbatim, scoped to self._user_id (or the
+        shared company bucket for scope="company"). Returns count stored."""
+        if self._backend is None or self._is_breaker_open():
+            return 0
+        write_user_id = (
+            self._company_id if scope == "company" else self._user_id
+        )
+        stored = 0
+        for fact in facts:
+            text = (fact or "").strip()
+            if not text:
+                continue
+            try:
+                self._backend.add(
+                    [{"role": "user", "content": text}],
+                    user_id=write_user_id,
+                    agent_id=self._agent_id,
+                    infer=False,
+                    metadata=self._write_metadata(),
+                )
+                stored += 1
+            except Exception as e:
+                self._record_failure()
+                logger.warning("retain_facts: store failed: %s", e)
+        if stored:
+            self._record_success()
+        return stored
+    # //// END Neoffice ////
+
     def _shutdown_backend(self):
         try:
             if self._backend:
-                self._backend.close()
+                # //// Neoffice — never close a shared OSS singleton from a
+                # provider teardown: other agent runs still hold it. Just drop
+                # the reference; _close_oss_singletons() (atexit) closes it.
+                if not isinstance(self._backend, _LockedBackend):
+                    self._backend.close()
+                # //// END Neoffice ////
                 self._backend = None
         except Exception:
             pass

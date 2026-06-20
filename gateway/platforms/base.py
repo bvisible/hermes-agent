@@ -4518,14 +4518,18 @@ class BasePlatformAdapter(ABC):
             for i, choice in enumerate(choices, start=1):
                 lines.append(f"  {i}. {choice}")
             lines.append("")
+            # //// Neoffice — user-facing string, and our audience is French-speaking
+            # (Swiss SMEs). Upstream's multi-select branch is kept as-is; only the
+            # two prompts are translated, vouvoiement.
             if _is_multi:
                 lines.append(
-                    "Multiple selections allowed — reply with the numbers "
-                    "separated by commas or spaces (e.g. \"1, 3\"), the option "
-                    "text, or your own answer."
+                    "Plusieurs réponses sont possibles — indiquez les numéros "
+                    "séparés par des virgules ou des espaces (par exemple « 1, 3 »), "
+                    "le texte de l'option, ou votre propre réponse."
                 )
             else:
-                lines.append("Reply with the number, the option text, or your own answer.")
+                lines.append("Répondez par le numéro, le texte de l'option, ou votre propre réponse.")
+            # //// END Neoffice ////
             text = "\n".join(lines)
             # Text fallback: enable text-capture so the gateway intercept
             # picks up the user's typed reply (e.g. "2" or choice text).
