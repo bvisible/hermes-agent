@@ -735,6 +735,21 @@ class AIAgent:
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0
 
+        # Kanban worker no-progress / narration-loop breaker (conversation_loop).
+        # Counts consecutive assistant turns that made no real progress (only
+        # kanban_comment/show/heartbeat or text-only narration — no business or
+        # terminal tool). Reset to 0 on any progress/terminal turn. Drives a
+        # one-shot nudge then a deterministic kanban_block. No-op outside
+        # dispatcher-spawned workers (gated on HERMES_KANBAN_TASK at the call site).
+        self._kanban_no_progress_streak = 0
+        self._kanban_no_progress_nudged = False
+        # Structural signal for the auto-complete net (cli.py): True once the
+        # worker called at least one REAL business/MCP tool this run. The net
+        # only delivers a result when this is True — a worker that only
+        # narrated/commented has no genuine result to deliver. Deterministic
+        # (set by the no-progress classifier), not guessed from the text.
+        self._kanban_made_progress = False  # //// Neoffice (no-progress breaker flag, recovered from osiris-poc) ////
+
         # Context engine reset/transition (works for built-in compressor and plugins)
         self._transition_context_engine_session(
             old_session_id=old_session_id,
@@ -1534,6 +1549,60 @@ class AIAgent:
             self, user_message, assistant_content, messages, require_workspace
         )
 
+    # //// Neoffice — kanban no-progress breaker helpers (recovered from osiris-poc, 2026-06-06).
+    # _kanban_worker_run_id + _force_kanban_block_no_progress below are ours. //// END Neoffice ////
+    def _kanban_worker_run_id(self, task_id: str) -> Optional[int]:
+        """This worker's dispatcher run id when scoped to ``task_id`` (else None).
+
+        Mirrors ``tools.kanban_tools._worker_run_id`` so a force-block only fires
+        on OUR run (no-op if the dispatcher already reclaimed the task)."""
+        import os as _os
+        if _os.environ.get("HERMES_KANBAN_TASK") != task_id:
+            return None
+        raw = _os.environ.get("HERMES_KANBAN_RUN_ID")
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def _force_kanban_block_no_progress(self, task_id: str, streak: int) -> str:
+        """Deterministically block a narration-looping worker's task.
+
+        Driven by the no-progress breaker in ``conversation_loop`` (not the
+        model). Transitions ``running -> blocked`` so the task surfaces on the
+        board for human input (the KANBAN_GUIDANCE escape hatch) instead of
+        silently looping to the iteration cap. Best-effort — never raises into
+        the loop. Returns the French reason to deliver as the final response."""
+        reason = (
+            f"Boucle détectée : le worker n'a pas appelé d'outil métier après "
+            f"{streak} tours (narration en boucle) — tâche mise en attente."
+        )
+        try:
+            from hermes_cli import kanban_db as _kb
+            conn = _kb.connect()
+            try:
+                _kb.block_task(
+                    conn, task_id,
+                    reason=reason,
+                    expected_run_id=self._kanban_worker_run_id(task_id),
+                )
+                logger.warning(
+                    "force-blocked kanban task %s after %d non-progress turns",
+                    task_id, streak,
+                )
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception:
+            logger.warning(
+                "force kanban_block failed for %s", task_id, exc_info=True
+            )
+        return reason
+
     def _extract_reasoning(self, assistant_message) -> Optional[str]:
         """Forwarder — see ``agent.agent_runtime_helpers.extract_reasoning``."""
         from agent.agent_runtime_helpers import extract_reasoning
@@ -1837,6 +1906,24 @@ class AIAgent:
                         content = _ov_content
                     if _ov_timestamp is not None:
                         _row_timestamp = _ov_timestamp
+                # //// Neoffice — branding filter on the persisted transcript (recovered from
+                # osiris-poc). The apply_branding_filter_state runtime patch detects the marker
+                # line below and skips, so this commit + that patch never double-apply. //// END Neoffice ////
+                # Branding (persist): clean an internal-mechanism leak from a persisted
+                # ASSISTANT message so the saved transcript matches what the user receives
+                # (the delivery filter does the same). LOCAL `content` only — the in-memory
+                # msg (agent context) and user/tool messages are left intact. Conservative.
+                if role == "assistant" and isinstance(content, str) and content:
+                    import re as _re
+                    content = _re.sub(
+                        r"\b(le|la|notre|un|une|du|des|aux?)\s+(sp[ée]cialistes?|services?|collègues?|experts?)\b"
+                        r"[\s`'\"*_:.\-]*(?:de\s+(?:la\s+)?)?[\s`'\"*_:.\-]*"
+                        r"(compta\w*|ventes?|support|rh|ressources?\s+humaines?|commercial\w*)\b[`'\"*]*",
+                        "l'équipe", content, flags=_re.I)
+                    content = _re.sub(r"\bsp[ée]cialistes?\b", "équipe", content, flags=_re.I)
+                    content = _re.sub(r"\bt[âa]ches?\s+kanban\b", "ta tâche", content, flags=_re.I)
+                    content = _re.sub(r"`?\b(kanban|mem0|hermes|olares|mcp|worker|board)\w*\b`?", "", content, flags=_re.I)
+                    content = _re.sub(r"[ \t]{2,}", " ", content).strip()
                 # Persist multimodal tool results as their text summary only —
                 # base64 images would bloat the session DB and aren't useful
                 # for cross-session replay.
