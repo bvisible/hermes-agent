@@ -241,6 +241,18 @@ class GatewayKanbanWatchersMixin:
                                 if not events:
                                     continue
                                 task = _kb.get_task(conn, sub["task_id"])
+                                # //// Neoffice — fetch the worker's FULL handoff HERE, while
+                                # conn is open: the completed-event payload carries only the
+                                # FIRST LINE (kanban_db caps it for the dashboard), so a
+                                # multi-line answer (e.g. a dunning list) would otherwise
+                                # deliver as just its header. The delivery loop below runs
+                                # AFTER conn.close(), so we carry the full summary in the
+                                # delivery dict. grep "//// Neoffice".
+                                try:
+                                    _full_summary = _kb.latest_summary(conn, sub["task_id"])
+                                except Exception:
+                                    _full_summary = None
+                                # //// END Neoffice ////
                                 logger.debug(
                                     "kanban notifier: claimed %d event(s) for %s on board %s cursor %s→%s",
                                     len(events), sub["task_id"], slug, old_cursor, cursor,
@@ -252,6 +264,7 @@ class GatewayKanbanWatchersMixin:
                                     "events": events,
                                     "task": task,
                                     "board": slug,
+                                    "full_summary": _full_summary,  # //// Neoffice ////
                                 })
                         finally:
                             conn.close()
@@ -293,60 +306,71 @@ class GatewayKanbanWatchersMixin:
                         # worker that did the work. Makes fleets (where one
                         # chat subscribes to many tasks) legible at a glance.
                         who = (task.assignee if task and task.assignee else None)
-                        tag = f"@{who} " if who else ""
+                        # //// NORA CORE PATCH (divergence vs upstream) — branded FR terminal-
+                        # //// event delivery. The user only ever sees "Nora" + the responsible
+                        # //// team; NEVER the kanban task id, "@pole", "gave up", "protocol
+                        # //// violation" or any raw worker/spawn error (that raw text was the
+                        # //// desk leak on a failed task). grep "NORA CORE PATCH".
+                        dom = {"ventes": "Ventes", "compta": "Comptabilité",
+                               "support": "Support", "rh": "RH"}.get(who or "", "Le service")
                         if kind == "completed":
-                            # Prefer the run's summary (the worker's
-                            # intentional human-facing handoff, carried
-                            # in the event payload), then fall back to
-                            # task.result for legacy rows written before
-                            # runs shipped.
-                            handoff = ""
-                            payload_summary = None
-                            if ev.payload and ev.payload.get("summary"):
-                                payload_summary = str(ev.payload["summary"])
-                            if payload_summary:
-                                lines = payload_summary.strip().splitlines()
-                                h = lines[0][:200] if lines else payload_summary[:200]
-                                handoff = f"\n{h}"
-                            elif task and task.result:
-                                lines = task.result.strip().splitlines()
-                                r = lines[0][:160] if lines else task.result[:160]
-                                handoff = f"\n{r}"
-                            msg = (
-                                f"✔ {tag}Kanban {sub['task_id']} done"
-                                f" — {title}{handoff}"
-                            )
+                            # //// Neoffice — deliver the worker's FULL handoff, not the event's
+                            # first-line preview. The completed-event payload "summary" is the
+                            # first line only (kanban_db caps it for the dashboard); the full
+                            # handoff lives on task_runs.summary and was carried here as
+                            # `full_summary` (fetched in _collect while conn was open). For a
+                            # multi-line answer — e.g. a dunning list — this is what makes the
+                            # whole list reach WhatsApp/desk, not just the header (reported
+                            # 2026-06-19). Fall back to task.result then the event preview; cap
+                            # at a messaging-safe length (WhatsApp ~4096). grep "//// Neoffice".
+                            full_handoff = d.get("full_summary")
+                            if not full_handoff and task and task.result:
+                                full_handoff = task.result
+                            if not full_handoff and ev.payload and ev.payload.get("summary"):
+                                full_handoff = str(ev.payload["summary"])
+                            handoff = f"\n{full_handoff.strip()[:3500]}" if full_handoff else ""
+                            msg = f"✅ {dom} — {title}{handoff}"
                         elif kind == "blocked":
                             reason = ""
                             if ev.payload and ev.payload.get("reason"):
-                                reason = f": {str(ev.payload['reason'])[:160]}"
-                            msg = f"⏸ {tag}Kanban {sub['task_id']} blocked{reason}"
+                                reason = f" : {str(ev.payload['reason']).strip()[:600]}"
+                            msg = f"✋ {dom}{reason}"
                         elif kind == "gave_up":
-                            err = ""
-                            if ev.payload and ev.payload.get("error"):
-                                err = f"\n{str(ev.payload['error'])[:200]}"
+                            # //// Neoffice — the gave_up event is an INTERNAL recovery signal
+                            # the spawn-finalize emits ON TOP OF the worker's real terminal
+                            # outcome (a worker that blocked with a reason or completed with a
+                            # result still trips it). Surfacing a generic "aboutir" double-posted
+                            # on the desk and could be picked over the real answer. Skip it when
+                            # the task actually produced an outcome OR is being retried OR it's a
+                            # mere protocol violation; only surface a give-up when there is
+                            # genuinely none. grep "//// Neoffice".
+                            _gu_res = (getattr(task, "result", "") or "").strip() if task else ""
+                            _gu_st = (getattr(task, "status", "") or "") if task else ""
+                            _gu_err = str((ev.payload or {}).get("error", "")).lower() if ev.payload else ""
+                            if _gu_res or _gu_st != "gave_up" or "protocol violation" in _gu_err:
+                                continue
                             msg = (
-                                f"✖ {tag}Kanban {sub['task_id']} gave up "
-                                f"after repeated spawn failures{err}"
+                                f"✋ {dom} — je n'ai pas pu aboutir sur cette demande. "
+                                f"Pouvez-vous la reformuler ?"
                             )
                         elif kind == "crashed":
-                            msg = (
-                                f"✖ {tag}Kanban {sub['task_id']} worker crashed "
-                                f"(pid gone); dispatcher will retry"
-                            )
+                            msg = f"✋ {dom} — incident technique, je réessaie."
                         elif kind == "timed_out":
-                            limit = 0
-                            if ev.payload and ev.payload.get("limit_seconds"):
-                                limit = int(ev.payload["limit_seconds"])
                             msg = (
-                                f"⏱ {tag}Kanban {sub['task_id']} timed out "
-                                f"(max_runtime={limit}s); will retry"
+                                f"⏱ {dom} — la demande a pris trop de temps, "
+                                f"je réessaie."
                             )
                         else:
                             continue
+                        # //// END NORA CORE PATCH ////
                         metadata: dict[str, Any] = {}
                         if sub.get("thread_id"):
                             metadata["thread_id"] = sub["thread_id"]
+                        # //// NORA CORE PATCH — carry the desk conversation_id so the async
+                        # //// worker reply reaches the right desk chat (see webhook.send). ////
+                        if sub.get("conversation_id"):
+                            metadata["conversation_id"] = sub["conversation_id"]
+                        # //// END NORA CORE PATCH ////
                         sub_key = (
                             sub["task_id"], sub["platform"],
                             sub["chat_id"], sub.get("thread_id") or "",

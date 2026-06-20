@@ -1743,6 +1743,10 @@ def _migrate_add_optional_columns(conn: sqlite3.Connection) -> None:
             _add_column_if_missing(
                 conn, "kanban_notify_subs", "notifier_profile", "notifier_profile TEXT"
             )
+        if "conversation_id" not in notify_cols:
+            _add_column_if_missing(
+                conn, "kanban_notify_subs", "conversation_id", "conversation_id TEXT"
+            )
 
     # One-shot backfill: any task that is 'running' before runs existed
     # had its claim_lock / claim_expires / worker_pid on the task row.
@@ -6825,7 +6829,15 @@ def _default_spawn(
 
     profile_arg = normalize_profile_name(task.assignee)
 
+    # Include the task title + body in the spawn prompt so a self-contained worker can
+    # act WITHOUT a kanban_show round-trip — that first read is the #1 avoidable latency
+    # cost (each worker LLM turn is ~2.5s). kanban_show stays available (KANBAN_GUIDANCE)
+    # for retries / parent handoffs / comment threads; this only removes the mandatory
+    # first read for tasks that already carry everything in their title+body.
     prompt = f"work kanban task {task.id}"
+    _ctx = ((task.title or "").strip() + "\n\n" + (task.body or "").strip()).strip()
+    if _ctx:
+        prompt += "\n\n" + _ctx[:6000]
     env = dict(os.environ)
 
     # Inject HERMES_HOME so the worker reads the profile-scoped config.yaml
@@ -7359,6 +7371,7 @@ def add_notify_sub(
     thread_id: Optional[str] = None,
     user_id: Optional[str] = None,
     notifier_profile: Optional[str] = None,
+    conversation_id: Optional[str] = None,
 ) -> None:
     """Register a gateway source that wants terminal-state notifications
     for ``task_id``. Idempotent on (task, platform, chat, thread)."""
@@ -7367,10 +7380,10 @@ def add_notify_sub(
         conn.execute(
             """
             INSERT OR IGNORE INTO kanban_notify_subs
-                (task_id, platform, chat_id, thread_id, user_id, notifier_profile, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (task_id, platform, chat_id, thread_id, user_id, notifier_profile, created_at, conversation_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (task_id, platform, chat_id, thread_id or "", user_id, notifier_profile, now),
+            (task_id, platform, chat_id, thread_id or "", user_id, notifier_profile, now, conversation_id),
         )
         if notifier_profile:
             # Self-heal legacy rows that predate notifier ownership by

@@ -11212,6 +11212,23 @@ def _command_has_dedicated_mcp_startup(args) -> bool:
 def _should_background_mcp_startup(args) -> bool:
     if _is_tui_chat_launch(args):
         return False
+    # //// NORA CORE PATCH (divergence vs upstream) — kanban worker MCP cold-start ////
+    # Upstream 0c6e133c0 backgrounds MCP discovery for `chat` (perf: don't block
+    # interactive startup). But a kanban worker is a SHORT-LIVED, dispatcher-spawned
+    # `chat -q` one-shot (HERMES_KANBAN_TASK set by kanban_db._default_spawn): it
+    # reaches its first tool snapshot — and frequently exits — BEFORE the background
+    # discovery thread connects its per-pole MCP server (Frappe REST auth, 1.5-20s),
+    # so it boots with ONLY kanban_* tools and self-blocks ("je n'ai pas accès" /
+    # empty completion; this was the staging-soak bug: kanban_show -> kanban_complete
+    # empty, never revenue_summary). Force the SYNCHRONOUS/eager discovery path
+    # (the inline discover_mcp_tools() below in _prepare_agent_startup blocks until the
+    # server connects) for the worker — the exact path that worked pre-0c6e133c0
+    # (osiris-poc, gate det/20). Interactive/REPL chat keeps the fast non-blocking
+    # default. Upstream has NO fix for this (verified: 0c6e133c0 is the only commit
+    # touching this fn). grep "NORA CORE PATCH" before any upstream rebase.
+    if os.environ.get("HERMES_KANBAN_TASK"):
+        return False
+    # //// END NORA CORE PATCH ////
     return args.command in {None, "chat", "rl"}
 
 
