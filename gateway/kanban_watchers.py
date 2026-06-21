@@ -266,6 +266,20 @@ class GatewayKanbanWatchersMixin:
                                     "board": slug,
                                     "full_summary": _full_summary,  # //// Neoffice ////
                                 })
+                        except Exception as _board_exc:
+                            # //// Neoffice — per-board isolation: an empty/corrupt board DB
+                            # (e.g. a leftover test board with 0 tables → "no such table:
+                            # kanban_notify_subs") must NOT crash the whole notifier tick and
+                            # wedge terminal-event delivery for every OTHER board, incl. the
+                            # prod `default`. The v2026.6.19 forward-port carried the full-handoff
+                            # fetch but dropped the per-board except — upstream re-nested _collect,
+                            # so the old run.py patch anchor no longer matched. Skip just this
+                            # board; the for-loop continues to the next. grep "//// Neoffice".
+                            logger.warning(
+                                "kanban notifier: board %s skipped this tick: %s",
+                                slug, _board_exc,
+                            )
+                            # //// END Neoffice ////
                         finally:
                             conn.close()
                     return deliveries
