@@ -522,6 +522,18 @@ class GatewayKanbanWatchersMixin:
                                         "kanban notifier: subscription for %s on board %s failed: %s",
                                         sub.get("task_id"), slug, sub_exc,
                                     )
+                        # //// Neoffice — per-board isolation. Upstream isolates each
+                        # SUBSCRIPTION (above), but `list_notify_subs` runs BEFORE that loop:
+                        # an empty/corrupt board DB (a leftover test board with 0 tables →
+                        # "no such table: kanban_notify_subs") raises here, escapes the bare
+                        # `finally`, and wedges terminal-event delivery for every OTHER board,
+                        # including the prod `default`. Seen in production. grep "//// Neoffice".
+                        except Exception as _board_exc:
+                            logger.warning(
+                                "kanban notifier: board %s failed, skipping it this tick: %s",
+                                slug, _board_exc,
+                            )
+                        # //// END Neoffice ////
                         finally:
                             conn.close()
                     return deliveries
