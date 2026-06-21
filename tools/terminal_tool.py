@@ -1253,6 +1253,28 @@ def _is_unusable_container_cwd(cwd: str) -> bool:
     return False
 
 
+def _tenant_workspace_cwd():
+    """Return the per-tenant workspace under the context-scoped Hermes home.
+
+    TERMINAL_CWD is propagated from the WebUI host through a process-global env
+    var that is set then restored before the agent thread snapshots it, so under
+    concurrency it can carry another tenant's — or the shared global ~/workspace
+    — path. ``get_hermes_home()`` is ContextVar-backed and never bleeds across
+    concurrent runs, so for the local backend we anchor the working directory on
+    it. Returns ``None`` when no Hermes-home workspace exists, so vanilla
+    single-tenant installs keep their os.getcwd() behavior.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+
+        ws = get_hermes_home() / "workspace"
+        if ws.is_dir():
+            return str(ws)
+    except Exception:
+        return None
+    return None
+
+
 def _get_env_config() -> Dict[str, Any]:
     """Get terminal environment configuration from environment variables."""
     # Default image with Python and Node.js for maximum compatibility
@@ -1291,7 +1313,10 @@ def _get_env_config() -> Dict[str, Any]:
     # remote home, and everything else starts in the backend's default
     # root-like cwd.
     if env_type == "local":
-        default_cwd = _safe_getcwd()
+        # NeoCompany: anchor on the tenant's own workspace (context-scoped Hermes
+        # home) rather than the shared os.getcwd(), so a multi-tenant agent never
+        # defaults into another company's / the global ~/workspace.
+        default_cwd = _tenant_workspace_cwd() or _safe_getcwd()
     elif env_type == "ssh":
         default_cwd = "~"
     else:
@@ -1304,6 +1329,22 @@ def _get_env_config() -> Dict[str, Any]:
     cwd = os.getenv("TERMINAL_CWD", default_cwd)
     if cwd and not _is_ssh_remote_tilde_cwd(env_type, cwd):
         cwd = os.path.expanduser(cwd)
+    # NeoCompany: for the local backend, if TERMINAL_CWD arrived stale/global
+    # (outside the context-scoped Hermes home), snap back to the tenant
+    # workspace. Logical (non-realpath) comparison so the per-user workspace
+    # symlink → company workspace still counts as inside the home.
+    if env_type == "local":
+        tenant_ws = _tenant_workspace_cwd()
+        if tenant_ws:
+            try:
+                from hermes_constants import get_hermes_home
+
+                home = os.path.abspath(str(get_hermes_home()))
+                here = os.path.abspath(cwd) if cwd else ""
+                if not here or not (here == home or here.startswith(home + os.sep)):
+                    cwd = tenant_ws
+            except Exception:
+                cwd = tenant_ws
     host_cwd = None
     if env_type == "docker" and mount_docker_cwd:
         docker_cwd_source = os.getenv("TERMINAL_CWD") or _safe_getcwd()
