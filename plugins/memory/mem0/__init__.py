@@ -448,7 +448,16 @@ class Mem0MemoryProvider(MemoryProvider):
                     {"role": "user", "content": user_content},
                     {"role": "assistant", "content": assistant_content},
                 ]
-                client.add(messages, **self._write_filters())
+                # //// Neoffice — per-turn capture stores the RAW turn (infer=False).
+                # The mem0 extraction LLM is unconfigured on the fleet, so infer=True
+                # failed EVERY turn → the breaker opened → NO real-time capture (desk/
+                # console "forgot" within the same day). Storing raw (embeddings only,
+                # NO chat LLM) makes per-turn capture RELIABLE and immediately recallable,
+                # and puts ZERO load on the chat GPU the workers share. The end-of-day
+                # consolidation (consolidate_pending → memory_retain) still distills the
+                # high-signal facts. grep "//// Neoffice".
+                client.add(messages, infer=False, **self._write_filters())
+                # //// END Neoffice ////
                 self._record_success()
             except Exception as e:
                 self._record_failure()
