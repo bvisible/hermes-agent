@@ -426,47 +426,6 @@ def _route_recurrent(
     }
 
 
-# //// Neoffice — DETERMINISTIC FAST-PATH engine call. Ask the nora fast_answer engine
-# (ONE structured-intent LLM call + a Frappe query in CODE) over the SAME desk callback
-# the ack uses (X-Hermes-Token), exactly like _route_recurrent. Returns the answer text
-# on a confident hit, else None → the caller routes to a worker (zero regression).
-# grep "//// Neoffice".
-def _fast_answer(
-    message: str, chat_user: Optional[str], deliver_extra: Optional[dict]
-) -> Optional[str]:
-    extra = deliver_extra or {}
-    cb = (extra.get("callback_url") or "").strip()
-    token = (extra.get("callback_token") or "").strip()
-    user = (chat_user or "").strip()
-    _DELIVER = "nora.api.v2.hermes_callback.deliver"
-    _FAST = "nora.api.fast_answer.answer_gateway"
-    if not (cb and token and user) or _DELIVER not in cb:
-        return None
-    import json as _json
-    import urllib.request
-
-    url = cb.replace(_DELIVER, _FAST)
-    body = _json.dumps({"user": user, "message": message}).encode()
-    req = urllib.request.Request(
-        url, data=body, method="POST",
-        headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            data = _json.loads(resp.read().decode() or "{}")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("nora_chat_router: fast_answer POST failed → worker: %s", exc)
-        return None
-    # Frappe wraps a whitelisted method's return value in {"message": ...} — unwrap it.
-    if isinstance(data, dict) and isinstance(data.get("message"), dict):
-        data = data["message"]
-    if isinstance(data, dict) and data.get("answered") and (data.get("text") or "").strip():
-        logger.info("nora_chat_router: FAST-ANSWER hit (%d chars)", len(data["text"]))
-        return data["text"].strip()
-    return None
-# //// END Neoffice ////
-
-
 def route_chat_message(
     *,
     message: str,
@@ -564,28 +523,6 @@ def route_chat_message(
         "nora_chat_router cid-unify: session=%s param_cid=%s deliver_extra_cid=%s → unified=%s",
         session_chat_id, conversation_id, _de_cid or None, _unified_cid,
     )
-
-    # //// Neoffice — DETERMINISTIC FAST-PATH for simple data reads. Before spawning a
-    # worker (Gemma 12b fumbles tool filters → loops 13-25× → ~25s + an apology), try the
-    # nora fast_answer engine: ONE structured-intent LLM call + a Frappe query in CODE
-    # (~0.5s, correct). On a hit we deliver it directly — no worker, no loop. French only
-    # for now (the engine templates French); other languages fall through to the worker.
-    # Any miss/uncertainty → None → normal worker route (zero regression). grep "//// Neoffice".
-    if _norm_lang(language) == "fr":
-        _fa_text = _fast_answer(message, chat_user, deliver_extra)
-        if _fa_text:
-            _fa_delivered = _post_ack_to_callback(
-                _fa_text, {**(deliver_extra or {}), "conversation_id": _unified_cid}
-            )
-            logger.info(
-                "nora_chat_router: FAST-ANSWER chat=%s → %s delivered=%s",
-                session_chat_id, category, _fa_delivered,
-            )
-            return {
-                "routed": True, "category": category, "ack": _fa_text,
-                "task_id": None, "fast": True, "ack_delivered": _fa_delivered,
-            }
-    # //// END Neoffice ////
 
     # Create the task exactly as the kanban_create tool does (assignee + running →
     # the dispatcher spawns the specialist worker). idempotency_key (the webhook
