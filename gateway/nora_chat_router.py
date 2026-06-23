@@ -440,10 +440,6 @@ def _fast_answer(
     user = (chat_user or "").strip()
     _DELIVER = "nora.api.v2.hermes_callback.deliver"
     _FAST = "nora.api.fast_answer.answer_gateway"
-    logger.info(
-        "nora_chat_router: fast_answer PROBE cb_set=%s tok_set=%s user=%r deliver_in_cb=%s cb=%s",
-        bool(cb), bool(token), user, (_DELIVER in cb) if cb else False, (cb or "")[:90],
-    )
     if not (cb and token and user) or _DELIVER not in cb:
         return None
     import json as _json
@@ -461,7 +457,11 @@ def _fast_answer(
     except Exception as exc:  # noqa: BLE001
         logger.warning("nora_chat_router: fast_answer POST failed → worker: %s", exc)
         return None
+    # Frappe wraps a whitelisted method's return value in {"message": ...} — unwrap it.
+    if isinstance(data, dict) and isinstance(data.get("message"), dict):
+        data = data["message"]
     if isinstance(data, dict) and data.get("answered") and (data.get("text") or "").strip():
+        logger.info("nora_chat_router: FAST-ANSWER hit (%d chars)", len(data["text"]))
         return data["text"].strip()
     return None
 # //// END Neoffice ////
