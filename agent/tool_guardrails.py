@@ -70,7 +70,16 @@ class ToolCallGuardrailConfig:
     """
 
     warnings_enabled: bool = True
-    hard_stop_enabled: bool = False
+    # //// Neoffice — default ON (upstream ships False). Gemma 12b IGNORES the warn-only
+    # signal and loops on identical-arg failures (proven on Osiris: a worker calls
+    # skill_manage with no `name` → "Skill name is required" → retries the IDENTICAL call
+    # 13× → ~30s of dead time, the <10s→30s regression). config.yaml omits the
+    # tool_loop_guardrails section, so from_mapping() falls back to THIS default — flipping
+    # it here enables loop-blocking (block identical-arg failure @5, halt same-tool @8,
+    # block no-progress @5) for the gateway AND the kanban workers, fleet-wide, no per-instance
+    # config needed. Thresholds (below) unchanged — high enough never to cut a legit retry.
+    hard_stop_enabled: bool = True
+    # //// END Neoffice ////
     exact_failure_warn_after: int = 2
     exact_failure_block_after: int = 5
     same_tool_failure_warn_after: int = 3
