@@ -712,6 +712,43 @@ class WebhookAdapter(BasePlatformAdapter):
         return web.json_response(
             {"status": "stored", "user": user, "stored": stored}, status=200
         )
+
+    # //// Neoffice — read a user's mem0 (profile or search) for an external caller (the
+    # real-time voice console: it talks to the LLM directly, so it never triggers the gateway's
+    # in-agent mem0 read). Mirrors _handle_memory_retain — same route HMAC (already validated in
+    # _handle_webhook), a throwaway provider re-scoped to this user, mem0 read off the aiohttp
+    # loop (FAISS + embeddings block). Returns the SAME merged per-user+company view the chat
+    # agent sees, so the voice console can know the user from the first word.
+    async def _handle_memory_read(self, payload: dict) -> "web.Response":
+        user = str(payload.get("user") or "").strip()
+        if not user:
+            return web.json_response({"error": "memory_read requires 'user'"}, status=400)
+        query = str(payload.get("query") or "").strip()
+        top_k = min(int(payload.get("top_k") or 10), 50)
+
+        def _read() -> dict:
+            from plugins.memory.mem0 import Mem0MemoryProvider
+
+            prov = Mem0MemoryProvider()
+            prov.initialize("memory_read", user_id=user)
+            raw = (
+                prov.handle_tool_call("mem0_search", {"query": query, "top_k": top_k})
+                if query
+                else prov.handle_tool_call("mem0_profile", {})
+            )
+            try:
+                return json.loads(raw)
+            except (ValueError, TypeError):
+                return {"result": str(raw)}
+
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, _read)
+        except Exception as e:  # noqa: BLE001 — surface as 502, never crash the loop
+            logger.exception("[webhook] memory_read failed user=%s", user)
+            return web.json_response({"status": "error", "error": str(e)}, status=502)
+        return web.json_response(
+            {"status": "ok", "user": user, "memory": result}, status=200
+        )
     # //// END Neoffice ////
 
     @staticmethod
@@ -867,6 +904,8 @@ class WebhookAdapter(BasePlatformAdapter):
         # accidentally drop it). grep "//// Neoffice".
         if event_type == "memory_retain":
             return await self._handle_memory_retain(payload)
+        if event_type == "memory_read":
+            return await self._handle_memory_read(payload)
         # //// END Neoffice ////
         allowed_events = route_config.get("events", [])
         if allowed_events and event_type not in allowed_events:
