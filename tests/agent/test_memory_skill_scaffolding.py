@@ -10,9 +10,34 @@ See: agent.skill_commands.extract_user_instruction_from_skill_message and
 MemoryManager._strip_skill_scaffolding.
 """
 
-from agent.memory_manager import MemoryManager
+from agent.memory_manager import MemoryManager, _unwrap_nora_route_prompt
 from agent.memory_provider import MemoryProvider
 from agent.skill_commands import extract_user_instruction_from_skill_message
+
+
+# Real NORA gateway route-prompt wrappers (shape pulled from Osiris
+# nora_mem0.json + the live config.yaml / webhook_subscriptions.json templates).
+# The agent receives these WRAPPED strings as the "user message"; memory must
+# store only the quoted user message, never the datetime + orchestrator/SOUL
+# scaffolding naming kanban_create / nora_schedule_task.
+_DESK_WRAPPED = (
+    "(System: reply to the user in French. Do not reply in any other language.)\n\n"
+    "Date du jour : jeudi 25 juin 2026 (heure : 09:23).\n\n"
+    "Message de chat de l'utilisateur Administrator (interface bureau / mobile / Raven) : "
+    '"Donne-moi un conseil pour bien organiser ma journée.".\n\n'
+    "Reponds en francais, en suivant strictement les regles de ton SOUL (reponse directe "
+    "pour le trivial, kanban_create pour le metier). RÉCURRENT ≠ métier ... nora_schedule_task ..."
+)
+_DESK_WRAPPED_MESSAGE = "Donne-moi un conseil pour bien organiser ma journée."
+
+_WHATSAPP_WRAPPED = (
+    "Date du jour : jeudi 25 juin 2026 (heure : 14:30).\n\n"
+    "Message WhatsApp entrant de l'utilisateur 41791234567 : "
+    "\"Quel est le chiffre d'affaires du mois ?\".\n\n"
+    "Tu es Nora, orchestratrice. Tu ne fais PAS le travail metier toi-meme :\n"
+    "tu routes via kanban_create(...)."
+)
+_WHATSAPP_WRAPPED_MESSAGE = "Quel est le chiffre d'affaires du mois ?"
 
 
 _SINGLE_SKILL_TURN = (
@@ -159,3 +184,64 @@ class TestMemoryManagerStripsScaffolding:
         mgr.sync_all("what's the weather", "Sunny.")
         mgr.flush_pending(timeout=5.0)
         assert provider.synced == ["what's the weather"]
+
+    def test_sync_all_unwraps_desk_route_prompt(self):
+        mgr, provider = _manager_with_recorder()
+        mgr.sync_all(_DESK_WRAPPED, "Voici un conseil.")
+        mgr.flush_pending(timeout=5.0)
+        assert provider.synced == [_DESK_WRAPPED_MESSAGE]
+
+    def test_sync_all_unwraps_whatsapp_route_prompt(self):
+        mgr, provider = _manager_with_recorder()
+        mgr.sync_all(_WHATSAPP_WRAPPED, "Le CA est de ...")
+        mgr.flush_pending(timeout=5.0)
+        assert provider.synced == [_WHATSAPP_WRAPPED_MESSAGE]
+
+    def test_prefetch_all_unwraps_desk_route_prompt(self):
+        mgr, provider = _manager_with_recorder()
+        mgr.prefetch_all(_DESK_WRAPPED)
+        assert provider.prefetched == [_DESK_WRAPPED_MESSAGE]
+
+
+class TestUnwrapNoraRoutePrompt:
+    """_unwrap_nora_route_prompt recovers the quoted user message and is a
+    safe no-op on anything that is not a gateway route-prompt wrapper."""
+
+    def test_desk_wrapper_extracts_clean_message(self):
+        assert _unwrap_nora_route_prompt(_DESK_WRAPPED) == _DESK_WRAPPED_MESSAGE
+
+    def test_whatsapp_wrapper_extracts_clean_message(self):
+        assert _unwrap_nora_route_prompt(_WHATSAPP_WRAPPED) == _WHATSAPP_WRAPPED_MESSAGE
+
+    def test_message_with_trailing_period_kept(self):
+        wrapped = (
+            "Date du jour : jeudi 25 juin 2026 (heure : 09:09).\n\n"
+            "Message de chat de l'utilisateur Administrator (interface bureau / mobile / Raven) : "
+            '"Salut.".\n\nReponds en francais ...'
+        )
+        assert _unwrap_nora_route_prompt(wrapped) == "Salut."
+
+    def test_embedded_double_quotes_in_message(self):
+        wrapped = (
+            "Message de chat de l'utilisateur Administrator (interface bureau / mobile / Raven) : "
+            '"Mets le titre "Rapport Q3" sur la facture".\n\nReponds en francais ...'
+        )
+        assert (
+            _unwrap_nora_route_prompt(wrapped)
+            == 'Mets le titre "Rapport Q3" sur la facture'
+        )
+
+    def test_plain_message_unchanged(self):
+        assert _unwrap_nora_route_prompt("quel est le solde du compte ?") == "quel est le solde du compte ?"
+
+    def test_probe_message_unchanged(self):
+        probe = "PROBE-UNWRAP-12345 quel est le solde"
+        assert _unwrap_nora_route_prompt(probe) == probe
+
+    def test_message_merely_mentioning_user_unchanged(self):
+        plain = "Comment ajouter un nouvel utilisateur dans le système ?"
+        assert _unwrap_nora_route_prompt(plain) == plain
+
+    def test_empty_and_none_unchanged(self):
+        assert _unwrap_nora_route_prompt("") == ""
+        assert _unwrap_nora_route_prompt(None) is None
