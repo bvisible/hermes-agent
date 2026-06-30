@@ -150,6 +150,17 @@ class GatewayKanbanWatchersMixin:
             logger.warning("kanban notifier: cannot load config (%s); disabled", exc)
             return
         kanban_cfg = cfg.get("kanban", {}) if isinstance(cfg, dict) else {}
+        # //// Neoffice — the notifier delivers the worker's terminal result to the user;
+        # its hardcoded 5s poll added up to ~5s of pure DELIVERY latency to every métier
+        # reply (a big chunk of the "20-30s" complaint). Make the poll config-driven
+        # (kanban.notifier_interval_seconds, default 1s) so results reach the voice/desk
+        # client promptly. The poll is a light SQLite read in a thread, so 1s is fine.
+        # grep //// Neoffice.
+        try:
+            interval = float(kanban_cfg.get("notifier_interval_seconds", 1.0) or 1.0)
+        except (TypeError, ValueError):
+            interval = 1.0
+        # //// END Neoffice ////
         if not kanban_cfg.get("dispatch_in_gateway", True):
             logger.info(
                 "kanban notifier: disabled via config kanban.dispatch_in_gateway=false"
