@@ -230,6 +230,25 @@ _FAST_PATH_RULES = (
     # plain "combien d'impayés ?" still hits compta below. grep "//// Neoffice".
     (re.compile(r"rappel[s]?\s+de\s+(paiement|facture)|lettre[s]?\s+de\s+relance|\brelanc\w*", re.IGNORECASE), "compta"),
     # //// END Neoffice ////
+    # //// Neoffice — SENDING/WRITING an email routes DETERMINISTICALLY to support, the ONLY
+    # pole with the email tools (send_email/confirm_send_email/modify_email_draft live in
+    # DOMAIN_WRITES["support"]). The intent "envoie/écris/rédige/transmets … un mail/e-mail/
+    # courriel" is lexically ambiguous to the LLM classifier when the email is ABOUT a business
+    # object ("envoie un email pour la FACTURE FA-…" pulls it to compta, "… pour le DEVIS …" to
+    # ventes) → it landed on a pole with NO email tool → the worker answered "je ne peux pas
+    # envoyer" (the 2026-06-30 bug). Requires BOTH a compose/send verb AND an email noun (two
+    # lookaheads) so a plain "envoie-moi le chiffre d'affaires" is NOT caught (it falls through
+    # to the compta rule below). Placed ABOVE the compta/ventes rules so the email-ABOUT-a-doc
+    # case wins; placed BELOW the dunning rule so "envoie un rappel de paiement" stays compta
+    # (a dunning, not a free email). Reading mail is also a support matter, but we only fast-path
+    # the SEND/WRITE intent here — pure reads fall through to the LLM (support per its prompt).
+    # grep "//// Neoffice".
+    (re.compile(
+        r"(?=.*\b(?:(?:e-?)?mails?|courriels?|courrier\s+[ée]lectronique)\b)"
+        r"(?=.*(?:envoi|envoy|[ée]cri[rstvez]|r[ée]dig|transmet|transmettre|adress))",
+        re.IGNORECASE,
+    ), "support"),
+    # //// END Neoffice ////
     (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
     (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
     (re.compile(r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des))", re.IGNORECASE), "rh"),
@@ -241,12 +260,38 @@ _DIRECT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# //// Neoffice — explicit "yes, send it" confirmation (used ONLY on a support follow-up,
+# see _fast_path). Matches a go-ahead — "oui", "vas-y", "envoie", "confirme", "ok envoie",
+# "c'est bon envoyez" — but NOT a refusal: a leading negation ("non", "n'envoie pas",
+# "pas maintenant") makes the whole match fail, so a "non" never triggers a send. The
+# narrow scope (only when prior pole == support) keeps a bare "oui" elsewhere from being
+# mis-treated as a send. grep "//// Neoffice".
+_CONFIRM_SEND_RE = re.compile(
+    r"^\s*(?!.*\b(?:non|pas|surtout pas|n['’]envoie|ne pas|annule|laisse tomber)\b)"
+    r".*\b(?:oui|ouais|ok(?:ay)?|d['’]accord|daccord|vas[- ]?y|allez[- ]?y|go|"
+    r"envoie[zs]?|envoy(?:er|ez)|confirme[zr]?|valide[zr]?|c['’]est bon|parfait|"
+    r"feu vert|fais[- ]?le)\b",
+    re.IGNORECASE,
+)
+
 
 def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     """Unambiguous keyword → pole/'DIRECT' without an LLM call; else None (→ LLM classify).
 
     Never overrides the conversation-context (`prior`) or the 'recurrent' decision.
     """
+    # //// Neoffice — EMAIL confirmation turn must DETERMINISTICALLY reach support.
+    # After turn 1 ("envoie un email …") routes to support, the support worker has
+    # PREPARED a draft and asked for confirmation. Turn 2 is the user's reply ("oui,
+    # envoie" / "vas-y" / "confirme"). Without this, that bare affirmative goes to the
+    # context-aware LLM classify (or the fast-answer engine) and can drift OFF support —
+    # then the confirmed send never happens (or worse, a misroute). When the previous
+    # turn routed to support AND this message is a clear go-ahead, keep support so the
+    # worker can call confirm_send_email. The SOUL still decides confirm vs re-draft;
+    # routing only guarantees the right pole sees the confirmation. grep "//// Neoffice".
+    if prior and prior.get("pole") == "support" and _CONFIRM_SEND_RE.search(msg):
+        return "support"
+    # //// END Neoffice ////
     if prior and prior.get("pole"):
         return None  # follow-up → keep the context-aware LLM path
     if _RECUR_RE.search(msg):
