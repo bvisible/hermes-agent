@@ -257,6 +257,20 @@ class GatewayKanbanWatchersMixin:
             logger.warning("kanban notifier: kanban_db not importable; notifier disabled")
             return
 
+        # //// Neoffice — the notifier delivers the worker's terminal result to the user;
+        # upstream's 5s poll adds up to ~5s of pure DELIVERY latency to every métier reply
+        # (a big chunk of the "20-30s" complaint). Make it config-driven
+        # (kanban.notifier_interval_seconds, default 1s) so results reach the voice/desk
+        # client promptly. The poll is a light SQLite read in a thread, so 1s is fine.
+        try:
+            from hermes_cli.config import load_config as _load_config
+            _kcfg = (_load_config() or {}).get("kanban", {})
+            interval = float(_kcfg.get("notifier_interval_seconds", 1.0) or 1.0)
+        except Exception:
+            interval = 1.0
+        interval = max(interval, 1.0)  # the tick sleeps in whole seconds
+        # //// END Neoffice ////
+
         # "status" covers dashboard drag-drop and `_set_status_direct()`
         # writes — surface those transitions to subscribers too.
         # ``review_requested`` wakes the origin subscriber like a block does,
