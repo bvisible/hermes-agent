@@ -307,106 +307,41 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
         counted = _github_compare_behind(head_rev, upstream_rev)
         return counted if counted is not None else UPDATE_AVAILABLE_NO_COUNT
 
-    # Installer checkouts are shallow (`git clone --depth 1`). On a shallow
-    # clone the history stops at a single commit, so a plain `git fetch` would
-    # unshallow the repo (dragging in the whole history) and
-    # `rev-list --count HEAD..origin/main` would report a huge bogus "behind"
-    # number (e.g. "12492 commits behind"). Detect shallow up front: fetch with
-    # --depth 1 to preserve the boundary and compare tip SHAs instead of
-    # counting. Full clones (developers, Docker dev images) keep the exact
-    # count path unchanged. Mirrors the desktop fix in apps/desktop/electron/main.cjs.
-    shallow = _git_stdout(["rev-parse", "--is-shallow-repository"], cwd=repo_dir)
-    is_shallow = shallow == "true"
+    # //// Neoffice — read the remote tip with `ls-remote` instead of `git fetch`.
+    # A fetch downloads pack objects; short-lived CLI runs (chat warm-up,
+    # briefings) exit or hit the 10s timeout mid-transfer, and every kill
+    # leaves a ~100MB .git/objects/pack/tmp_pack_* orphan. At ~4 checks/day
+    # this silently filled fleet disks to 100% (found 2026-07-03: 164 orphans
+    # = 15GB on one instance). ls-remote transfers refs only — nothing can
+    # leak, and it works identically on shallow clones (the old code fetched
+    # with --depth 1 there to avoid unshallowing; no fetch, no problem).
+    remote_out = _git_stdout(["ls-remote", "origin", "refs/heads/main"], cwd=repo_dir, timeout=10)
+    remote_rev = remote_out.split()[0] if remote_out else None
+    head_rev = _git_stdout(["rev-parse", "HEAD"], cwd=repo_dir)
 
-    try:
-        # Self-heal abandoned git lock files before fetching. A stale
-        # .git/shallow.lock from a crashed fetch makes the fetch fail, the
-        # exception below is swallowed, and stale refs get compared against
-        # HEAD — silently degrading the passive check until a human removes
-        # the lock (git never self-heals these).
-        from hermes_cli.gitlock import clear_stale_git_locks, clear_stale_tmp_packs
-
-        clear_stale_git_locks(repo_dir)
-        # The passive check is the main tmp_pack GENERATOR on flaky lines
-        # (several aborted fetches per day) — it must also be the janitor,
-        # or debris accumulates unbounded between manual updates (#93732).
-        clear_stale_tmp_packs(repo_dir)
-
-        # Scope the fetch to the one branch the behind-count compares against.
-        # An unscoped ``git fetch origin`` transfers every remote head (~1,400
-        # on this repo — measured 3.0 s vs 0.55 s scoped) and can burn the full
-        # 10 s timeout on slow links. ``cmd_update`` already scopes its fetch
-        # for the same reason. Modern git updates the ``origin/main`` tracking
-        # ref on a scoped fetch, so the ``HEAD..origin/main`` count below is
-        # unaffected; the shallow path compares against FETCH_HEAD, which a
-        # scoped fetch also updates.
-        fetch_args = ["git", "fetch", "origin", "main"]
-        if is_shallow:
-            fetch_args += ["--depth", "1"]
-        fetch_args.append("--quiet")
-        fetch_proc = subprocess.run(
-            fetch_args,
-            capture_output=True, timeout=10,
-            cwd=str(repo_dir),
-        )
-        fetch_ok = fetch_proc.returncode == 0
-    except Exception:
-        fetch_ok = False  # Offline or timeout — don't use stale refs
-
-    # When the fetch fails, the local origin/main tracking ref is stale. It
-    # cannot prove *currentness* (a 0 behind-count may just mean the stale ref
-    # hasn't caught up), but if it already shows HEAD behind, that is sound
-    # evidence an update exists — the ref was good at some point in the past.
-    # Return the positive stale count; return None (inconclusive) otherwise so
-    # the caller doesn't cache a false "up to date". (#82166, review #92578)
-    if not fetch_ok:
-        if not is_shallow:
-            try:
-                result = subprocess.run(
-                    ["git", "rev-list", "--count", "HEAD..origin/main"],
-                    capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    timeout=5,
-                    cwd=str(repo_dir),
-                )
-                if result.returncode == 0:
-                    behind = int(result.stdout.strip())
-                    if behind > 0:
-                        return behind
-            except Exception:
-                pass
-        return None
-
-    if is_shallow:
-        # No history to count across the shallow boundary. `origin/main` may not
-        # be a tracking ref in a `clone --depth 1`, so prefer FETCH_HEAD (just
-        # updated by the fetch above) and fall back to origin/main.
-        head_rev = _git_stdout(["rev-parse", "HEAD"], cwd=repo_dir)
-        target_rev = (
-            _git_stdout(["rev-parse", "FETCH_HEAD"], cwd=repo_dir)
-            or _git_stdout(["rev-parse", "origin/main"], cwd=repo_dir)
-        )
-        if not head_rev or not target_rev:
-            return None
-        if head_rev == target_rev:
+    # //// Neoffice — upstream v0.21.0 keeps the passive `git fetch` but bolts a
+    # janitor on it (clear_stale_git_locks + clear_stale_tmp_packs, #93732) and
+    # scopes it to origin/main. We stay on ls-remote: refs-only transfer means
+    # the tmp_pack debris CANNOT exist in the first place (our 2026-07-03 disk
+    # incident: 164 orphans = 15GB), no locks to heal, and identical behavior
+    # on shallow clones. Drop this block for upstream's only if the passive
+    # check ever needs actual objects locally. grep "//// Neoffice".
+    if remote_rev and head_rev:
+        if remote_rev == head_rev:
             return 0
-        # Tips differ but the shallow boundary hides the history between them.
-        # Recover the exact count from the GitHub compare API when possible
-        # (ahead_by == 0 means local-ahead ⇒ up to date); otherwise report the
-        # honest "update available, count unknown" sentinel.
-        counted = _github_compare_behind(head_rev, target_rev)
-        return counted if counted is not None else UPDATE_AVAILABLE_NO_COUNT
+        # Count precisely when the remote tip already exists locally (refs are
+        # current); otherwise we only know we're behind (shallow clones and
+        # stale refs both land here).
+        count = _git_stdout(["rev-list", "--count", f"HEAD..{remote_rev}"], cwd=repo_dir)
+        if count is not None and count.isdigit():
+            return int(count)
+        return UPDATE_AVAILABLE_NO_COUNT
 
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD..origin/main"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=5,
-            cwd=str(repo_dir),
-        )
-        if result.returncode == 0:
-            return int(result.stdout.strip())
-    except Exception:
-        pass
+    # ls-remote failed (offline?) — fall back to whatever the local refs say.
+    count = _git_stdout(["rev-list", "--count", "HEAD..origin/main"], cwd=repo_dir)
+    if count is not None and count.isdigit():
+        return int(count)
+    # //// END Neoffice ////
     return None
 
 
