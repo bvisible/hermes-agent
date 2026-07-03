@@ -202,53 +202,33 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
             return 1
         return checked
 
-    # Installer checkouts are shallow (`git clone --depth 1`). On a shallow
-    # clone the history stops at a single commit, so a plain `git fetch` would
-    # unshallow the repo (dragging in the whole history) and
-    # `rev-list --count HEAD..origin/main` would report a huge bogus "behind"
-    # number (e.g. "12492 commits behind"). Detect shallow up front: fetch with
-    # --depth 1 to preserve the boundary and compare tip SHAs instead of
-    # counting. Full clones (developers, Docker dev images) keep the exact
-    # count path unchanged. Mirrors the desktop fix in apps/desktop/electron/main.cjs.
-    shallow = _git_stdout(["rev-parse", "--is-shallow-repository"], cwd=repo_dir)
-    is_shallow = shallow == "true"
+    # //// Neoffice — read the remote tip with `ls-remote` instead of `git fetch`.
+    # A fetch downloads pack objects; short-lived CLI runs (chat warm-up,
+    # briefings) exit or hit the 10s timeout mid-transfer, and every kill
+    # leaves a ~100MB .git/objects/pack/tmp_pack_* orphan. At ~4 checks/day
+    # this silently filled fleet disks to 100% (found 2026-07-03: 164 orphans
+    # = 15GB on one instance). ls-remote transfers refs only — nothing can
+    # leak, and it works identically on shallow clones (the old code fetched
+    # with --depth 1 there to avoid unshallowing; no fetch, no problem).
+    remote_out = _git_stdout(["ls-remote", "origin", "refs/heads/main"], cwd=repo_dir, timeout=10)
+    remote_rev = remote_out.split()[0] if remote_out else None
+    head_rev = _git_stdout(["rev-parse", "HEAD"], cwd=repo_dir)
 
-    try:
-        fetch_args = ["git", "fetch", "origin"]
-        if is_shallow:
-            fetch_args += ["--depth", "1"]
-        fetch_args.append("--quiet")
-        subprocess.run(
-            fetch_args,
-            capture_output=True, timeout=10,
-            cwd=str(repo_dir),
-        )
-    except Exception:
-        pass  # Offline or timeout — use stale refs, that's fine
+    if remote_rev and head_rev:
+        if remote_rev == head_rev:
+            return 0
+        # Count precisely when the remote tip already exists locally (refs are
+        # current); otherwise we only know we're behind (shallow clones and
+        # stale refs both land here).
+        count = _git_stdout(["rev-list", "--count", f"HEAD..{remote_rev}"], cwd=repo_dir)
+        if count is not None and count.isdigit():
+            return int(count)
+        return UPDATE_AVAILABLE_NO_COUNT
 
-    if is_shallow:
-        # No history to count across the shallow boundary. `origin/main` may not
-        # be a tracking ref in a `clone --depth 1`, so prefer FETCH_HEAD (just
-        # updated by the fetch above) and fall back to origin/main.
-        head_rev = _git_stdout(["rev-parse", "HEAD"], cwd=repo_dir)
-        target_rev = (
-            _git_stdout(["rev-parse", "FETCH_HEAD"], cwd=repo_dir)
-            or _git_stdout(["rev-parse", "origin/main"], cwd=repo_dir)
-        )
-        if not head_rev or not target_rev:
-            return None
-        return 0 if head_rev == target_rev else UPDATE_AVAILABLE_NO_COUNT
-
-    try:
-        result = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD..origin/main"],
-            capture_output=True, text=True, timeout=5,
-            cwd=str(repo_dir),
-        )
-        if result.returncode == 0:
-            return int(result.stdout.strip())
-    except Exception:
-        pass
+    # ls-remote failed (offline?) — fall back to whatever the local refs say.
+    count = _git_stdout(["rev-list", "--count", "HEAD..origin/main"], cwd=repo_dir)
+    if count is not None and count.isdigit():
+        return int(count)
     return None
 
 
