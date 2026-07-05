@@ -682,6 +682,14 @@ class WebhookAdapter(BasePlatformAdapter):
             return web.json_response(
                 {"error": "memory_retain requires 'user' and 'facts' (list)"}, status=400
             )
+        # //// Neoffice — throwaway test users must never pollute the memory
+        # store: smoke tests, canaries and probes use these prefixes by
+        # convention, and their facts were showing up in the production
+        # qdrant (purged 2026-07-05). No-op with an explicit status so the
+        # test still sees a valid response shape.
+        if user.startswith(("probe-", "test-", "det-", "canary-")):
+            return web.json_response({"status": "skipped_test_user", "user": user, "stored": 0})
+        # //// END Neoffice ////
         scope = str(payload.get("scope") or "user").lower()
         texts: List[str] = []
         for f in raw_facts:
