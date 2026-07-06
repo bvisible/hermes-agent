@@ -7950,6 +7950,17 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
 
     lines: list[str] = []
     lines.append(f"# Kanban task {task.id}: {task.title}")
+    # //// Neoffice — deterministic anti-round-trip: the guidance already says
+    # "SKIP kanban_show", but the weak worker LLM ignores prompt advice
+    # intermittently and burned a full LLM turn (~3 s) re-reading its OWN task
+    # on most runs. Framing this context AS the kanban_show output removes the
+    # reason to call it — "already done" beats "please don't".
+    lines.append("")
+    lines.append(
+        "[kanban_show output — ALREADY EXECUTED for your task; everything is below. "
+        "Do NOT call kanban_show again for THIS task (only to read a DIFFERENT task)]"
+    )
+    # //// END Neoffice ////
     lines.append("")
     lines.append(f"Assignee: {task.assignee or '(unassigned)'}")
     lines.append(f"Status:   {task.status}")
