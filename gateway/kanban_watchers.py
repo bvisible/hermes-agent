@@ -24,6 +24,27 @@ from agent.i18n import t
 
 # Match the logger run.py uses (logging.getLogger(__name__) where __name__ ==
 # "gateway.run") so extracted log records keep their original logger name.
+
+# //// Neoffice — event-driven dispatch poke. The dispatcher used to discover a
+# new task only at its NEXT periodic tick (0..interval seconds of pure waiting;
+# measured 3 s on a live run — the single biggest e2e variance). The chat
+# router runs in the SAME process/loop, so it can wake the dispatcher the
+# instant it creates a task. Best-effort by design: without the event the
+# periodic tick still guarantees progress.
+KANBAN_POKE: "asyncio.Event | None" = None
+
+
+def poke_kanban_dispatcher() -> None:
+    """Wake the dispatcher loop now (same-loop callers only; best-effort)."""
+    ev = KANBAN_POKE
+    if ev is not None:
+        try:
+            ev.set()
+        except Exception:
+            pass
+# //// END Neoffice ////
+
+
 logger = logging.getLogger("gateway.run")
 
 
@@ -1398,6 +1419,10 @@ class GatewayKanbanWatchersMixin:
                 kanban_cfg.get("dispatch_interval_seconds"),
             )
             interval = 60.0
+        # //// Neoffice — register the poke event for event-driven dispatch.
+        global KANBAN_POKE
+        KANBAN_POKE = asyncio.Event()
+        # //// END Neoffice ////
         interval = max(interval, 1.0)  # sanity floor — tighter than this is a footgun
 
         # Read max_spawn config to limit concurrent kanban tasks
@@ -1885,9 +1910,22 @@ class GatewayKanbanWatchersMixin:
 
             # Sleep in 1s slices so shutdown is snappy — otherwise a stop()
             # waits up to `interval` seconds for the current sleep to finish.
+            # //// Neoffice — a poke (task created by the chat router) breaks
+            # the wait immediately: dispatch happens the instant work exists
+            # instead of at the next periodic tick.
             slept = 0.0
             while slept < interval and self._running:
-                await asyncio.sleep(min(1.0, interval - slept))
+                ev = KANBAN_POKE
+                if ev is not None:
+                    try:
+                        await asyncio.wait_for(ev.wait(), timeout=min(1.0, interval - slept))
+                        ev.clear()
+                        break  # poked → tick now
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    await asyncio.sleep(min(1.0, interval - slept))
                 slept += 1.0
+            # //// END Neoffice ////
 
         self._release_kanban_dispatcher_lock()
