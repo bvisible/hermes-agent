@@ -7695,9 +7695,23 @@ def _default_spawn(
     # for retries / parent handoffs / comment threads; this only removes the mandatory
     # first read for tasks that already carry everything in their title+body.
     prompt = f"work kanban task {task.id}"
-    _ctx = ((task.title or "").strip() + "\n\n" + (task.body or "").strip()).strip()
+    # //// Neoffice — dedupe title==body (the chat router creates tasks with the
+    # question as both) and CLOSE the door on the redundant first read: the
+    # guidance's "skip kanban_show" advice is ignored intermittently by the
+    # weak worker LLM (~3 s wasted per run); framing the prompt as the ALREADY
+    # EXECUTED read removes the reason to call it. Reading OTHER tasks
+    # (handoffs, retries) stays legitimate.
+    _title = (task.title or "").strip()
+    _body = (task.body or "").strip()
+    if _body == _title:
+        _body = ""
+    _ctx = (_title + "\n\n" + _body).strip()
     if _ctx:
-        prompt += "\n\n" + _ctx[:6000]
+        prompt += (
+            "\n\n[kanban_show — ALREADY EXECUTED for this task; the FULL task is below. "
+            "Do NOT call kanban_show for THIS task]\n\n" + _ctx[:6000]
+        )
+    # //// END Neoffice ////
     env = dict(os.environ)
 
     # Inject HERMES_HOME so the worker reads the profile-scoped config.yaml
