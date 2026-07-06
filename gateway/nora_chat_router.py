@@ -757,6 +757,16 @@ def route_chat_message(
                 notifier_profile=notifier_profile,
                 conversation_id=_unified_cid,
             )
+            # //// Neoffice — wake the dispatcher NOW: without the poke the new
+            # task waited for the next periodic tick (0..interval s of dead
+            # time; 3 s measured). Best-effort — the tick still guarantees it.
+            try:
+                from gateway.kanban_watchers import poke_kanban_dispatcher
+
+                poke_kanban_dispatcher()
+            except Exception:
+                pass
+            # //// END Neoffice ////
         finally:
             conn.close()
     except Exception as exc:  # noqa: BLE001
