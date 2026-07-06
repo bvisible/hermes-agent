@@ -557,6 +557,22 @@ def route_chat_message(
                 _consume_pending_offer(chat_phone)
     # //// END Neoffice ////
 
+    # //// Neoffice — PARALLEL classify + fast-answer. They were serial (two
+    # LLM round-trips ≈ 1.9 s before any work started, on EVERY path). They
+    # are independent — the fast-answer engine classifies its own intent —
+    # so run both at once and keep the same priority when joining:
+    # recurrent > fast-hit > pole routing > DIRECT. On greetings the
+    # fast-answer pre-gate fails in ~0 ms without an LLM call, so the extra
+    # thread costs nothing there.
+    _fa_future = None
+    if _norm_lang(language) == "fr":
+        import concurrent.futures as _cf
+
+        _fa_pool = _cf.ThreadPoolExecutor(max_workers=1)
+        _fa_future = _fa_pool.submit(_fast_answer, message, chat_user, deliver_extra)
+        _fa_pool.shutdown(wait=False)
+    # //// END Neoffice ////
+
     if _offer:
         category = _offer["pole"]  # //// Neoffice — pole fixed by the accepted offer ////
     else:
@@ -616,8 +632,12 @@ def route_chat_message(
     # (~0.5s, correct). On a hit we deliver it directly — no worker, no loop. French only
     # for now (the engine templates French); other languages fall through to the worker.
     # Any miss/uncertainty → None → normal worker route (zero regression). grep "//// Neoffice".
-    if _norm_lang(language) == "fr":
-        _fa_text = _fast_answer(message, chat_user, deliver_extra)
+    if _fa_future is not None:
+        try:
+            _fa_text = _fa_future.result(timeout=12)
+        except Exception as _fa_exc:  # noqa: BLE001 — engine crash = defer to worker
+            logger.warning("nora_chat_router: parallel fast_answer failed: %s", _fa_exc)
+            _fa_text = None
         if _fa_text:
             _fa_delivered = _post_ack_to_callback(
                 _fa_text, {**(deliver_extra or {}), "conversation_id": _unified_cid}
