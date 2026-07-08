@@ -255,7 +255,7 @@ _FAST_PATH_RULES = (
     # NOT decide it — a misroute to support lands on a pole without the tool → junk draft (observed
     # live). Placed ABOVE the generic compta rule (which matches "impayé" but not "relance"); a
     # plain "combien d'impayés ?" still hits compta below. grep "//// Neoffice".
-    (re.compile(r"rappel[s]?\s+de\s+(paiement|facture)|lettre[s]?\s+de\s+relance|\brelanc\w*", re.IGNORECASE), "compta"),
+    (re.compile(r"rappel[s]?\s+de\s+(paiement|facture)|lettre[s]?\s+de\s+relance|\brelanc\w*|\bDUNN-\w+", re.IGNORECASE), "compta"),
     # //// END Neoffice ////
     # //// Neoffice — SENDING/WRITING an email routes DETERMINISTICALLY to support, the ONLY
     # pole with the email tools (send_email/confirm_send_email/modify_email_draft live in
