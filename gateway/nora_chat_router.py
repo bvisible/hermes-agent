@@ -78,18 +78,42 @@ def _norm_lang(language: Optional[str]) -> str:
 _LAST_ROUTE: dict = {}
 _LAST_ROUTE_MAX = 1000  # bound the dict; cleared wholesale when exceeded (cheap, rare)
 
-# //// Neoffice — rolling per-conversation history of recent USER turns (the "film").
+# //// Neoffice — rolling per-conversation history of recent turns (the "film").
 # A ROUTED worker runs as a FRESH, session-less kanban task: it sees ONLY the current
 # message, so a MULTI-STEP request loses its thread (build a subscription → give the
 # client, then the product, then the plan, across turns → by the last turn the worker
 # no longer knows the client/goal from two turns earlier). Observed 2026-06-18: the
 # worker created the client, then forgot it and the goal, then mis-parsed "Parfait" as a
-# client name. We carry the recent user turns into the worker task body so it can pick up
+# client name. We carry the recent turns into the worker task body so it can pick up
 # the build and continue to completion. In-memory, gateway-process-scoped, bounded like
 # _LAST_ROUTE. (Long-term mem0 memory is per-user and unaffected — a separate mechanism;
-# this only restores the short-term conversation thread for routed workers.) grep "//// Neoffice".
+# this only restores the short-term conversation thread for routed workers.)
+#
+# The film is BILATERAL: entries are prefixed "User:" / "NORA:". NORA's own replies
+# (fast-answer hits, delivered worker results) are recorded via note_nora_reply() —
+# without them a follow-up like "ok crée un rappel" right after NORA listed the due
+# invoices reaches the worker with no way to know WHICH invoices the user means
+# (observed 2026-07-08: the reply "je ne sais pas quel rappel…"). grep "//// Neoffice".
 _CONV_HISTORY: dict = {}
-_CONV_HISTORY_TURNS = 6  # how many recent user turns to carry into the worker
+_CONV_HISTORY_TURNS = 10  # recent film entries carried to the worker (user + NORA lines)
+
+
+def note_nora_reply(conversation_id: Optional[str], text: Optional[str]) -> None:
+    """Record NORA's own delivered reply into the conversation film.
+
+    Called on the fast-answer path (below) and by the kanban notifier after a
+    worker result is delivered to the chat (gateway/kanban_watchers.py) — both
+    run in the gateway process, so they share this module's dict. Whitespace is
+    collapsed and the entry truncated: the film feeds an LLM prompt, not a log.
+    """
+    clean = " ".join((text or "").split())
+    if not (conversation_id and clean):
+        return
+    if len(_CONV_HISTORY) > _LAST_ROUTE_MAX:
+        _CONV_HISTORY.clear()
+    film = _CONV_HISTORY.setdefault(conversation_id, [])
+    film.append("NORA: " + clean[:400])
+    del film[:-_CONV_HISTORY_TURNS]
 # //// END Neoffice ////
 
 # //// Neoffice — briefing CTA → reply continuity (cross-process bridge).
@@ -174,7 +198,10 @@ _CLASSIFIER_SYSTEM = (
     "(« tous les matins / chaque jour / toutes les heures / chaque lundi / chaque semaine / "
     "régulièrement / automatiquement / planifie / programme une tâche / fais-le tous les… »), "
     "réponds 'recurrent' — PEU IMPORTE le sujet (même si ça parle d'emails, de factures ou de "
-    "PDF). Une demande PONCTUELLE (une seule fois, maintenant) n'est PAS 'recurrent'.\n\n"
+    "PDF). 'recurrent' EXIGE un marqueur EXPLICITE de répétition ou d'horaire ; une demande "
+    "PONCTUELLE (une seule fois, maintenant) n'est JAMAIS 'recurrent'. En particulier "
+    "« crée / fais / envoie un rappel » ou « une relance » SANS répétition = un rappel de "
+    "paiement ponctuel → compta, PAS 'recurrent'.\n\n"
     "Sinon, choisis le pôle métier qui doit traiter la demande :\n"
     "- compta : factures, paiements, TVA, chiffre d'affaires, impayés, rappels de paiement / "
     "relances / rappels de facture, fournisseurs, commandes d'achat, rapports financiers "
@@ -280,17 +307,29 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
 
     Never overrides the conversation-context (`prior`) or the 'recurrent' decision.
     """
-    # //// Neoffice — EMAIL confirmation turn must DETERMINISTICALLY reach support.
-    # After turn 1 ("envoie un email …") routes to support, the support worker has
-    # PREPARED a draft and asked for confirmation. Turn 2 is the user's reply ("oui,
-    # envoie" / "vas-y" / "confirme"). Without this, that bare affirmative goes to the
-    # context-aware LLM classify (or the fast-answer engine) and can drift OFF support —
-    # then the confirmed send never happens (or worse, a misroute). When the previous
-    # turn routed to support AND this message is a clear go-ahead, keep support so the
-    # worker can call confirm_send_email. The SOUL still decides confirm vs re-draft;
-    # routing only guarantees the right pole sees the confirmation. grep "//// Neoffice".
-    if prior and prior.get("pole") == "support" and _CONFIRM_SEND_RE.search(msg):
-        return "support"
+    # //// Neoffice — a GO-AHEAD turn must DETERMINISTICALLY stay on the prior pole.
+    # After turn 1 routes to a pole, that worker often PREPARES something and asks for
+    # confirmation ("je vous prépare les relances ?", "j'envoie l'email ?"). Turn 2 is
+    # the user's reply ("oui, envoie" / "vas-y" / "ok crée le rappel"). Without this,
+    # that affirmative goes to the LLM classify and can drift OFF the pole — observed
+    # 2026-06-30 (support email send never happened) and 2026-07-08 ("ok crée un rappel"
+    # after a compta invoice list was classified 'recurrent' → declined → DIRECT → "je
+    # ne sais pas quel rappel"). Originally support-only; generalized to EVERY pole.
+    # Two guards keep it safe: only SHORT messages (a confirmation is short — long
+    # messages carry new intent the LLM should read), and only when no OTHER pole's
+    # keyword rule matches (an explicit "oui mais plutôt un graphique" must still
+    # reach analyse). The SOUL still decides confirm vs re-draft; routing only
+    # guarantees the right pole sees the confirmation. grep "//// Neoffice".
+    if (
+        prior
+        and prior.get("pole") in POLES
+        and len(msg) <= 80
+        and _CONFIRM_SEND_RE.search(msg)
+        and not _RECUR_RE.search(msg)
+    ):
+        _kw_pole = next((p for rx, p in _FAST_PATH_RULES if rx.search(msg)), None)
+        if _kw_pole in (None, prior["pole"]):
+            return prior["pole"]
     # //// END Neoffice ////
     if prior and prior.get("pole"):
         return None  # follow-up → keep the context-aware LLM path
@@ -593,11 +632,12 @@ def route_chat_message(
             "pole": (category if category in POLES else None),
         }
         # //// Neoffice — accumulate the rolling conversation film (INCLUDING DIRECT turns,
-        # which carry the goal, e.g. the opening "créer un abonnement"). grep "//// Neoffice".
+        # which carry the goal, e.g. the opening "créer un abonnement"). "User:"-prefixed;
+        # NORA's delivered replies enter via note_nora_reply(). grep "//// Neoffice".
         if len(_CONV_HISTORY) > _LAST_ROUTE_MAX:
             _CONV_HISTORY.clear()
         _conv_film = _CONV_HISTORY.setdefault(conversation_id, [])
-        _conv_film.append((message or "")[:240])
+        _conv_film.append("User: " + (message or "")[:240])
         del _conv_film[:-_CONV_HISTORY_TURNS]
         # //// END Neoffice ////
     if category == "DIRECT":
@@ -607,7 +647,31 @@ def route_chat_message(
     # a scheduled task in code (deterministic, user-scoped) via the nora task_router and
     # deliver its ack. Falls back to the agent on any failure (zero regression).
     if category == "recurrent":
-        return _route_recurrent(message, chat_user, deliver_extra)
+        _rec = _route_recurrent(message, chat_user, deliver_extra)
+        # //// Neoffice — a DECLINED recurrence is a ONE-SHOT request after all. The nora
+        # task_router extracts schedules deterministically; when it finds none ("ok crée
+        # un rappel" = a dunning, not a scheduled reminder) the old fallback dropped to
+        # the DIRECT agent and LOST the conversation (observed 2026-07-08: after a
+        # fast-answer listed the due invoices, the orchestrator replied "je ne sais pas
+        # quel rappel…"). Recover IN CODE: prior pole (conversation continuity) first,
+        # else a keyword-rule pole; DIRECT only when neither applies (unchanged).
+        if _rec.get("routed"):
+            return _rec
+        _prior_pole = (prior or {}).get("pole")
+        _kw_pole = next((p for rx, p in _FAST_PATH_RULES if rx.search(message or "")), None)
+        _recovered = _prior_pole or _kw_pole
+        if not (_recovered and _recovered in POLES):
+            return _rec
+        logger.info(
+            "nora_chat_router: recurrent declined → recovered to pole %s (prior=%s kw=%s)",
+            _recovered, _prior_pole, _kw_pole,
+        )
+        category = _recovered
+        # The turn was recorded with pole=None ("recurrent" is not in POLES) — fix it so
+        # the NEXT follow-up ("par email", "oui envoie") inherits the recovered pole.
+        if conversation_id and conversation_id in _LAST_ROUTE:
+            _LAST_ROUTE[conversation_id]["pole"] = _recovered
+        # //// END Neoffice ////
 
     # ── Unify the conversation_id for the ack AND the worker result ──────────────────
     # The ack is delivered via deliver_extra["conversation_id"] (the cid the webhook
@@ -642,6 +706,10 @@ def route_chat_message(
             _fa_delivered = _post_ack_to_callback(
                 _fa_text, {**(deliver_extra or {}), "conversation_id": _unified_cid}
             )
+            # //// Neoffice — record the answer in the film: the next turn ("ok crée un
+            # rappel") must know WHAT NORA just listed. grep "//// Neoffice".
+            note_nora_reply(conversation_id, _fa_text)
+            # //// END Neoffice ////
             logger.info(
                 "nora_chat_router: FAST-ANSWER chat=%s → %s delivered=%s",
                 session_chat_id, category, _fa_delivered,
@@ -691,12 +759,15 @@ def route_chat_message(
                 _film_lines = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(_film_prev))
                 _body = (
                     "[ONGOING CONVERSATION — the user is carrying out a MULTI-STEP request. "
-                    "Previous turns (oldest to newest):\n"
+                    "Previous turns, oldest to newest (User: = the user, NORA: = what the "
+                    "assistant already answered — treat NORA lines as facts already shown "
+                    "to the user):\n"
                     f"{_film_lines}\n"
                     "Take into account what has already been asked AND created in this thread: "
                     "do NOT redo what is done (entities created in earlier turns ALREADY EXIST — "
-                    "look them up), and CONTINUE until the request is COMPLETE (not just one "
-                    "isolated step). Current message below.]"
+                    "look them up), resolve references like « ces factures / le premier » against "
+                    "the NORA lines above, and CONTINUE until the request is COMPLETE (not just "
+                    "one isolated step). Current message below.]"
                     f"\n\n{message}"
                 )
             elif prior and prior.get("pole") and prior.get("msg"):

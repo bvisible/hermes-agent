@@ -493,6 +493,18 @@ class GatewayKanbanWatchersMixin:
                                 "kanban notifier: delivered %s event for %s to %s/%s on board %s",
                                 kind, sub["task_id"], platform_str, sub["chat_id"], board_slug,
                             )
+                            # //// Neoffice — record the delivered worker result in the
+                            # conversation film (same process as the router), so the
+                            # user's NEXT turn ("par email", "oui envoie") reaches a
+                            # worker that knows what NORA just proposed/created.
+                            # Best-effort: the film is an optimization, never a blocker.
+                            if kind == "completed" and metadata.get("conversation_id"):
+                                try:
+                                    from gateway.nora_chat_router import note_nora_reply
+                                    note_nora_reply(metadata["conversation_id"], msg)
+                                except Exception:
+                                    pass
+                            # //// END Neoffice ////
                             # After delivering the text notification, surface
                             # any artifact paths the worker referenced in
                             # ``kanban_complete(summary=..., artifacts=[...])``
