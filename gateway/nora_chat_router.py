@@ -343,6 +343,30 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     return None
 
 
+# //// Neoffice — SMALL-TALK LIGHT PATH gates. A greeting must never pay the full
+# orchestrator agent (58 tool schemas of prefill = 17-30s for one sentence, measured
+# 2026-07-09). STRICT double gate: an explicit small-talk cue AND no digits/business
+# vocabulary — anything ambiguous keeps the normal agent path.
+_SMALLTALK_RE = re.compile(
+    r"\b(bonjour|salut|hello|hi|hey|coucou|bonsoir|merci|thanks|ça va|ca va|"
+    r"tu vas bien|opérationnel(le)?|es[- ]tu (là|la)|t'es (là|la)|good (morning|evening)|"
+    r"au revoir|bonne (journée|soirée|nuit)|comment vas)\b",
+    re.IGNORECASE,
+)
+_BUSINESS_RE = re.compile(
+    r"\d|\b(factur\w*|devis|client\w*|rappel\w*|relanc\w*|e-?mail\w*|command\w*|"
+    r"article\w*|abonnement\w*|paiement\w*|stock\w*|rapport\w*|dunn\w*|briefing\w*|"
+    r"fournisseur\w*|salaire\w*|employé\w*|ticket\w*|tâche\w*|tache\w*)\b",
+    re.IGNORECASE,
+)
+_SMALLTALK_SYSTEM = (
+    "You are NORA, the Neoffice business assistant. Reply to this small-talk message "
+    "briefly (one or two sentences), warm and professional, in the user's language. "
+    "Plain text only — no lists, no tool talk, no task offers unless asked."
+)
+# //// END Neoffice ////
+
+
 def classify(
     message: str,
     *,
@@ -641,6 +665,44 @@ def route_chat_message(
         del _conv_film[:-_CONV_HISTORY_TURNS]
         # //// END Neoffice ////
     if category == "DIRECT":
+        # //// Neoffice — SMALL-TALK LIGHT PATH: one lightweight LLM call (same aux
+        # client as the classifier, no agent, no tools) delivered directly. Any
+        # failure or gate miss falls through to the normal agent (zero regression).
+        if (
+            len(message or "") <= 80
+            and _SMALLTALK_RE.search(message or "")
+            and not _BUSINESS_RE.search(message or "")
+        ):
+            try:
+                _lp_resp = call_llm_fn(
+                    task="nora_smalltalk",
+                    messages=[
+                        {"role": "system", "content": _SMALLTALK_SYSTEM},
+                        {"role": "user", "content": (message or "")[:300]},
+                    ],
+                    max_tokens=120,
+                    temperature=0.4,
+                    timeout=10,
+                    main_runtime=main_runtime,
+                )
+                _lp_text = (_lp_resp.choices[0].message.content or "").strip()
+                if _lp_text:
+                    _lp_cid = (deliver_extra or {}).get("conversation_id") or (conversation_id or None)
+                    _lp_delivered = _post_ack_to_callback(
+                        _lp_text, {**(deliver_extra or {}), "conversation_id": _lp_cid}
+                    )
+                    note_nora_reply(conversation_id, _lp_text)
+                    logger.info(
+                        "nora_chat_router: SMALLTALK light path (%d chars) delivered=%s",
+                        len(_lp_text), _lp_delivered,
+                    )
+                    return {
+                        "routed": True, "category": "DIRECT", "ack": _lp_text,
+                        "task_id": None, "fast": True, "ack_delivered": _lp_delivered,
+                    }
+            except Exception as _lp_exc:  # noqa: BLE001 — degrade to the agent path
+                logger.warning("nora_chat_router: smalltalk light path failed → agent: %s", _lp_exc)
+        # //// END Neoffice ////
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
 
     # RECURRENT — a recurring "do this every X" request. Not a one-shot pole task: create
