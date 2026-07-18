@@ -746,7 +746,19 @@ def route_chat_message(
     # other → the desk shows the ack but the result is stuck on "Nora consulte…" forever.
     # Force BOTH onto the deliver_extra cid (the ack's, which provably reaches the desk).
     _de_cid = ((deliver_extra or {}).get("conversation_id") or "").strip()
-    _unified_cid = _de_cid or (conversation_id or None)
+    # //// Neoffice — an UNSUBSTITUTED template placeholder ("{conversation_id}",
+    # "{{cid}}"…) must count as ABSENT, not as a real conversation id: the
+    # 2026-06-02 incident delivered worker replies "into the void" under the
+    # literal placeholder key when a desk template variable wasn't filled.
+    # Treat any brace-wrapped value as unset so delivery falls back to the
+    # session chat. grep "//// Neoffice".
+    if _de_cid.startswith("{") and _de_cid.endswith("}"):
+        _de_cid = ""
+    _param_cid = (conversation_id or "").strip()
+    if _param_cid.startswith("{") and _param_cid.endswith("}"):
+        _param_cid = ""
+    # //// END Neoffice ////
+    _unified_cid = _de_cid or (_param_cid or None)
     logger.info(
         "nora_chat_router cid-unify: session=%s param_cid=%s deliver_extra_cid=%s → unified=%s",
         session_chat_id, conversation_id, _de_cid or None, _unified_cid,
