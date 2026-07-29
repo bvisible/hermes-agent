@@ -853,28 +853,24 @@ class Mem0MemoryProvider(MemoryProvider):
 
         return tool_error(f"Unknown tool: {tool_name}")
 
-    # //// Neoffice — bulk retain for an explicit user: the "dream" pass.
-    # NORA's nightly consolidation (22:30) extracts high-signal durable facts
-    # from the day's chat and POSTs them to the gateway webhook (event_type
-    # "memory_retain"). This is the ONE place we let mem0 reason, with
-    # infer=True: it compares each incoming fact against what is already stored
-    # and issues ADD / UPDATE / DELETE itself.
+    # //// Neoffice — bulk verbatim retain for an explicit user (end-of-day
+    # consolidation). NORA's nightly consolidation extracts high-signal durable
+    # facts from the day's chat and POSTs them to the gateway webhook
+    # (event_type "memory_retain"). We store each one VERBATIM (infer=False).
     #
-    # Why the two regimes differ, on purpose:
-    #   - per-turn capture (sync_turn) stays infer=False — it must be fast,
-    #     GPU-free and reliable; one LLM call per turn used to trip the breaker
-    #     and silently stop capture. Raw capture also keeps the prompt prefix
-    #     stable, which is what makes llama.cpp's cache hold.
-    #   - this nightly pass runs once, off-peak, and is the only moment where
-    #     spending LLM calls to ARBITRATE is worth it.
-    # Without it, contradicting facts simply pile up: measured on osiris
-    # 2026-07-29, 23 distinct "Geneva project code" values coexisted, so a user
-    # asking for "my code" could not be answered correctly. Storing verbatim
-    # made memory grow; it never made it LEARN.
-    #
-    # FALLBACK: if inference fails (Olares saturated at 22:30, breaker open),
-    # we retry the same fact with infer=False. Piling a duplicate is bad;
-    # LOSING a durable fact is worse. Memory must never silently drop input.
+    # ⚠️ DO NOT switch this to infer=True hoping it will arbitrate contradicting
+    # facts — it does NOT. Verified on mem0 OSS 2.0.10 (2026-07-29): the OSS
+    # write path is purely ADDITIVE. `Memory._add_to_vector_store` imports
+    # ADDITIVE_EXTRACTION_PROMPT and calls `_create_memory` only — it contains
+    # ZERO calls to `_update_memory` / `_delete_memory`, and never uses
+    # DEFAULT_UPDATE_MEMORY_PROMPT (that constant is dead code in OSS; the
+    # ADD/UPDATE/DELETE reasoning lives in the paid Platform backend).
+    # Measured live: pushing "code de chantier = RT111222" next to an existing
+    # "= RT999888" left BOTH stored, even in identical canonical form.
+    # infer=True therefore only costs one LLM call per fact and rewrites the
+    # text in ENGLISH (mem0's extraction prompt), which fragments a French
+    # store and degrades vector recall. Superseding contradicting facts has to
+    # be done by US, in the consolidation pass. grep "//// Neoffice".
     def retain_facts(self, facts: List[str], *, scope: str = "user") -> int:
         """Consolidate pre-extracted facts into memory, scoped to self._user_id
         (or the shared company bucket for scope="company"). Returns count stored."""
@@ -888,33 +884,18 @@ class Mem0MemoryProvider(MemoryProvider):
             text = (fact or "").strip()
             if not text:
                 continue
-            payload = [{"role": "user", "content": text}]
             try:
                 self._backend.add(
-                    payload,
+                    [{"role": "user", "content": text}],
                     user_id=write_user_id,
                     agent_id=self._agent_id,
-                    infer=True,
+                    infer=False,
                     metadata=self._write_metadata(),
                 )
                 stored += 1
             except Exception as e:
-                logger.warning(
-                    "retain_facts: consolidation (infer=True) failed, "
-                    "falling back to verbatim: %s", e
-                )
-                try:
-                    self._backend.add(
-                        payload,
-                        user_id=write_user_id,
-                        agent_id=self._agent_id,
-                        infer=False,
-                        metadata=self._write_metadata(),
-                    )
-                    stored += 1
-                except Exception as e2:
-                    self._record_failure()
-                    logger.warning("retain_facts: store failed: %s", e2)
+                self._record_failure()
+                logger.warning("retain_facts: store failed: %s", e)
         if stored:
             self._record_success()
         return stored
