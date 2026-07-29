@@ -161,17 +161,39 @@ _ACK_OPENING_RE = re.compile(
 )
 _MEMORY_FILLER_MAX_LEN = 160
 
+# A question ASKING memory back ("tu te souviens de mon code ?") states no fact —
+# it is the user querying, not informing. Storing these was measurable pollution:
+# the same question sat 4 times in a production store, and each copy is recalled
+# later as if it were knowledge. Only RECALL questions are matched; a question
+# that CARRIES information ("peux-tu noter que je préfère le vouvoiement ?") does
+# not match and is kept, and the digit rule below still protects anything with a
+# code, amount or date. grep "//// Neoffice".
+_RECALL_QUESTION_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:est-ce que\s+)?tu\s+te\s+(?:souviens|rappelles)|te\s+(?:souviens|rappelles)-tu|"
+    r"vous\s+(?:souvenez|rappelez)-vous|"
+    r"quel(?:le)?s?\s+(?:est|sont|était)|c'est\s+quoi\s+(?:mon|ma|mes|le|la)|"
+    r"peux-tu\s+me\s+(?:rappeler|redire|redonner)|"
+    r"pouvez-vous\s+me\s+(?:rappeler|redire|redonner)|"
+    r"do\s+you\s+remember|what\s+(?:is|are|was)\s+my|can\s+you\s+remind\s+me"
+    r")",
+    re.IGNORECASE,
+)
+
 
 def _is_low_value_for_memory(text: Optional[str]) -> bool:
-    """True only for short, digit-free, politeness-opening messages."""
+    """True for short digit-free politeness, and for pure recall questions."""
     if not text:
         return True
     stripped = text.strip()
     if not stripped:
         return True
-    if len(stripped) > _MEMORY_FILLER_MAX_LEN:
-        return False
+    # A digit means a code / amount / date may be stated: always worth keeping.
     if any(ch.isdigit() for ch in stripped):
+        return False
+    if stripped.endswith("?") and _RECALL_QUESTION_RE.match(stripped):
+        return True
+    if len(stripped) > _MEMORY_FILLER_MAX_LEN:
         return False
     return bool(_ACK_OPENING_RE.match(stripped))
 # //// END Neoffice ////
