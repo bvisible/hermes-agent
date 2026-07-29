@@ -757,6 +757,54 @@ class WebhookAdapter(BasePlatformAdapter):
         return web.json_response(
             {"status": "ok", "user": user, "memory": result}, status=200
         )
+
+    # //// Neoffice — memory_forget: retire superseded memories by id. This is the
+    # write half of NORA's nightly "dream" pass: mem0 OSS is purely ADDITIVE (see
+    # plugins/memory/mem0/__init__.py) so contradicting facts pile up — 23 distinct
+    # values for one code, measured on osiris. NORA's consolidation identifies which
+    # memories are superseded (vector recall for candidates + an LLM judging, in
+    # French, whether two facts state the same thing) and posts the losing ids here.
+    # The decision stays on NORA's side; this endpoint only executes it, mirroring
+    # our "the model classifies, the code acts" rule. Same HMAC channel as
+    # memory_retain / memory_read. grep "//// Neoffice".
+    async def _handle_memory_forget(self, payload: dict) -> "web.Response":
+        user = str(payload.get("user") or "").strip()
+        raw_ids = payload.get("ids")
+        ids = [str(i).strip() for i in raw_ids if str(i).strip()] if isinstance(raw_ids, list) else []
+        if not user or not ids:
+            return web.json_response(
+                {"error": "memory_forget requires 'user' and a non-empty 'ids' list"},
+                status=400,
+            )
+
+        def _forget() -> dict:
+            from plugins.memory.mem0 import Mem0MemoryProvider
+
+            prov = Mem0MemoryProvider()
+            prov.initialize("memory_forget", user_id=user)
+            removed, failed = 0, []
+            for memory_id in ids:
+                try:
+                    out = prov.handle_tool_call("mem0_delete", {"memory_id": memory_id})
+                    # handle_tool_call reports failures in-band as {"error": ...}
+                    if isinstance(out, str) and '"error"' in out:
+                        failed.append(memory_id)
+                    else:
+                        removed += 1
+                except Exception:  # noqa: BLE001 — one bad id must not abort the pass
+                    failed.append(memory_id)
+            return {"removed": removed, "failed": failed}
+
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, _forget)
+        except Exception as e:  # noqa: BLE001 — surface as 502, never crash the loop
+            logger.exception("[webhook] memory_forget failed user=%s", user)
+            return web.json_response({"status": "error", "error": str(e)}, status=502)
+        logger.info(
+            "[webhook] memory_forget user=%s removed=%s failed=%s",
+            user, result["removed"], len(result["failed"]),
+        )
+        return web.json_response({"status": "ok", "user": user, **result}, status=200)
     # //// END Neoffice ////
 
     @staticmethod
@@ -914,6 +962,8 @@ class WebhookAdapter(BasePlatformAdapter):
             return await self._handle_memory_retain(payload)
         if event_type == "memory_read":
             return await self._handle_memory_read(payload)
+        if event_type == "memory_forget":
+            return await self._handle_memory_forget(payload)
         # //// END Neoffice ////
         allowed_events = route_config.get("events", [])
         if allowed_events and event_type not in allowed_events:

@@ -757,7 +757,12 @@ class Mem0MemoryProvider(MemoryProvider):
                 results = response.get("results", [])
                 if not results:
                     return json.dumps({"result": "No memories stored yet."})
-                items = [{"id": m.get("id"), "memory": m.get("memory", "")}
+                # //// Neoffice — expose created_at: the nightly consolidation needs
+                # it to decide WHICH of two contradicting facts is the stale one
+                # (most recent wins). Omitted from the agent-facing text path, so
+                # this costs no prompt tokens in normal tool use. ////
+                items = [{"id": m.get("id"), "memory": m.get("memory", ""),
+                          "created_at": m.get("created_at")}
                          for m in results]
                 return json.dumps({
                     "results": items,
