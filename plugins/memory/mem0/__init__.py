@@ -557,7 +557,7 @@ class Mem0MemoryProvider(MemoryProvider):
 
     def _merged_search(self, backend, query: str, *, top_k: int, rerank: bool) -> list:
         """backend.search over the per-user + company buckets, deduped by id,
-        best-score first."""
+        best-score first — with a bounded recency bonus."""
         seen, out = set(), []
         for filt in self._scoped_read_buckets():
             for item in backend.search(query, filters=filt, top_k=top_k, rerank=rerank) or []:
@@ -566,8 +566,39 @@ class Mem0MemoryProvider(MemoryProvider):
                     continue
                 seen.add(key)
                 out.append(item)
-        out.sort(key=lambda r: r.get("score", 0) or 0, reverse=True)
+        out.sort(key=self._recency_ranked_score, reverse=True)
         return out[:top_k]
+
+    # //// Neoffice — when two memories state the SAME thing with different values,
+    # the newer one must win at RECALL time. The nightly consolidation retires the
+    # stale one, but between two runs both are live: a user who restates a code in
+    # the morning would still be answered with yesterday's value (measured: llm/09
+    # scores 1/3 when three codes arrive within minutes).
+    #
+    # Deliberately a SMALL, BOUNDED bonus (≤ +12%) that decays over ~30 days: it can
+    # only reorder near-ties — i.e. memories about the same subject — and can never
+    # lift an off-topic memory above a relevant one, which a hard "newest first"
+    # sort would do. Undated memories get no bonus rather than being penalised.
+    _RECENCY_MAX_BONUS = 0.12
+    _RECENCY_HALFLIFE_DAYS = 30.0
+
+    def _recency_ranked_score(self, item: dict) -> float:
+        score = float(item.get("score") or 0.0)
+        created = item.get("created_at") or item.get("updated_at")
+        if not created:
+            return score
+        try:
+            from datetime import datetime, timezone
+
+            ts = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age_days = max(0.0, (datetime.now(timezone.utc) - ts).total_seconds() / 86400.0)
+        except (ValueError, TypeError, OverflowError):
+            return score
+        freshness = 0.5 ** (age_days / self._RECENCY_HALFLIFE_DAYS)
+        return score * (1.0 + self._RECENCY_MAX_BONUS * freshness)
+    # //// END Neoffice ////
 
     def _merged_get_all(self, backend, *, page: int, page_size: int) -> dict:
         """backend.get_all over the per-user + company buckets, deduped, then
@@ -812,8 +843,12 @@ class Mem0MemoryProvider(MemoryProvider):
                 self._record_success()
                 if not results:
                     return json.dumps({"result": "No relevant memories found."})
+                # //// Neoffice — created_at surfaced so the consolidation (and any
+                # debugging of the recency bonus) can tell which of two competing
+                # memories is the newer one. ////
                 items = [{"id": r.get("id"), "memory": r.get("memory", ""),
-                          "score": r.get("score", 0)} for r in results]
+                          "score": r.get("score", 0),
+                          "created_at": r.get("created_at")} for r in results]
                 return json.dumps({"results": items, "count": len(items)})
             except Exception as e:
                 if not _is_client_error(e):
