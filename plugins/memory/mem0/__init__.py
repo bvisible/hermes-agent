@@ -853,16 +853,31 @@ class Mem0MemoryProvider(MemoryProvider):
 
         return tool_error(f"Unknown tool: {tool_name}")
 
-    # //// Neoffice — bulk verbatim retain for an explicit user (end-of-day
-    # consolidation). NORA's nightly consolidation extracts high-signal durable
-    # facts from the day's chat and POSTs them to the gateway webhook
-    # (event_type "memory_retain"). We store each one VERBATIM (infer=False —
-    # same write path as mem0_add): NORA has already extracted +
-    # confidence-filtered them, so no LLM extraction here. Scope is set by
-    # initialize(user_id=) on the provider before this call. grep "//// Neoffice".
+    # //// Neoffice — bulk retain for an explicit user: the "dream" pass.
+    # NORA's nightly consolidation (22:30) extracts high-signal durable facts
+    # from the day's chat and POSTs them to the gateway webhook (event_type
+    # "memory_retain"). This is the ONE place we let mem0 reason, with
+    # infer=True: it compares each incoming fact against what is already stored
+    # and issues ADD / UPDATE / DELETE itself.
+    #
+    # Why the two regimes differ, on purpose:
+    #   - per-turn capture (sync_turn) stays infer=False — it must be fast,
+    #     GPU-free and reliable; one LLM call per turn used to trip the breaker
+    #     and silently stop capture. Raw capture also keeps the prompt prefix
+    #     stable, which is what makes llama.cpp's cache hold.
+    #   - this nightly pass runs once, off-peak, and is the only moment where
+    #     spending LLM calls to ARBITRATE is worth it.
+    # Without it, contradicting facts simply pile up: measured on osiris
+    # 2026-07-29, 23 distinct "Geneva project code" values coexisted, so a user
+    # asking for "my code" could not be answered correctly. Storing verbatim
+    # made memory grow; it never made it LEARN.
+    #
+    # FALLBACK: if inference fails (Olares saturated at 22:30, breaker open),
+    # we retry the same fact with infer=False. Piling a duplicate is bad;
+    # LOSING a durable fact is worse. Memory must never silently drop input.
     def retain_facts(self, facts: List[str], *, scope: str = "user") -> int:
-        """Store pre-extracted facts verbatim, scoped to self._user_id (or the
-        shared company bucket for scope="company"). Returns count stored."""
+        """Consolidate pre-extracted facts into memory, scoped to self._user_id
+        (or the shared company bucket for scope="company"). Returns count stored."""
         if self._backend is None or self._is_breaker_open():
             return 0
         write_user_id = (
@@ -873,18 +888,33 @@ class Mem0MemoryProvider(MemoryProvider):
             text = (fact or "").strip()
             if not text:
                 continue
+            payload = [{"role": "user", "content": text}]
             try:
                 self._backend.add(
-                    [{"role": "user", "content": text}],
+                    payload,
                     user_id=write_user_id,
                     agent_id=self._agent_id,
-                    infer=False,
+                    infer=True,
                     metadata=self._write_metadata(),
                 )
                 stored += 1
             except Exception as e:
-                self._record_failure()
-                logger.warning("retain_facts: store failed: %s", e)
+                logger.warning(
+                    "retain_facts: consolidation (infer=True) failed, "
+                    "falling back to verbatim: %s", e
+                )
+                try:
+                    self._backend.add(
+                        payload,
+                        user_id=write_user_id,
+                        agent_id=self._agent_id,
+                        infer=False,
+                        metadata=self._write_metadata(),
+                    )
+                    stored += 1
+                except Exception as e2:
+                    self._record_failure()
+                    logger.warning("retain_facts: store failed: %s", e2)
         if stored:
             self._record_success()
         return stored
