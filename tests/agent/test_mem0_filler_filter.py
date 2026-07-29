@@ -79,3 +79,35 @@ def test_unknown_shapes_default_to_remembering():
     """Anything the pattern does not recognise must be kept (default = remember)."""
     assert is_low_value("Le chantier démarre lundi prochain sans faute.") is False
     assert is_low_value("Rappelle-moi de relancer le fournisseur.") is False
+
+
+# Recall questions state nothing — the user is querying, not informing. Four
+# copies of the same question were found in a production store.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Tu te souviens du code de mon projet Genève que je t'ai donné tout à l'heure ?",
+        "Te rappelles-tu de mon adresse ?",
+        "Quel est mon code de chantier ?",
+        "C'est quoi mon code déjà ?",
+        "Peux-tu me rappeler le nom de mon comptable ?",
+        "Do you remember my address?",
+        "What is my project code?",
+    ],
+)
+def test_recall_questions_are_not_memorised(text):
+    assert is_low_value(text) is True, f"recall question would be stored: {text!r}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Questions that CARRY information must survive — the user is informing.
+        "Peux-tu noter que je préfère le vouvoiement ?",
+        "Tu peux enregistrer que mon comptable est Marc Dupont ?",
+        # A recall question that still states a value keeps it (digit rule wins).
+        "Tu te souviens que mon code est RT445566 ?",
+    ],
+)
+def test_questions_carrying_information_are_kept(text):
+    assert is_low_value(text) is False, f"a fact would be lost: {text!r}"
