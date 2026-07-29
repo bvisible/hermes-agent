@@ -733,6 +733,12 @@ class WebhookAdapter(BasePlatformAdapter):
             return web.json_response({"error": "memory_read requires 'user'"}, status=400)
         query = str(payload.get("query") or "").strip()
         top_k = min(int(payload.get("top_k") or 10), 50)
+        # //// Neoffice — paging for the nightly consolidation. A profile read is
+        # capped at 100 entries and sorted newest-first, so without paging the
+        # OLDEST memories are never reachable and the dream pass could never
+        # clean them. Defaults are unchanged for every other caller. ////
+        page = max(1, int(payload.get("page") or 1))
+        page_size = min(max(1, int(payload.get("page_size") or 100)), 200)
 
         def _read() -> dict:
             from plugins.memory.mem0 import Mem0MemoryProvider
@@ -742,7 +748,9 @@ class WebhookAdapter(BasePlatformAdapter):
             raw = (
                 prov.handle_tool_call("mem0_search", {"query": query, "top_k": top_k})
                 if query
-                else prov.handle_tool_call("mem0_profile", {})
+                else prov.handle_tool_call(
+                    "mem0_profile", {"page": page, "page_size": page_size}
+                )
             )
             try:
                 return json.loads(raw)
