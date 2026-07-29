@@ -3020,7 +3020,7 @@ def delegate_task(
                     getattr(child, "tool_progress_callback", None), _writer
                 )
                 child._live_transcript_path = str(_writer.path)
-            child._neocompany_toolsets = t.get("toolsets") or toolsets  # //// NeoCompany: per-specialist resource scoping
+            child._neocompany_toolsets = t.get("toolsets") or getattr(child, "enabled_toolsets", None)  # //// NeoCompany: per-specialist resource scoping (upstream dropped the toolsets arg)
             children.append((i, t, child))
     finally:
         # Authoritative restore: reset global to parent's tool names after all children built
