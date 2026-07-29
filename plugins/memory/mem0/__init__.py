@@ -53,9 +53,10 @@ import atexit
 import json
 import logging
 import os
+import re
 import threading
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider
 from agent.secret_scope import get_secret
@@ -133,6 +134,47 @@ def _is_client_error(exc: Exception) -> bool:
         return True
     err_str = str(exc).lower()
     return "404" in err_str or "not found" in err_str or "valid uuid" in err_str
+
+
+# //// Neoffice — pure conversational filler must never become a memory.
+# Greetings and acknowledgements ("Bonjour", "C'est bien noté, j'ai enregistré
+# votre code") carry nothing to recall, yet with infer=False they were stored
+# verbatim, forever: 25% of a real store, measured on osiris 2026-07-29.
+#
+# DELIBERATELY CONSERVATIVE — memory is the product's core value, so the cost of
+# dropping a real fact is far higher than the cost of keeping one extra ack. A
+# message is discarded ONLY when all three hold:
+#   1. it is short (long text is almost always substance),
+#   2. it contains NO digit (codes, amounts, dates, references all carry digits),
+#   3. it *opens* with a known politeness/ack formula.
+# So "C'est noté, votre code est QW771234" is KEPT (rule 2), and anything the
+# pattern does not recognise is KEPT (default = remember). grep "//// Neoffice".
+_ACK_OPENING_RE = re.compile(
+    r"^\s*(?:"
+    r"c'est\s+(?:bien\s+)?not[ée]|bien\s+not[ée]|j'ai\s+(?:bien\s+)?enregistr|"
+    r"je\s+vais\s+(?:tr[èe]s\s+)?bien|avec\s+plaisir|je\s+suis\s+l[àa]\s+pour|"
+    r"comment\s+(?:puis-je|puis\s+je)|n'h[ée]sitez\s+pas|"
+    r"bonjour|bonsoir|salut|merci|d'accord|parfait|tr[èe]s\s+bien|ok\b|"
+    r"noted\b|you're\s+welcome|how\s+can\s+i\s+help|hello\b|hi\b|thanks\b|thank\s+you"
+    r")",
+    re.IGNORECASE,
+)
+_MEMORY_FILLER_MAX_LEN = 160
+
+
+def _is_low_value_for_memory(text: Optional[str]) -> bool:
+    """True only for short, digit-free, politeness-opening messages."""
+    if not text:
+        return True
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if len(stripped) > _MEMORY_FILLER_MAX_LEN:
+        return False
+    if any(ch.isdigit() for ch in stripped):
+        return False
+    return bool(_ACK_OPENING_RE.match(stripped))
+# //// END Neoffice ////
 
 
 # ---------------------------------------------------------------------------
@@ -640,8 +682,21 @@ class Mem0MemoryProvider(MemoryProvider):
                 # recallable, and puts ZERO load on the chat GPU. The end-of-day
                 # consolidation (consolidate_pending → memory_retain) still distills
                 # the high-signal durable facts. grep "//// Neoffice".
+                #
+                # Drop conversational filler BEFORE writing. infer=False means nothing
+                # judges what lands in the store, so every "C'est bien noté" and
+                # "Bonjour" became a permanent memory: measured 2026-07-29 on osiris,
+                # 25% of a real user's store was acks. That is not just clutter — the
+                # recalled block is injected into the system prompt, so a store that
+                # grows every turn makes the prompt prefix change every turn, which
+                # invalidates llama.cpp's prefix cache and forces a full ~22k-token
+                # re-prefill (7-8s) on EVERY request instead of ~0.2s. Keeping filler
+                # out is therefore both a memory-quality AND a latency fix.
+                kept = [m for m in messages if not _is_low_value_for_memory(m["content"])]
+                if not kept:
+                    return  # nothing worth remembering in this turn
                 backend.add(
-                    messages,
+                    kept,
                     user_id=self._user_id,
                     agent_id=self._agent_id,
                     infer=False,
