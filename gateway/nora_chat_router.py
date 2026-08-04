@@ -296,6 +296,20 @@ _DIRECT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# //// Neoffice — a question about what NORA CAN DO, carrying no concrete data.
+# Used ONLY to DEFER to the LLM classifier (never to decide): the domain keyword in
+# "tu sais gérer les devis ?" is the subject, not a task. Guards keep real work out:
+# a figure or an @ means data was supplied ("crée le client Jean, jean@x.ch"), and the
+# message must be a short question. grep "//// Neoffice".
+_CAPABILITY_RE = re.compile(
+    r"^\s*(?:est[-\s]ce\s+que\s+)?"
+    r"(?:tu\s+(?:peux|sais|pourrais)|peux[-\s]tu|sais[-\s]tu|pourrais[-\s]tu|"
+    r"c['’]est\s+possible|es[-\s]tu\s+capable|il\s+est\s+possible)\b"
+    r"(?![^?]*[0-9@])"          # a figure or an e-mail means real data → not a capability question
+    r"[^?]{0,90}\?\s*$",
+    re.IGNORECASE,
+)
+
 # //// Neoffice — explicit "yes, send it" confirmation (used ONLY on a support follow-up,
 # see _fast_path). Matches a go-ahead — "oui", "vas-y", "envoie", "confirme", "ok envoie",
 # "c'est bon envoyez" — but NOT a refusal: a leading negation ("non", "n'envoie pas",
@@ -344,6 +358,14 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         return None  # follow-up → keep the context-aware LLM path
     if _RECUR_RE.search(msg):
         return None  # recurring request → the LLM owns the 'recurrent' classification
+    # //// Neoffice — in a capability question ("tu sais gérer les devis ?") the domain
+    # keyword is the SUBJECT, not work to run: the keyword fast-path would send it to a
+    # pole and cost ~20s to answer a one-sentence question. Hand it to the LLM classifier
+    # instead — it carries the capacité-vs-demande rule and still routes "peux-tu me dire
+    # le montant de la dernière facture ?" to compta. We defer, we never decide here.
+    if _CAPABILITY_RE.match(msg):
+        return None
+    # //// END Neoffice ////
     for rx, pole in _FAST_PATH_RULES:
         if rx.search(msg):
             return pole
