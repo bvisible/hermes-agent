@@ -399,6 +399,17 @@ _BUSINESS_RE = re.compile(
     r"fournisseur\w*|salaire\w*|employé\w*|ticket\w*|tâche\w*|tache\w*)\b",
     re.IGNORECASE,
 )
+# //// Neoffice — answer "can you do X?" in one sentence, and say what you need to
+# actually do it. This replaces a full worker round-trip (measured 21s) whose entire
+# output was "give me the name, the e-mail and the address".
+_CAPABILITY_SYSTEM = (
+    "You are NORA, the Neoffice business assistant. The user asks whether you CAN do "
+    "something. Answer in the user's language, in one or two sentences: say yes (you "
+    "handle quotes, invoices, clients, articles, payment reminders, emails, HR and "
+    "charts), then list ONLY the information you need to actually do it. "
+    "Do not perform the action, do not invent data, do not mention tools or internals."
+)
+
 _SMALLTALK_SYSTEM = (
     "You are NORA, the Neoffice business assistant. Reply to this small-talk message "
     "briefly (one or two sentences), warm and professional, in the user's language. "
@@ -708,16 +719,24 @@ def route_chat_message(
         # //// Neoffice — SMALL-TALK LIGHT PATH: one lightweight LLM call (same aux
         # client as the classifier, no agent, no tools) delivered directly. Any
         # failure or gate miss falls through to the normal agent (zero regression).
-        if (
+        # //// Neoffice — a capability question takes this light path too. Routing it to
+        # DIRECT is not enough: the orchestrator still delegates to a pole on its own
+        # (measured on osiris — 17s to decide, then a 21s worker, to answer "give me the
+        # name and e-mail"). Answering it here costs one short LLM call. The _BUSINESS_RE
+        # gate is deliberately skipped: a capability question NAMES a business object
+        # ("créer un client") without carrying any data — that is the whole point.
+        _is_capability = bool(_CAPABILITY_RE.match(message or ""))
+        if _is_capability or (
             len(message or "") <= 80
             and _SMALLTALK_RE.search(message or "")
             and not _BUSINESS_RE.search(message or "")
         ):
             try:
                 _lp_resp = call_llm_fn(
-                    task="nora_smalltalk",
+                    task="nora_capability" if _is_capability else "nora_smalltalk",
                     messages=[
-                        {"role": "system", "content": _SMALLTALK_SYSTEM},
+                        {"role": "system",
+                         "content": _CAPABILITY_SYSTEM if _is_capability else _SMALLTALK_SYSTEM},
                         {"role": "user", "content": (message or "")[:300]},
                     ],
                     max_tokens=120,
