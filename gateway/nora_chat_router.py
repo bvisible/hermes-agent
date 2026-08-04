@@ -306,6 +306,10 @@ _CAPABILITY_RE = re.compile(
     r"(?:tu\s+(?:peux|sais|pourrais)|peux[-\s]tu|sais[-\s]tu|pourrais[-\s]tu|"
     r"c['’]est\s+possible|es[-\s]tu\s+capable|il\s+est\s+possible)\b"
     r"(?![^?]*[0-9@])"          # a figure or an e-mail means real data → not a capability question
+    # Asking for INFORMATION is not asking about a capability: "peux-tu me dire /
+    # me donner / m'afficher …" is a real business request and must reach its pole.
+    r"(?![^?]*\b(?:me\s+dire|me\s+donner|me\s+montrer|me\s+sortir|me\s+lister|"
+    r"me\s+rappeler|me\s+trouver|me\s+chercher|m['’](?:afficher|indiquer|envoyer|donner|dire))\b)"
     r"[^?]{0,90}\?\s*$",
     re.IGNORECASE,
 )
@@ -354,18 +358,23 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         if _kw_pole in (None, prior["pole"]):
             return prior["pole"]
     # //// END Neoffice ////
+    # //// Neoffice — a capability question is META, whatever the conversation context.
+    # It must be settled BEFORE the two paths below, and here is why: the follow-up rule
+    # ("prior → keep the same pole") and the keyword fast-path each hijack it. Measured
+    # end-to-end on osiris: "Est-ce que tu peux créer facilement un client ?" asked right
+    # after an invoice question inherited compta→ventes, span a worker, and answered
+    # "give me the name, email and address" after 21s — for a one-sentence question.
+    # _CAPABILITY_RE is deliberately narrow: short question, no figure, no e-mail, so a
+    # real order ("crée le client Dupont, jean@x.ch") never reaches this branch and a
+    # data request ("peux-tu me dire le montant…") is not a capability question either.
+    if _CAPABILITY_RE.match(msg) and not _RECUR_RE.search(msg):
+        logger.info("nora_chat_router: capability question → DIRECT (no pole, no worker)")
+        return "DIRECT"
+    # //// END Neoffice ////
     if prior and prior.get("pole"):
         return None  # follow-up → keep the context-aware LLM path
     if _RECUR_RE.search(msg):
         return None  # recurring request → the LLM owns the 'recurrent' classification
-    # //// Neoffice — in a capability question ("tu sais gérer les devis ?") the domain
-    # keyword is the SUBJECT, not work to run: the keyword fast-path would send it to a
-    # pole and cost ~20s to answer a one-sentence question. Hand it to the LLM classifier
-    # instead — it carries the capacité-vs-demande rule and still routes "peux-tu me dire
-    # le montant de la dernière facture ?" to compta. We defer, we never decide here.
-    if _CAPABILITY_RE.match(msg):
-        return None
-    # //// END Neoffice ////
     for rx, pole in _FAST_PATH_RULES:
         if rx.search(msg):
             return pole
