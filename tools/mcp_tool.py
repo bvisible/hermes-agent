@@ -6315,6 +6315,8 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
         # to the current profile (no cross-tenant leak) and raise a loud alert,
         # instead of the previous silent `k not in _servers` skip that reused
         # whatever was connected first.
+        # Snapshot before we mutate _server_connecting below (upstream parity).
+        connecting = set(_server_connecting)
         new_servers = {}
         stale_cached = []
         for k, v in servers.items():
@@ -6336,6 +6338,12 @@ def register_mcp_servers(servers: Dict[str, dict]) -> List[str]:
                 # the MATCHING server now so its tools come back promptly.
                 if getattr(_servers[k], "session", None) is None:
                     stale_cached.append(_servers[k])
+                continue
+            # Upstream filters for the NEW-connection path, kept in sync with the
+            # pristine dict-comprehension: never double-spawn a server already
+            # connecting (#58862), never re-register a lazily schema-cached one
+            # (#56832), and honour the post-failure connect backoff (#50394).
+            if k in connecting or k in _lazy_server_configs or _connect_cooldown_active(k):
                 continue
             new_servers[k] = v
         # //// End NeoCompany Modification

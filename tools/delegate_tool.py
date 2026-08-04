@@ -3006,25 +3006,8 @@ def delegate_task(
                 getattr(child, "tool_progress_callback", None), _writer
             )
             child._live_transcript_path = str(_writer.path)
+        child._neocompany_toolsets = t.get("toolsets") or getattr(child, "enabled_toolsets", None)  # //// NeoCompany: per-specialist resource scoping
         children.append((i, t, child))
-            # Override with correct parent tool names (before child construction mutated global)
-            child._delegate_saved_tool_names = _parent_tool_names
-            # Tee the child's progress events into its live transcript log.
-            # wrap_progress_callback preserves the inner callback contract
-            # (including the _flush attribute) and never lets writer failures
-            # reach the agent loop. When no parent display exists the inner
-            # callback is None and the wrapper still records events.
-            _writer = live_writers[i] if i < len(live_writers) else None
-            if _writer is not None:
-                child.tool_progress_callback = wrap_progress_callback(
-                    getattr(child, "tool_progress_callback", None), _writer
-                )
-                child._live_transcript_path = str(_writer.path)
-            child._neocompany_toolsets = t.get("toolsets") or getattr(child, "enabled_toolsets", None)  # //// NeoCompany: per-specialist resource scoping (upstream dropped the toolsets arg)
-            children.append((i, t, child))
-    finally:
-        # Authoritative restore: reset global to parent's tool names after all children built
-        _model_tools._last_resolved_tool_names = _parent_tool_names
 
     def _execute_and_aggregate(*, honor_parent_interrupt: bool = True) -> dict:
         """Run all built children (1 or N), join on them, aggregate results,
