@@ -24,7 +24,14 @@ def _load_filter():
     """Exec just the filter block — importing the plugin needs the mem0 SDK."""
     src = _PLUGIN.read_text(encoding="utf-8")
     start = src.index("_ACK_OPENING_RE = re.compile(")
-    end = src.index("# //// END Neoffice ////", start)
+    # End at the first TOP-LEVEL statement after the function, not at a marker.
+    # Marker-based slicing broke the moment a //// Neoffice //// block was added
+    # INSIDE the function: the slice stopped at that inner marker, the trailing
+    # returns were cut off, and the function silently returned None — every
+    # assertion then failed for a reason that had nothing to do with the filter.
+    fn = src.index("def _is_low_value_for_memory")
+    after = src.index("\n", src.index("return bool(_ACK_OPENING_RE.match(stripped))", fn))
+    end = after
     ns: dict = {"re": re, "Optional": Optional}
     exec(compile(src[start:end], str(_PLUGIN), "exec"), ns)  # noqa: S102
     return ns["_is_low_value_for_memory"]
@@ -110,4 +117,35 @@ def test_recall_questions_are_not_memorised(text):
     ],
 )
 def test_questions_carrying_information_are_kept(text):
+    assert is_low_value(text) is False, f"a fact would be lost: {text!r}"
+
+
+# //// Neoffice — bare acknowledgements and sign-offs (NORA #43).
+# Measured on the osiris store: 1424 of 1425 points were raw conversational
+# capture, and searching a supplier name returned "Oui." and "À tout à l'heure !"
+# scoring ABOVE the real facts.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Oui.", "Non", "Ouais", "Voilà", "Exact", "C'est ça", "Super", "Tout à fait",
+        "À tout à l'heure !", "Bonne journée", "Au revoir", "Bye",
+        "Comment je m'appelle ?", "Qui suis-je ?",
+    ],
+)
+def test_bare_acknowledgements_are_not_memorised(text):
+    assert is_low_value(text) is True, f"noise would be stored: {text!r}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # An acknowledgement that INTRODUCES a fact must survive whole — dropping
+        # these was the regression an opening-prefix rule caused in testing.
+        "Oui, le fournisseur Sateldranse livre le ciment",
+        "Non, c'est Romande Énergie notre fournisseur d'électricité",
+        "Exact, et il facture aussi la fibre",
+        "Voilà pourquoi on impute Sunrise en 6510",
+    ],
+)
+def test_acknowledgement_introducing_a_fact_is_kept(text):
     assert is_low_value(text) is False, f"a fact would be lost: {text!r}"
