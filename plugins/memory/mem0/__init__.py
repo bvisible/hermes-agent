@@ -155,10 +155,28 @@ _ACK_OPENING_RE = re.compile(
     r"je\s+vais\s+(?:tr[èe]s\s+)?bien|avec\s+plaisir|je\s+suis\s+l[àa]\s+pour|"
     r"comment\s+(?:puis-je|puis\s+je)|n'h[ée]sitez\s+pas|"
     r"bonjour|bonsoir|salut|merci|d'accord|parfait|tr[èe]s\s+bien|ok\b|"
-    r"noted\b|you're\s+welcome|how\s+can\s+i\s+help|hello\b|hi\b|thanks\b|thank\s+you"
+    r"noted\b|you're\s+welcome|how\s+can\s+i\s+help|hello\b|hi\b|thanks\b|thank\s+you|"
+    # //// Neoffice — sign-offs observed polluting the osiris store.
+    r"[àa]\s+(?:tout\s+[àa]\s+l'heure|bient[ôo]t|demain|plus\s+tard)|"
+    r"bonne\s+(?:journ[ée]e|soir[ée]e|nuit)|au\s+revoir|bye\b|see\s+you|good\s+(?:bye|night)"
     r")",
     re.IGNORECASE,
 )
+
+# //// Neoffice — a BARE acknowledgement, and nothing else.
+# Measured on the osiris store: 1424 of 1425 points were raw conversational
+# capture, and searching a supplier name returned "Oui." and "À tout à l'heure !"
+# scoring ABOVE the real facts. But these words must only be dropped when they
+# ARE the whole message: "Oui, c'est Romande Énergie notre fournisseur
+# d'électricité" is exactly the fact we exist to keep. Hence the anchored match
+# — an opening-prefix rule silently deleted both of those in testing.
+_BARE_ACK_RE = re.compile(
+    r"^\s*(?:oui|non|ouais|ouaip|yep|yes|no|si|voil[àa]|exact|exactement|"
+    r"tout\s+[àa]\s+fait|c'est\s+(?:[çc]a|bon|clair)|super|g[ée]nial|nickel|top)"
+    r"[\s!.…]*$",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
 _MEMORY_FILLER_MAX_LEN = 160
 
 # A question ASKING memory back ("tu te souviens de mon code ?") states no fact —
@@ -175,7 +193,11 @@ _RECALL_QUESTION_RE = re.compile(
     r"quel(?:le)?s?\s+(?:est|sont|était)|c'est\s+quoi\s+(?:mon|ma|mes|le|la)|"
     r"peux-tu\s+me\s+(?:rappeler|redire|redonner)|"
     r"pouvez-vous\s+me\s+(?:rappeler|redire|redonner)|"
-    r"do\s+you\s+remember|what\s+(?:is|are|was)\s+my|can\s+you\s+remind\s+me"
+    r"do\s+you\s+remember|what\s+(?:is|are|was)\s+my|can\s+you\s+remind\s+me|"
+    # //// Neoffice — "Comment je m'appelle ?" is the user TESTING recall, not
+    # stating a fact; storing it teaches the model its own question back.
+    r"comment\s+je\s+m'appelle|qui\s+suis[-\s]je|comment\s+(?:je\s+)?m'appelais|"
+    r"tu\s+sais\s+(?:qui|comment)\s+je|what's\s+my\s+name|who\s+am\s+i"
     r")",
     re.IGNORECASE,
 )
@@ -193,6 +215,11 @@ def _is_low_value_for_memory(text: Optional[str]) -> bool:
         return False
     if stripped.endswith("?") and _RECALL_QUESTION_RE.match(stripped):
         return True
+    # //// Neoffice — a bare "Oui." carries nothing; "Oui, c'est Romande Énergie"
+    # carries everything. Only the anchored form is dropped.
+    if _BARE_ACK_RE.match(stripped):
+        return True
+    # //// END Neoffice ////
     if len(stripped) > _MEMORY_FILLER_MAX_LEN:
         return False
     return bool(_ACK_OPENING_RE.match(stripped))
