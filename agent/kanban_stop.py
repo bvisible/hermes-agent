@@ -96,6 +96,20 @@ def build_kanban_stop_nudge(
         "1. Finish any remaining deliverable (write the required file(s) now).\n"
         "2. Call `kanban_complete(summary=..., artifacts=[...])` if the work "
         "is done, OR `kanban_block(reason=...)` if you are blocked.\n\n"
+        # //// Neoffice — the summary is what the USER reads; nothing else reaches
+        # them. Worker had just written the full answer as plain text (10 invoices
+        # with dates and amounts), got nudged, and handed kanban_complete "J'ai
+        # listé les 10 dernières factures" — the content died in its own log
+        # (2026-08-11). Upstream never says what `summary` should hold because
+        # upstream's summary is a handover note between agents; ours is the answer.
+        "IMPORTANT — `summary` is the ANSWER ITSELF, not a report about it. The "
+        "reply you just wrote is the only thing the user will ever see, and only "
+        "if you put it INSIDE `summary`. Carry it over verbatim — the figures, "
+        "the rows, the list. Writing \"I have listed X\" or \"I have created Y\" "
+        "delivers nothing: the content stays in your log and the user reads a "
+        "sentence about work they cannot see. Cap a long list around 30 rows and "
+        "state how many were left out.\n\n"
+        # //// END Neoffice ////
         "Never end a turn with only a promise of future action. Repeated "
         "protocol violations will block this task and require manual intervention.]"
     )
