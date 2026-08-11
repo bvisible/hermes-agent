@@ -591,7 +591,10 @@ def _route_recurrent(
 # on a confident hit, else None → the caller routes to a worker (zero regression).
 # grep "//// Neoffice".
 def _fast_answer(
-    message: str, chat_user: Optional[str], deliver_extra: Optional[dict]
+    message: str,
+    chat_user: Optional[str],
+    deliver_extra: Optional[dict],
+    context: str = "",
 ) -> Optional[str]:
     extra = deliver_extra or {}
     cb = (extra.get("callback_url") or "").strip()
@@ -605,7 +608,15 @@ def _fast_answer(
     import urllib.request
 
     url = cb.replace(_DELIVER, _FAST)
-    body = _json.dumps({"user": user, "message": message}).encode()
+    # //// Neoffice — carry the conversation film. Without it the engine cannot
+    # resolve a follow-up referent ("et le CA de CE client ?"): the model returns an
+    # empty filter, the fast path declines, and the question costs a 16-19 s worker
+    # for something answerable in under a second. The film sits right here in the
+    # router; not passing it was the whole gap (measured 2026-08-11).
+    payload = {"user": user, "message": message}
+    if (context or "").strip():
+        payload["context"] = context.strip()[:1500]
+    body = _json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
@@ -683,7 +694,10 @@ def route_chat_message(
         import concurrent.futures as _cf
 
         _fa_pool = _cf.ThreadPoolExecutor(max_workers=1)
-        _fa_future = _fa_pool.submit(_fast_answer, message, chat_user, deliver_extra)
+        _fa_film = "\n".join(_CONV_HISTORY.get(conversation_id) or []) if conversation_id else ""
+        _fa_future = _fa_pool.submit(
+            _fast_answer, message, chat_user, deliver_extra, _fa_film
+        )
         _fa_pool.shutdown(wait=False)
     # //// END Neoffice ////
 
