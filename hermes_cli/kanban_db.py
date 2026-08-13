@@ -10773,6 +10773,35 @@ def _default_spawn(
             "\n\n[kanban_show — ALREADY EXECUTED for this task; the FULL task is below. "
             "Do NOT call kanban_show for THIS task]\n\n" + _ctx[:6000]
         )
+    # Concrete accounting answers must start from the tenant chart, not from a
+    # plausible Käfer-family number found in doctrine. Putting this protocol in
+    # the task prompt makes it visible at the exact decision point and avoids a
+    # weak worker spending its context on repeated wiki reads after the
+    # completion gate rejects a guess.
+    if profile_arg == "compta" and _ctx:
+        import re as _re
+        import unicodedata as _unicodedata
+
+        _account_ctx = _unicodedata.normalize("NFKD", _ctx.lower())
+        _account_ctx = "".join(
+            ch for ch in _account_ctx if not _unicodedata.combining(ch)
+        )
+        if _re.search(
+            r"(?:dans quel compte|quel compte(?: exact)?|ou imputer|ou passer cette "
+            r"depense|imput(?:er|ation).{0,100}(?:facture|depense)|"
+            r"compte.{0,100}imput)",
+            _account_ctx,
+        ):
+            prompt += (
+                "\n\n[PROTOCOLE OBLIGATOIRE — IMPUTATION DANS LE PLAN REEL]\n"
+                "Premier geste: appelle "
+                "mcp__neoffice_compta__get_chart_of_accounts. Conserve dans la "
+                "requête les noms économiques distinctifs de la facture; ne les "
+                "remplace pas par un terme générique. Le wiki fournit la doctrine, "
+                "jamais la preuve qu'un numéro existe chez ce tenant. Inspecte le "
+                "numéro ET le libellé renvoyés par le plan réel avant de répondre et "
+                "avant kanban_complete. Ne relis pas le wiki pour contourner cette "
+                "étape.]")
     # //// END Neoffice ////
     env = dict(os.environ)
     # The dispatcher is detached from every conversation. Its worker must never

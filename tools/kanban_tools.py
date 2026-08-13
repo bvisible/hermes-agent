@@ -797,11 +797,13 @@ def _handle_complete(args: dict, **kw) -> str:
                 return tool_error(
                     "kanban_complete blocked: this task asks for a concrete "
                     "posting account, but get_chart_of_accounts was not called. "
+                    "Your NEXT action must be "
+                    "mcp__neoffice_compta__get_chart_of_accounts, not wiki_read. "
                     "The Swiss SME family from the wiki is not the tenant's exact "
-                    "account. Call get_chart_of_accounts once with the precise "
-                    "economic terms and root_type, inspect the returned labels, "
-                    "then retry kanban_complete with the corrected answer. The "
-                    "task is still in-flight."
+                    "account. Preserve the invoice's distinctive economic nouns in "
+                    "the query, inspect the returned numbers and labels, then retry "
+                    "kanban_complete with the corrected answer. The task is still "
+                    "in-flight."
                 )
             # //// END Neoffice ////
             rejection = _goal_mode_handoff_rejection(

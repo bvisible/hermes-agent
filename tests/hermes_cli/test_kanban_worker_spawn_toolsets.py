@@ -134,6 +134,42 @@ def test_default_spawn_model_override_survives_real_cli_parse(monkeypatch, tmp_p
     assert args.query == "work kanban task t_spawn_tools"
 
 
+# //// Neoffice — prime accounting workers with the tenant-chart protocol. ////
+def test_default_spawn_primes_live_chart_for_compta_allocation(monkeypatch, tmp_path):
+    root = tmp_path / ".hermes"
+    profile = root / "profiles" / "compta"
+    profile.mkdir(parents=True)
+    profile.joinpath("config.yaml").write_text("{}\n", encoding="utf-8")
+    monkeypatch.setenv("HERMES_HOME", str(root))
+
+    from hermes_cli import kanban_db as kb
+
+    monkeypatch.setattr(kb, "_resolve_hermes_argv", lambda: ["hermes"])
+    captured = {}
+
+    class FakeProc:
+        pid = 4245
+
+    def fake_popen(cmd, *args, **kwargs):
+        captured["cmd"] = list(cmd)
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    task = _make_task(kb, assignee="compta")
+    task.title = "Compte exact d'une facture"
+    task.body = "Où imputer la location d'un stand à une foire professionnelle ?"
+
+    kb._default_spawn(task, str(workspace))
+
+    query = captured["cmd"][captured["cmd"].index("-q") + 1]
+    assert "PROTOCOLE OBLIGATOIRE" in query
+    assert "mcp__neoffice_compta__get_chart_of_accounts" in query
+    assert "foire professionnelle" in query
+# //// END Neoffice ////
+
+
 def test_resolve_worker_cli_toolsets_uses_profile_home_not_parent_config(monkeypatch, tmp_path):
     root = tmp_path / ".hermes"
     profile = root / "profiles" / "elias"
