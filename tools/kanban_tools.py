@@ -681,6 +681,18 @@ def _neoffice_has_tenant_account_lookup(kb: Any, tid: str, board: Optional[str])
         log_text,
         re.IGNORECASE,
     ))
+
+
+def _neoffice_has_account_doctrine_search(kb: Any, tid: str, board: Optional[str]) -> bool:
+    """Check the current worker log for a focused doctrine search."""
+    import re
+
+    log_text = kb.read_worker_log(tid, tail_bytes=512_000, board=board) or ""
+    return bool(re.search(
+        r"preparing\s+(?:mcp__[a-z0-9_]+__)?wiki_search\b",
+        log_text,
+        re.IGNORECASE,
+    ))
 # //// END Neoffice ////
 
 
@@ -789,22 +801,28 @@ def _handle_complete(args: dict, **kw) -> str:
             # answer after the live tenant chart tool has actually run. The
             # rejection keeps the task in-flight so the same worker can call it
             # and retry kanban_complete without spawning another task. ////
-            if (
-                task
-                and _neoffice_requires_tenant_account_lookup(task)
-                and not _neoffice_has_tenant_account_lookup(kb, tid, board)
-            ):
-                return tool_error(
-                    "kanban_complete blocked: this task asks for a concrete "
-                    "posting account, but get_chart_of_accounts was not called. "
-                    "Your NEXT action must be "
-                    "mcp__neoffice_compta__get_chart_of_accounts, not wiki_read. "
-                    "The Swiss SME family from the wiki is not the tenant's exact "
-                    "account. Preserve the invoice's distinctive economic nouns in "
-                    "the query, inspect the returned numbers and labels, then retry "
-                    "kanban_complete with the corrected answer. The task is still "
-                    "in-flight."
-                )
+            if task and _neoffice_requires_tenant_account_lookup(task):
+                if not _neoffice_has_tenant_account_lookup(kb, tid, board):
+                    return tool_error(
+                        "kanban_complete blocked: this task asks for a concrete "
+                        "posting account, but get_chart_of_accounts was not called. "
+                        "Your NEXT action must be "
+                        "mcp__neoffice_compta__get_chart_of_accounts, not wiki_read. "
+                        "The Swiss SME family from the wiki is not the tenant's exact "
+                        "account. Preserve the invoice's distinctive economic nouns in "
+                        "the query and inspect the returned numbers and labels. The task "
+                        "is still in-flight."
+                    )
+                if not _neoffice_has_account_doctrine_search(kb, tid, board):
+                    return tool_error(
+                        "kanban_complete blocked: the live tenant account was checked, "
+                        "but its Swiss accounting doctrine was not. Your NEXT action "
+                        "must be mcp__neoffice_wiki__wiki_search with the invoice's "
+                        "economic nature plus 'imputation facture plan comptable PME'. "
+                        "Use the returned snippet; do not call wiki_read unless a legal "
+                        "condition is missing. Then retry kanban_complete. The task is "
+                        "still in-flight."
+                    )
             # //// END Neoffice ////
             rejection = _goal_mode_handoff_rejection(
                 task,
