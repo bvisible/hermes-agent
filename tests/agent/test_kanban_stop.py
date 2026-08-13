@@ -113,6 +113,19 @@ def test_nudge_text_warns_about_blocking(clear_kanban_env):
     )
 
 
+# //// Neoffice — the terminal summary is what NORA delivers to the user.
+def test_nudge_preserves_complete_user_facing_answer(clear_kanban_env):
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
+    nudge = build_kanban_stop_nudge(messages=[], attempts=0)
+    assert nudge is not None
+    assert "user-facing answer" in nudge
+    assert "copy its FULL useful content" in nudge
+    assert "Never replace it with a progress report" in nudge
+
+
+# //// END Neoffice ////
+
+
 def test_nudge_and_dispatcher_budgets_are_independent(clear_kanban_env):
     """Agent-side nudge budget (2) and dispatcher-side streak (3) are
     separate budgets — the nudge counter does not affect the dispatcher's

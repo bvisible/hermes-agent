@@ -96,6 +96,14 @@ def build_kanban_stop_nudge(
         "1. Finish any remaining deliverable (write the required file(s) now).\n"
         "2. Call `kanban_complete(summary=..., artifacts=[...])` if the work "
         "is done, OR `kanban_block(reason=...)` if you are blocked.\n\n"
+        # //// Neoffice — the notifier delivers the terminal summary, not the
+        # narrated assistant text. Weak models otherwise replace a complete
+        # legal/list answer with "I handled it" after this nudge.
+        "3. The `summary` is the user-facing answer. If your previous plain-text "
+        "reply already contains the deliverable, copy its FULL useful content "
+        "(facts, rows, conditions, dates and links) into `summary`. Never replace "
+        "it with a progress report such as 'I explained' or 'I found'.\n\n"
+        # //// END Neoffice ////
         "Never end a turn with only a promise of future action. Repeated "
         "protocol violations will block this task and require manual intervention.]"
     )
