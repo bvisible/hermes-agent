@@ -652,6 +652,38 @@ def _handle_list(args: dict, **kw) -> str:
         return tool_error(f"kanban_list: {e}")
 
 
+# //// Neoffice — an account answer is invalid until the live tenant chart was read. ////
+def _neoffice_requires_tenant_account_lookup(task: Any) -> bool:
+    """Return whether a compta worker task asks for a concrete posting account."""
+    if os.environ.get("HERMES_PROFILE") != "compta":
+        return False
+    import re
+    import unicodedata
+
+    value = f"{getattr(task, 'title', '')}\n{getattr(task, 'body', '') or ''}".lower()
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    return bool(re.search(
+        r"(?:dans quel compte|quel compte(?: exact)?|ou imputer|ou passer cette "
+        r"depense|imput(?:er|ation).{0,100}(?:facture|depense)|"
+        r"compte.{0,100}imput)",
+        value,
+    ))
+
+
+def _neoffice_has_tenant_account_lookup(kb: Any, tid: str, board: Optional[str]) -> bool:
+    """Check the current worker log for the real-chart MCP call."""
+    import re
+
+    log_text = kb.read_worker_log(tid, tail_bytes=512_000, board=board) or ""
+    return bool(re.search(
+        r"preparing\s+(?:mcp__[a-z0-9_]+__)?get_chart_of_accounts\b",
+        log_text,
+        re.IGNORECASE,
+    ))
+# //// END Neoffice ////
+
+
 def _handle_complete(args: dict, **kw) -> str:
     """Mark the current task done with a structured handoff."""
     delegated_err = _reject_delegated_child_mutation("kanban_complete")
@@ -752,6 +784,26 @@ def _handle_complete(args: dict, **kw) -> str:
             # Only enforce when a judge is actually reachable — see
             # _goal_judge_available for why an unavailable judge fails open.
             task = kb.get_task(conn, tid)
+            # //// Neoffice — reject plausible Käfer-family guesses on NORA's
+            # accounting pole. A worker may only finish an account-allocation
+            # answer after the live tenant chart tool has actually run. The
+            # rejection keeps the task in-flight so the same worker can call it
+            # and retry kanban_complete without spawning another task. ////
+            if (
+                task
+                and _neoffice_requires_tenant_account_lookup(task)
+                and not _neoffice_has_tenant_account_lookup(kb, tid, board)
+            ):
+                return tool_error(
+                    "kanban_complete blocked: this task asks for a concrete "
+                    "posting account, but get_chart_of_accounts was not called. "
+                    "The Swiss SME family from the wiki is not the tenant's exact "
+                    "account. Call get_chart_of_accounts once with the precise "
+                    "economic terms and root_type, inspect the returned labels, "
+                    "then retry kanban_complete with the corrected answer. The "
+                    "task is still in-flight."
+                )
+            # //// END Neoffice ////
             rejection = _goal_mode_handoff_rejection(
                 task,
                 (summary or result or "").strip(),
