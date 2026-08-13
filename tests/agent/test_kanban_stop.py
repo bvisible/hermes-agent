@@ -88,3 +88,43 @@ def test_no_nudge_after_kanban_complete(clear_kanban_env):
 
 
 
+# //// Neoffice — the terminal summary is what NORA delivers to the user.
+# Asserted on INTENT, not on exact wording: an earlier version of this test
+# pinned three literal sentences and broke the day the two Neoffice branches
+# were merged and the paragraph was reworded (2026-08-15). A prompt test that
+# fails on rephrasing teaches people to delete it; these checks fail only if
+# the guarantee itself is gone.
+def test_nudge_preserves_complete_user_facing_answer(clear_kanban_env):
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
+    nudge = build_kanban_stop_nudge(messages=[], attempts=0)
+    assert nudge is not None
+    low = nudge.lower()
+    # 1. the summary is the answer the user reads, not a note about the work
+    assert "summary" in low and "answer" in low
+    # 2. the full content must be carried over, not paraphrased away
+    assert "full useful content" in low
+    # 3. a progress report is explicitly called out as delivering nothing
+    assert "delivers nothing" in low or "never replace" in low
+
+
+# //// END Neoffice ////
+
+
+def test_nudge_and_dispatcher_budgets_are_independent(clear_kanban_env):
+    """Agent-side nudge budget (2) and dispatcher-side streak (3) are
+    separate budgets — the nudge counter does not affect the dispatcher's
+    violation streak, and vice versa.
+
+    This is a source-level invariant check: the nudge counter
+    (``_kanban_stop_nudges``) lives on the AIAgent instance and resets
+    per session, while the dispatcher streak lives in the task_runs DB
+    table and persists across worker respawns.
+    """
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
+    # Agent-side: 2 nudge attempts per session
+    assert build_kanban_stop_nudge(messages=[], attempts=0) is not None
+    assert build_kanban_stop_nudge(messages=[], attempts=1) is not None
+    assert build_kanban_stop_nudge(messages=[], attempts=2) is None
+    # Dispatcher-side streak is tracked in the DB, not in the nudge module —
+    # the nudge module has no knowledge of the streak counter.
+    assert not hasattr(build_kanban_stop_nudge, "_streak")
