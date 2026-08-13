@@ -206,6 +206,10 @@ _CLASSIFIER_SYSTEM = (
     "- compta : factures, paiements, TVA, chiffre d'affaires, impayés, rappels de paiement / "
     "relances / rappels de facture, fournisseurs, commandes d'achat, rapports financiers "
     "(un chiffre demandé en TEXTE).\n"
+    # //// Neoffice — invoice allocation and the tenant chart are accounting work.
+    "  Cela inclut le plan comptable, le choix d'un compte et l'imputation d'une "
+    "facture, d'un ticket, d'un achat ou d'une dépense.\n"
+    # //// END Neoffice ////
     # //// Neoffice — Swiss accounting-law questions need the compta worker's
     # curated wiki, even when they do not mention an ERP accounting object.
     "  Cela inclut le droit comptable suisse, la perte de capital, le surendettement "
@@ -289,6 +293,21 @@ _FAST_PATH_RULES = (
         r"(?=.*(?:envoi|envoy|[ée]cri[rstvez]|r[ée]dig|transmet|transmettre|adress))",
         re.IGNORECASE,
     ), "support"),
+    # //// END Neoffice ////
+    # //// Neoffice — invoice allocation must skip the fallible LLM classifier.
+    # The first production E2E attempt spent 107s retrying the router model and
+    # never reached compta, even though "plan comptable" is unambiguous. Require
+    # either that exact domain phrase, or both an accounting object and an
+    # allocation/account cue, so "à qui imputer cette erreur ?" stays untouched.
+    (
+        re.compile(
+            r"\bplan\s+comptable\b|\bimputation\s+comptable\b|"
+            r"(?=.*\b(?:factur\w*|tickets?\b|d[ée]pens\w*|achats?\b))"
+            r"(?=.*\b(?:imput\w*|comptes?\s+(?:de\s+)?(?:charge|comptable)))",
+            re.IGNORECASE,
+        ),
+        "compta",
+    ),
     # //// END Neoffice ////
     # //// Neoffice — Swiss accounting law must reach the compta worker, which
     # owns the curated doctrine wiki. Keep this separate from the generic rule
