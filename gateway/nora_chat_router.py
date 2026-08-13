@@ -204,7 +204,8 @@ _CLASSIFIER_SYSTEM = (
     "paiement ponctuel → compta, PAS 'recurrent'.\n\n"
     "Sinon, choisis le pôle métier qui doit traiter la demande :\n"
     "- compta : factures, paiements, TVA, chiffre d'affaires, impayés, rappels de paiement / "
-    "relances / rappels de facture, fournisseurs, commandes d'achat, rapports financiers "
+    "relances / rappels de facture, fournisseurs, commandes d'achat, rapports financiers, "
+    "droit comptable suisse, perte de capital, surendettement et art. 725a/725b CO "
     "(un chiffre demandé en TEXTE).\n"
     "- ventes : devis, commandes clients, factures de vente, articles, clients "
     "(création/recherche), prix.\n"
@@ -285,7 +286,16 @@ _FAST_PATH_RULES = (
         re.IGNORECASE,
     ), "support"),
     # //// END Neoffice ////
-    (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
+    (
+        re.compile(
+            r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|"
+            r"grand livre|écritures? comptables?|factures? fournisseur|"
+            r"perte de capital|surendettement|art(?:icle)?\.?\s*725[ab]?\b|"
+            r"\b725[ab]\s+CO\b)",
+            re.IGNORECASE,
+        ),
+        "compta",
+    ),
     (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
     (re.compile(r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des))", re.IGNORECASE), "rh"),
 )
