@@ -130,6 +130,14 @@ def test_compta_allocation_completion_requires_live_chart(monkeypatch, tmp_path)
         "preparing mcp__neoffice_compta__get_chart_of_accounts\n",
         encoding="utf-8",
     )
+    missing_doctrine = json.loads(kt._handle_complete({"summary": "6621 Foires et expositions"}))
+    assert "mcp__neoffice_wiki__wiki_search" in missing_doctrine["error"]
+
+    worker_log.write_text(
+        worker_log.read_text(encoding="utf-8")
+        + "preparing mcp__neoffice_wiki__wiki_search\n",
+        encoding="utf-8",
+    )
     accepted = json.loads(kt._handle_complete({"summary": "6621 Foires et expositions"}))
     assert accepted["terminal"] is True
 
