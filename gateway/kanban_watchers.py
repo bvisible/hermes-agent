@@ -69,6 +69,63 @@ def _safe_review_reason(value: Any, limit: int = 160) -> str:
         reason = reason[: limit - 1].rstrip() + "…"
     return reason
 
+# //// Neoffice — deterministic anti-hallucination guard for blocked Swiss-
+# accounting allocation questions. A worker may correctly block for a missing
+# fact yet still leak speculative account numbers in the explanation around its
+# question. The user-facing notifier keeps only explicit, number-free questions
+# for this narrow class of task; the complete raw reason remains in Kanban for
+# auditors. This is a delivery guard, never an accounting decision engine.
+_ACCOUNT_ALLOCATION_MARKERS = (
+    "imput", "quel compte", "dans quel compte", "compte comptable",
+    "numéro de compte", "numero de compte", "account allocation",
+)
+_ACCOUNT_NUMBER_RE = re.compile(r"(?<!\d)\d{3,4}(?:[.,]\d+)?(?!\d)")
+_QUESTION_FRAGMENT_RE = re.compile(r"(?:^|(?<=[.!?])\s+|\n+)([^\n.!?]*\?)")
+_ACCOUNTING_BLOCK_FALLBACK = (
+    "Quelle information factuelle manque-t-il pour départager les traitements "
+    "comptables possibles ?"
+)
+_ACTIVATION_CLARIFICATION = (
+    "Quel est le montant de l'achat et quelle politique ou quel seuil "
+    "d'activation votre entreprise applique-t-elle à ce type de matériel ?"
+)
+
+
+def _safe_accounting_block_reason(
+    reason: str,
+    *,
+    assignee: str | None,
+    title: str = "",
+    body: str = "",
+) -> str:
+    """Remove speculative account proposals from a blocked delivery.
+
+    The rule is deliberately narrow: only the ``compta`` profile and tasks
+    explicitly about choosing an account are filtered. Other blocked reasons
+    (including legal references, ticket numbers and dates) are unchanged.
+    """
+    cleaned = str(reason or "").strip()
+    context = f"{title}\n{body}".lower()
+    if assignee != "compta" or not any(
+        marker in context for marker in _ACCOUNT_ALLOCATION_MARKERS
+    ):
+        return cleaned[:600]
+
+    questions = []
+    for match in _QUESTION_FRAGMENT_RE.finditer(cleaned):
+        question = " ".join(match.group(1).split())
+        if question and not _ACCOUNT_NUMBER_RE.search(question):
+            questions.append(question)
+    if not questions:
+        ambiguity = f"{context}\n{cleaned.lower()}"
+        if "activation" in ambiguity and any(
+            marker in ambiguity for marker in ("montant", "seuil", "immobil", "ordinateur")
+        ):
+            return _ACTIVATION_CLARIFICATION
+        return _ACCOUNTING_BLOCK_FALLBACK
+    return " ".join(questions)[:600]
+# //// END Neoffice ////
+
 
 def _resolve_auto_decompose_settings(
     load_config: Callable[[], Any],
@@ -675,7 +732,16 @@ class GatewayKanbanWatchersMixin:
                         elif kind == "blocked":
                             reason = ""
                             if ev.payload and ev.payload.get("reason"):
-                                reason = f" : {str(ev.payload['reason']).strip()[:600]}"
+                                # //// Neoffice — strip speculative account proposals from
+                                # ambiguous allocation questions before user delivery. ////
+                                safe_reason = _safe_accounting_block_reason(
+                                    str(ev.payload["reason"]),
+                                    assignee=who,
+                                    title=title,
+                                    body=(getattr(task, "body", "") or "") if task else "",
+                                )
+                                reason = f" : {safe_reason}"
+                                # //// END Neoffice ////
                             msg = f"✋ {dom}{reason}"
                         elif kind == "gave_up":
                             # //// Neoffice — the gave_up event is an INTERNAL recovery signal
