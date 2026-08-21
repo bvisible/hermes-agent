@@ -341,6 +341,20 @@ _CAPABILITY_RE = re.compile(
     r"(?:tu\s+(?:peux|sais|pourrais)|peux[-\s]tu|sais[-\s]tu|pourrais[-\s]tu|"
     r"c['’]est\s+possible|es[-\s]tu\s+capable|il\s+est\s+possible)\b"
     r"(?![^?]*[0-9@])"          # a figure or an e-mail means real data → not a capability question
+    # //// Neoffice — two gaps this guard missed, both live on 2026-08-21 (voice
+    # console): "Est-ce que tu peux m'en mettre quinze en commande ?" answered
+    # "Oui, je peux gérer les commandes clients — quel produit, quel client ?"
+    # while the previous turn had JUST identified the product and offered a
+    # purchase order. Two tells make it an ORDER, not a capability question:
+    # 1. a number spelled out — voice transcription writes figures as words, so
+    #    the [0-9] guard never fires ("un/une" excluded: they are articles, and
+    #    "peux-tu créer un client ?" must stay a capability question);
+    # 2. an object pronoun (m'en, me le/la/les, nous en) — an anaphor points at
+    #    something from the conversation, which a cold meta-question never does.
+    r"(?![^?]*\b(?:deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|"
+    r"treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|"
+    r"cents?|mille)\b)"
+    r"(?![^?]*\b(?:m['’]en|nous\s+en|t['’]en|me\s+l(?:e|a|es))\b)"
     # Asking for INFORMATION is not asking about a capability: "peux-tu me dire /
     # me donner / m'afficher …" is a real business request and must reach its pole.
     r"(?![^?]*\b(?:me\s+dire|me\s+donner|me\s+montrer|me\s+sortir|me\s+lister|"
