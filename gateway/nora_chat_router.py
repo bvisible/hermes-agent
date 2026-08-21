@@ -964,7 +964,10 @@ def route_chat_message(
                     "do NOT redo what is done (entities created in earlier turns ALREADY EXIST — "
                     "look them up), resolve references like « ces factures / le premier » against "
                     "the NORA lines above, and CONTINUE until the request is COMPLETE (not just "
-                    "one isolated step). Current message below.]"
+                    "one isolated step). COMPLETE means exactly what the user asked and NOTHING "
+                    "more: NEVER create an additional document (invoice, order, payment, delivery "
+                    "note…) the user did not explicitly ask for in this thread. Current message "
+                    "below.]"
                     f"\n\n{message}"
                 )
             elif prior and prior.get("pole") and prior.get("msg"):
@@ -984,7 +987,21 @@ def route_chat_message(
             _lang_full = {"fr": "French", "de": "German", "it": "Italian", "en": "English"}.get(
                 _wlang, _wlang
             )
-            _body = f"{_body}\n\n[Reply to the user in {_lang_full}. Do not reply in any other language.]"
+            # //// Neoffice — partner guard (2026-08-21, osiris): a worker asked to
+            # "order ten" of an item picked a REAL customer (Daniel Moret) out of the
+            # database — never named in the thread — and created a sales order AND an
+            # uninvited invoice in his name. Guessing a business partner fabricates
+            # documents in a real person's name; asking costs one turn. Carried on
+            # every task body (all readers are kanban workers; DIRECT chat never
+            # routes here). grep "//// Neoffice".
+            _body = (
+                f"{_body}\n\n[Reply to the user in {_lang_full}. Do not reply in any "
+                "other language. If a document you are about to create needs a "
+                "business partner (customer or supplier) and NO partner is named in "
+                "the request or the conversation context, do NOT pick one yourself — "
+                "ask the user which partner to use (kanban_block kind=needs_input) "
+                "and STOP.]"
+            )
             # //// END Neoffice ////
             # //// Neoffice — stable worker cwd (re-ported from fork commit c68c362e6 after
             # taking the richer osiris-poc router). The dispatcher runs the worker with
