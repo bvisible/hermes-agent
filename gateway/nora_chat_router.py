@@ -204,7 +204,7 @@ _CLASSIFIER_SYSTEM = (
     "paiement ponctuel → compta, PAS 'recurrent'.\n\n"
     "Sinon, choisis le pôle métier qui doit traiter la demande :\n"
     "- compta : factures, paiements, TVA, chiffre d'affaires, impayés, rappels de paiement / "
-    "relances / rappels de facture, fournisseurs, commandes d'achat, rapports financiers "
+    "relances / rappels de facture, factures fournisseurs, rapports financiers "
     "(un chiffre demandé en TEXTE).\n"
     # //// Neoffice — invoice allocation and the tenant chart are accounting work.
     "  Cela inclut le plan comptable, le choix d'un compte et l'imputation d'une "
@@ -215,8 +215,9 @@ _CLASSIFIER_SYSTEM = (
     "  Cela inclut le droit comptable suisse, la perte de capital, le surendettement "
     "et les art. 725a/725b CO.\n"
     # //// END Neoffice ////
-    "- ventes : devis, commandes clients, factures de vente, articles, clients "
-    "(création/recherche), prix.\n"
+    "- ventes : devis, commandes clients, factures de vente, articles, stock, clients "
+    "(création/recherche), prix, réapprovisionnement — commandes FOURNISSEURS "
+    "incluses (« commander 15 unités », « passer commande au fournisseur »).\n"
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     "- rh : congés, paie, employés, contrats, absences.\n"
