@@ -221,6 +221,14 @@ _CLASSIFIER_SYSTEM = (
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     "- rh : congés, paie, employés, contrats, absences.\n"
+    # //// Neoffice — Swiss HR/payroll doctrine questions need the rh worker's
+    # curated wiki (RAG-rh-suisse, wired 2026-08-21): rates and obligations are
+    # knowledge questions, not chit-chat, and must not fall to 'direct'.
+    "  Cela inclut les taux et obligations RH suisses : AVS/AI/APG, AC, LPP, LAA, "
+    "impôt à la source, certificat de salaire, allocations familiales, délais de "
+    "congé, vacances et heures supplémentaires (« quel taux AVS ? », « quelle "
+    "retenue à la source ? »).\n"
+    # //// END Neoffice ////
     "- analyse : graphiques, visuels, dataviz, cartes d'indicateurs, tableaux de bord "
     "sur mesure — QUEL QUE SOIT le sujet (« montre-moi … en graphique »). Une demande "
     "de visualisation va TOUJOURS à analyse, jamais à compta/ventes.\n\n"
