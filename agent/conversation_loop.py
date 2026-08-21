@@ -7804,6 +7804,53 @@ def run_conversation(
                         # result. (Structural signal, not a text guess.)
                         if _prog == "progress":
                             agent._kanban_made_progress = True
+                        # //// Neoffice — a SUCCESSFUL terminal kanban tool ends
+                        # the run in CODE. "terminal" only means the tool was
+                        # CALLED; nothing upstream stops the model afterwards,
+                        # and Qwen keeps going. Observed 2026-08-21 (osiris): a
+                        # worker called kanban_block("which supplier?") then
+                        # KEPT WORKING, read the PO a sibling turn had just
+                        # created, answered its own question from it and created
+                        # a duplicate (PUR-ORD-2026-00009 next to -00008),
+                        # delivering a second "done" to the chat. A blocked/done
+                        # task has no live worker by contract — the dispatcher
+                        # owns the resume. We re-read the REAL status from the
+                        # kanban db so a REFUSED terminal call (goal-mode judge
+                        # gate, invalid kind, unknown id — task still "running")
+                        # lets the worker continue; any db error fails open.
+                        # Delivery is safe: completed-event delivery reads
+                        # task_runs.summary / task.result (persisted BY the
+                        # kanban_complete call), never the post-complete text.
+                        if _prog == "terminal":
+                            _term_status = None
+                            try:
+                                from hermes_cli import kanban_db as _kb_term
+                                _term_conn = _kb_term.connect()
+                                try:
+                                    _term_task = _kb_term.get_task(
+                                        _term_conn, _kanban_task
+                                    )
+                                    _term_status = getattr(
+                                        _term_task, "status", None
+                                    )
+                                finally:
+                                    try:
+                                        _term_conn.close()
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                            if _term_status and _term_status != "running":
+                                _turn_exit_reason = (
+                                    f"kanban_terminal_tool(status={_term_status})"
+                                )
+                                logger.info(
+                                    "kanban worker %s: terminal kanban tool "
+                                    "succeeded (status=%s) — ending run",
+                                    _kanban_task, _term_status,
+                                )
+                                break
+                        # //// END Neoffice ////
                     else:
                         agent._kanban_no_progress_streak += 1
                         _streak = agent._kanban_no_progress_streak
