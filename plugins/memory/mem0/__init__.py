@@ -742,6 +742,20 @@ class Mem0MemoryProvider(MemoryProvider):
         """Send the turn to Mem0 for server-side fact extraction (non-blocking)."""
         if self._backend is None or self._is_breaker_open():
             return
+        # //// Neoffice — a turn with no real owner is not a memory. self._user_id
+        # falls back to _DEFAULT_USER_ID for ownerless runs: the 8-minute
+        # chat-warmup ping and every kanban worker turn landed there — 4 325 of
+        # dmis's 4 361 stored "memories" were literally « Reponds uniquement: ok »
+        # and srv02 (a template with zero users) held 11 236 of them (measured
+        # 2026-09-01). Nobody recalls that bucket on purpose (user recall scopes
+        # the canonical id + company), and the warmup's own recall block changed
+        # as its pings accumulated — churning the very prefix cache the warmup
+        # exists to keep warm. No owner → no per-turn capture; the end-of-day
+        # consolidation remains the writer of durable facts. A CLI session that
+        # wants capture can still configure an explicit user_id.
+        if (self._user_id or _DEFAULT_USER_ID) == _DEFAULT_USER_ID:
+            return
+        # //// END Neoffice ////
 
         def _sync():
             backend = self._backend
