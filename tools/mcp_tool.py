@@ -6184,11 +6184,20 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                         )
                     _call_coro = server.session.call_tool(tool_name, arguments=args)
                     _watch_children = getattr(server, "_watch_stdio_children", None)
+                    #//// Neoffice — upstream probes awaitability by CALLING the
+                    #//// watcher (`inspect.isawaitable(_watch_children())`), which
+                    #//// instantiates a coroutine that is never awaited: every MCP tool
+                    #//// call logged "coroutine '_watch_stdio_children' was never
+                    #//// awaited" (upstream #95938 / #96030, open at v2026.8.31). Ask the
+                    #//// function, not an instance — same verdict for real coroutine
+                    #//// functions and for the MagicMock stubs the comment below covers.
+                    #//// Drop once upstream ships the fix.
                     _watch_ok = (
                         _watch_children is not None
-                        and inspect.isawaitable(_watch_children())
+                        and inspect.iscoroutinefunction(_watch_children)
                         and asyncio.iscoroutine(_call_coro)
                     )
+                    #//// END Neoffice ////
                     if not _watch_ok:
                         # Stubbed sessions (MagicMock in tests) return a
                         # non-awaitable, or there is no child-watcher to race
