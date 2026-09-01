@@ -6191,7 +6191,8 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                     #//// awaited" (upstream #95938 / #96030, open at v2026.8.31). Ask the
                     #//// function, not an instance — same verdict for real coroutine
                     #//// functions and for the MagicMock stubs the comment below covers.
-                    #//// Drop once upstream ships the fix.
+                    #//// Upstream carries the same change in PR #96251 (our #100110 was
+                    #//// closed as its duplicate): drop this block once #96251 is merged.
                     _watch_ok = (
                         _watch_children is not None
                         and inspect.iscoroutinefunction(_watch_children)

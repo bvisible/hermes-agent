@@ -473,6 +473,95 @@ _SMALLTALK_SYSTEM = (
     "briefly (one or two sentences), warm and professional, in the user's language. "
     "Plain text only — no lists, no tool talk, no task offers unless asked."
 )
+
+# //// Neoffice — CANNED SMALL-TALK (no LLM at all). The light path above still costs
+# two serial LLM round-trips (classify, then a small-talk completion): 2.8 s for
+# "Bonjour Nora" on a loaded Olares (measured 2026-09-01, 07:49:29.39 → 07:49:32.15),
+# before the desk even polls. A greeting, a thank-you, a "how are you" or a farewell
+# has one right answer per language; say it from a template. The gate is stricter
+# than the light path's: the message must be small talk and NOTHING ELSE (residue
+# after removing the cue and filler words ≤ 1 word), so "Bonjour, qui es-tu ?" still
+# gets the LLM. Vouvoiement — customer-facing. Keep the four cue classes in step
+# with _SMALLTALK_RE.
+_CANNED_FAREWELL_RE = re.compile(
+    r"\b(au revoir|bonne (journée|soirée|nuit)|à bientôt|a bientôt|bye|goodbye|"
+    r"auf wiedersehen|schönen tag|arrivederci|buona giornata)\b", re.IGNORECASE
+)
+_CANNED_THANKS_RE = re.compile(r"\b(merci|thanks|thank you|danke|grazie)\b", re.IGNORECASE)
+_CANNED_HOWAREYOU_RE = re.compile(
+    r"\b(ça va|ca va|tu vas bien|vous allez bien|comment vas|comment allez|"
+    r"opérationnel(le)?|es[- ]tu (là|la)|t'es (là|la)|how are you|wie geht|come va|come stai)\b",
+    re.IGNORECASE,
+)
+_CANNED_EVENING_RE = re.compile(r"\b(bonsoir|good evening|guten abend|buonasera)\b", re.IGNORECASE)
+_CANNED_REPLIES = {
+    "fr": {
+        "greeting": "Bonjour ! Comment puis-je vous aider aujourd'hui ?",
+        "evening": "Bonsoir ! Comment puis-je vous aider ?",
+        "thanks": "Avec plaisir ! N'hésitez pas si je peux faire autre chose pour vous.",
+        "howareyou": "Très bien, merci — et vous ? Que puis-je faire pour vous ?",
+        "farewell": "Bonne journée à vous, à bientôt !",
+    },
+    "de": {
+        "greeting": "Guten Tag! Wie kann ich Ihnen heute helfen?",
+        "evening": "Guten Abend! Wie kann ich Ihnen helfen?",
+        "thanks": "Gern geschehen! Sagen Sie Bescheid, wenn ich noch etwas für Sie tun kann.",
+        "howareyou": "Sehr gut, danke — und Ihnen? Was kann ich für Sie tun?",
+        "farewell": "Einen schönen Tag noch, bis bald!",
+    },
+    "it": {
+        "greeting": "Buongiorno! Come posso aiutarla oggi?",
+        "evening": "Buonasera! Come posso aiutarla?",
+        "thanks": "Con piacere! Mi dica pure se posso fare altro per lei.",
+        "howareyou": "Molto bene, grazie — e lei? Cosa posso fare per lei?",
+        "farewell": "Buona giornata, a presto!",
+    },
+    "en": {
+        "greeting": "Hello! How can I help you today?",
+        "evening": "Good evening! How can I help you?",
+        "thanks": "You're welcome! Let me know if I can do anything else for you.",
+        "howareyou": "Very well, thank you — and you? What can I do for you?",
+        "farewell": "Have a good day, see you soon!",
+    },
+}
+_CANNED_FILLER_RE = re.compile(
+    r"\b(nora|et|vous|toi|tu|à|a|tous|toutes|bien|très|tres|moi|aussi|super|ok|d'accord|"
+    r"beaucoup|bonne|good|hallo|ciao|you|and|there|the|everyone|all|dir|ihnen|lei)\b",
+    re.IGNORECASE,
+)
+
+
+def _canned_smalltalk_reply(message: str, language: Optional[str]) -> Optional[str]:
+    """Template reply for a message that is small talk and nothing else, else None."""
+    msg = (message or "").strip()
+    if not msg or len(msg) > 80:
+        return None
+    if _BUSINESS_RE.search(msg) or _CAPABILITY_RE.match(msg):
+        return None
+    if not (_SMALLTALK_RE.search(msg) or _CANNED_FAREWELL_RE.search(msg)
+            or _CANNED_HOWAREYOU_RE.search(msg) or _CANNED_EVENING_RE.search(msg)):
+        return None
+    if _CANNED_FAREWELL_RE.search(msg):
+        kind = "farewell"
+    elif _CANNED_THANKS_RE.search(msg):
+        kind = "thanks"
+    elif _CANNED_HOWAREYOU_RE.search(msg):
+        kind = "howareyou"
+    elif _CANNED_EVENING_RE.search(msg):
+        kind = "evening"
+    else:
+        kind = "greeting"
+    # Residue check: strip every cue and filler word; anything substantive left
+    # means the user asked something → not a canned case.
+    residue = msg
+    for rx in (_SMALLTALK_RE, _CANNED_FAREWELL_RE, _CANNED_THANKS_RE,
+               _CANNED_HOWAREYOU_RE, _CANNED_EVENING_RE, _CANNED_FILLER_RE):
+        residue = rx.sub(" ", residue)
+    residue_words = [w for w in re.split(r"[^\w']+", residue) if w]
+    if len(residue_words) > 1:
+        return None
+    return _CANNED_REPLIES[_norm_lang(language)][kind]
+# //// END Neoffice ////
 # //// END Neoffice ////
 
 
@@ -740,6 +829,11 @@ def route_chat_message(
                 _consume_pending_offer(chat_phone)
     # //// END Neoffice ////
 
+    # //// Neoffice — pure small talk is answered from a template: no classifier, no
+    # fast-answer thread, no light-path completion (see _canned_smalltalk_reply).
+    _canned_text = _canned_smalltalk_reply(message, language) if _offer is None else None
+    # //// END Neoffice ////
+
     # //// Neoffice — PARALLEL classify + fast-answer. They were serial (two
     # LLM round-trips ≈ 1.9 s before any work started, on EVERY path). They
     # are independent — the fast-answer engine classifies its own intent —
@@ -748,7 +842,7 @@ def route_chat_message(
     # fast-answer pre-gate fails in ~0 ms without an LLM call, so the extra
     # thread costs nothing there.
     _fa_future = None
-    if _norm_lang(language) == "fr":
+    if _norm_lang(language) == "fr" and not _canned_text:
         import concurrent.futures as _cf
 
         _fa_pool = _cf.ThreadPoolExecutor(max_workers=1)
@@ -761,6 +855,8 @@ def route_chat_message(
 
     if _offer:
         category = _offer["pole"]  # //// Neoffice — pole fixed by the accepted offer ////
+    elif _canned_text:
+        category = "DIRECT"  # //// Neoffice — canned small talk, classifier skipped ////
     else:
         category = classify(
             message,
@@ -797,6 +893,23 @@ def route_chat_message(
         # name and e-mail"). Answering it here costs one short LLM call. The _BUSINESS_RE
         # gate is deliberately skipped: a capability question NAMES a business object
         # ("créer un client") without carrying any data — that is the whole point.
+        # //// Neoffice — canned small talk: deliver the template exactly like the light
+        # path does (same callback, same film bookkeeping), zero LLM calls.
+        if _canned_text:
+            _cn_cid = (deliver_extra or {}).get("conversation_id") or (conversation_id or None)
+            _cn_delivered = _post_ack_to_callback(
+                _canned_text, {**(deliver_extra or {}), "conversation_id": _cn_cid}
+            )
+            note_nora_reply(conversation_id, _canned_text)
+            logger.info(
+                "nora_chat_router: SMALLTALK canned (no LLM, %d chars) delivered=%s",
+                len(_canned_text), _cn_delivered,
+            )
+            return {
+                "routed": True, "category": "DIRECT", "ack": _canned_text,
+                "task_id": None, "fast": True, "ack_delivered": _cn_delivered,
+            }
+        # //// END Neoffice ////
         _is_capability = bool(_CAPABILITY_RE.match(message or ""))
         if _is_capability or (
             len(message or "") <= 80
