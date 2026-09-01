@@ -1096,15 +1096,20 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
                 except Exception as exc:
                     _probe_failed(exc)
             if result is None:
-                # llama.cpp exposes /v1/props (older builds used /props without the /v1 prefix)
+                #//// Neoffice — probe /props FIRST: our llama.cpp build (b10450, Olares)
+                #//// serves /props only, so upstream's /v1/props-first order produced a
+                #//// guaranteed 404 per probe (767 wasted round trips/day measured
+                #//// 2026-09-01). Newer builds that add /v1/props keep working via the
+                #//// fallback. Revisit if upstream ever drops the unprefixed route.
                 try:
-                    r = client.get(f"{server_url}/v1/props")
+                    r = client.get(f"{server_url}/props")
                     if r.status_code != 200:
-                        r = client.get(f"{server_url}/props")  # fallback for older builds
+                        r = client.get(f"{server_url}/v1/props")
                     if r.status_code == 200 and "default_generation_settings" in r.text:
                         result = "llamacpp"
                 except Exception as exc:
                     _probe_failed(exc)
+                #//// END Neoffice ////
             if result is None:
                 # vLLM: /version
                 try:
@@ -1489,12 +1494,16 @@ def fetch_endpoint_model_metadata(
             )
             if is_llamacpp:
                 try:
-                    # Try /v1/props first (current llama.cpp); fall back to /props for older builds
+                    #//// Neoffice — /props FIRST (same swap as the transport probe above):
+                    #//// our llama.cpp build serves /props only; /v1/props-first was a
+                    #//// guaranteed 404 per lookup. Newer builds keep working via the
+                    #//// fallback.
                     base = request_candidate.rstrip("/").replace("/v1", "")
                     _verify = _resolve_requests_verify(normalized)
-                    props_resp = requests.get(base + "/v1/props", headers=headers, timeout=5, verify=_verify)
+                    props_resp = requests.get(base + "/props", headers=headers, timeout=5, verify=_verify)
                     if not props_resp.ok:
-                        props_resp = requests.get(base + "/props", headers=headers, timeout=5, verify=_verify)
+                        props_resp = requests.get(base + "/v1/props", headers=headers, timeout=5, verify=_verify)
+                    #//// END Neoffice ////
                     if props_resp.ok:
                         props = props_resp.json()
                         gen_settings = props.get("default_generation_settings", {})
