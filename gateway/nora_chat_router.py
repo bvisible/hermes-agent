@@ -789,6 +789,17 @@ def _fast_answer(
 # //// END Neoffice ////
 
 
+# //// Neoffice — the job the desk page names (docked job panel, 05.09).
+def _page_project(page_context: Optional[dict]) -> Optional[str]:
+    pc = page_context if isinstance(page_context, dict) else {}
+    job = pc.get("job") if isinstance(pc.get("job"), dict) else {}
+    return (
+        pc.get("project") or job.get("project")
+        or (pc.get("name") if pc.get("doctype") == "Project" else None)
+    ) or None
+# //// END Neoffice ////
+
+
 def route_chat_message(
     *,
     message: str,
@@ -871,6 +882,14 @@ def route_chat_message(
             prior=prior,
             timeout=classify_timeout,
         )
+    # //// Neoffice — on a job page, a business request is the job's (05.09). « Ajoute 2
+    # heures de pose sur ce chantier » classified as RH (« heures ») and the RH worker,
+    # which has no job tools, edited ANOTHER project's line with generic tools. The
+    # ventes pole owns the job tools; compta/analyse keep money and charts questions.
+    if category in ("rh", "support") and _page_project(page_context):
+        logger.info("nora_chat_router: %s → ventes (job page %s)", category, _page_project(page_context))
+        category = "ventes"
+    # //// END Neoffice ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
     if conversation_id:
@@ -1131,10 +1150,7 @@ def route_chat_message(
             # about « ce chantier » invented a job number (RT445566, live on osiris).
             _pc = page_context if isinstance(page_context, dict) else {}
             _pc_job = _pc.get("job") if isinstance(_pc.get("job"), dict) else {}
-            _pc_project = (
-                _pc.get("project") or _pc_job.get("project")
-                or (_pc.get("name") if _pc.get("doctype") == "Project" else None)
-            )
+            _pc_project = _page_project(page_context)
             if _pc_project:
                 _pc_line = f"[Page context — the user is on building job {_pc_project}"
                 if _pc_job.get("title"):
