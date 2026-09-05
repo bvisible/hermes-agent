@@ -1162,7 +1162,9 @@ def route_chat_message(
                     + str(_pc_project)
                     + "\" to the job tools (frappe_job_status, frappe_job_add_lines, frappe_job_tasks, "
                     "frappe_job_book_visit, frappe_job_quote, frappe_job_customer_said_yes, "
-                    "frappe_job_invoice). Never guess another job.]"
+                    "frappe_job_invoice). Never guess another job. FIRST read your skill "
+                    "chantier-gestes-nora (skill_view); do not search items yourself — hand the names "
+                    "to frappe_job_add_lines and, on `problems`, ask the user one question.]"
                 )
                 _body = _pc_line + "\n\n" + _body
             # //// END Neoffice ////
