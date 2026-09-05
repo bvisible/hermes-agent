@@ -1231,6 +1231,8 @@ class WebhookAdapter(BasePlatformAdapter):
                         main_runtime=None,
                         deliver_extra=deliver_config.get("deliver_extra"),
                         chat_user=payload.get("user"),
+                        # //// Neoffice — the desk page the user is on (send_chat posts it) ////
+                        page_context=(payload.get("context") if isinstance(payload.get("context"), dict) else None),
                         # //// Neoffice — user's response language (multilingual ack + worker) ////
                         language=str((payload or {}).get("language") or "").strip() or None,
                         # //// Neoffice — phone → match a pending briefing CTA offer (WhatsApp

@@ -806,6 +806,7 @@ def route_chat_message(
     classify_timeout: float = 8.0,
     language: Optional[str] = None,  # //// Neoffice — user's response language (multilingual) ////
     chat_phone: Optional[str] = None,  # //// Neoffice — phone, to match a pending briefing offer ////
+    page_context: Optional[dict] = None,  # //// Neoffice — the desk page the user is on (job panel) ////
 ) -> dict:
     """Classify *message* and, when it is a business request, create the kanban task
     in code + subscribe the notifier. Returns a decision dict::
@@ -889,6 +890,28 @@ def route_chat_message(
         del _conv_film[:-_CONV_HISTORY_TURNS]
         # //// END Neoffice ////
     if category == "DIRECT":
+        # //// Neoffice — a deterministic fast hit beats the light path (05.09). A job
+        # status question (« on en est où sur ce chantier ? ») classifies as DIRECT, and
+        # the join that delivers fast hits sits AFTER this branch's returns: the hit was
+        # computed in parallel and thrown away while the agent answered slowly or wrongly.
+        # grep "//// Neoffice".
+        if _fa_future is not None:
+            try:
+                _fa_hit = _fa_future.result(timeout=12)
+            except Exception as _fa_exc:  # noqa: BLE001 — engine crash = light path as before
+                logger.warning("nora_chat_router: fast_answer (DIRECT) failed: %s", _fa_exc)
+                _fa_hit = None
+            _fa_future = None  # joined once; the later block must not wait again
+            if _fa_hit:
+                _fa_cid = ((deliver_extra or {}).get("conversation_id") or conversation_id or "")
+                _fa_done = _post_ack_to_callback(_fa_hit, {**(deliver_extra or {}), "conversation_id": _fa_cid})
+                note_nora_reply(conversation_id, _fa_hit)
+                logger.info("nora_chat_router: FAST-ANSWER chat=%s → DIRECT delivered=%s", session_chat_id, _fa_done)
+                return {
+                    "routed": True, "category": "DIRECT", "ack": _fa_hit,
+                    "task_id": None, "fast": True, "ack_delivered": _fa_done,
+                }
+        # //// END Neoffice ////
         # //// Neoffice — SMALL-TALK LIGHT PATH: one lightweight LLM call (same aux
         # client as the classifier, no agent, no tools) delivered directly. Any
         # failure or gate miss falls through to the normal agent (zero regression).
@@ -1103,6 +1126,30 @@ def route_chat_message(
                     "context (a bare name = a customer to filter by).]"
                     f"\n\n{message}"
                 )
+            # //// Neoffice — the job the user is looking at (docked job panel, 05.09). The
+            # desk sends its page context with every message; without it a worker asked
+            # about « ce chantier » invented a job number (RT445566, live on osiris).
+            _pc = page_context if isinstance(page_context, dict) else {}
+            _pc_job = _pc.get("job") if isinstance(_pc.get("job"), dict) else {}
+            _pc_project = (
+                _pc.get("project") or _pc_job.get("project")
+                or (_pc.get("name") if _pc.get("doctype") == "Project" else None)
+            )
+            if _pc_project:
+                _pc_line = f"[Page context — the user is on building job {_pc_project}"
+                if _pc_job.get("title"):
+                    _pc_line += f" « {str(_pc_job.get('title'))[:120]} »"
+                if _pc_job.get("customer"):
+                    _pc_line += f" (customer: {_pc_job.get('customer')})"
+                _pc_line += (
+                    ". « Ce chantier » / « ce projet » means THIS job: pass project=\""
+                    + str(_pc_project)
+                    + "\" to the job tools (frappe_job_status, frappe_job_add_lines, frappe_job_tasks, "
+                    "frappe_job_book_visit, frappe_job_quote, frappe_job_customer_said_yes, "
+                    "frappe_job_invoice). Never guess another job.]"
+                )
+                _body = _pc_line + "\n\n" + _body
+            # //// END Neoffice ////
             # //// Neoffice — tell the specialist worker which language to answer in (the
             # user's). ALWAYS carry it, FRENCH INCLUDED: the worker SOUL only "leans" FR, and a
             # cold model drifts to English without an explicit per-task directive (observed
