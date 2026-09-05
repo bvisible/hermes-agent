@@ -1264,6 +1264,24 @@ class WebhookAdapter(BasePlatformAdapter):
                 )
         # //// END NORA CORE PATCH ////
 
+        # //// Neoffice — the agent fallback keeps the page (05.09). When the router lets
+        # a job-page message through (DIRECT, or any router failure), the orchestrator
+        # must still know WHICH job the user is looking at: its own kanban body said « le
+        # chantier actif de l'utilisateur » and the ventes worker guessed the project.
+        try:
+            _fb_ctx = payload.get("context") if isinstance(payload, dict) else None
+            _fb_job = _fb_ctx.get("job") if isinstance(_fb_ctx, dict) and isinstance(_fb_ctx.get("job"), dict) else {}
+            _fb_project = str((_fb_ctx or {}).get("project") or _fb_job.get("project") or "").strip() if isinstance(_fb_ctx, dict) else ""
+            if _fb_project and route_name in ("nora_chat", "whatsapp_inbox"):
+                prompt = (
+                    f"[Page context — the user is on building job {_fb_project}: « ce chantier » / "
+                    f"« ce projet » means it. Any delegation or job tool call must name "
+                    f'project="{_fb_project}"; never guess another job.]\n\n' + str(prompt or "")
+                )
+        except Exception:  # noqa: BLE001 — a context glitch must never block a message
+            pass
+        # //// END Neoffice ////
+
         # Build source and event
         source = self.build_source(
             chat_id=session_chat_id,

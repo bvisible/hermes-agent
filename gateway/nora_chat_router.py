@@ -616,6 +616,9 @@ def classify(
     except Exception as exc:  # noqa: BLE001 — any failure must degrade to DIRECT
         logger.warning("nora_chat_router: classifier failed, falling back to DIRECT: %s", exc)
         return "DIRECT"
+    # //// Neoffice — the verdict is logged (05.09): a job-page write went DIRECT with no
+    # line in the log, and nothing said whether Olares answered 'direct' or nothing. ////
+    logger.info("nora_chat_router: classifier raw=%r", raw[:80])
     tokens = _TOKEN_RE.findall(raw)
     for tok in tokens:
         if tok == "recurrent":
@@ -888,6 +891,23 @@ def route_chat_message(
     # ventes pole owns the job tools; compta/analyse keep money and charts questions.
     if category in ("rh", "support") and _page_project(page_context):
         logger.info("nora_chat_router: %s → ventes (job page %s)", category, _page_project(page_context))
+        category = "ventes"
+    # //// END Neoffice ////
+    # //// Neoffice — on a job page, DIRECT is only for small talk (05.09). « Ajoute sur ce
+    # chantier l'ouvrage … » came back DIRECT (a 'direct' verdict, or no verdict at all on a
+    # freshly restarted gateway whose auxiliary runtime is unset until the first agent run):
+    # the orchestrator then wrote its own task body WITHOUT the page context, and the ventes
+    # worker guessed the job from keywords (« chambre », « peinture »). A business sentence
+    # on a job page belongs to ventes. Canned small talk and the capability question were
+    # settled before classify; a greeting-shaped message stays DIRECT.
+    if (
+        category == "DIRECT"
+        and not _canned_text
+        and _page_project(page_context)
+        and not _DIRECT_RE.match((message or "").strip())
+        and not _CAPABILITY_RE.match((message or "").strip())
+    ):
+        logger.info("nora_chat_router: DIRECT → ventes (job page %s)", _page_project(page_context))
         category = "ventes"
     # //// END Neoffice ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
