@@ -763,6 +763,11 @@ def _fast_answer(
     payload = {"user": user, "message": message}
     if (context or "").strip():
         payload["context"] = context.strip()[:1500]
+    # //// Neoffice — the conversation id keys the PAGE context on the desk side
+    # (nora_page_context:<cid>): the docked job panel stores the project there, and
+    # « on en est où sur ce chantier ? » is answered in code from it (05.09).
+    if (extra.get("conversation_id") or "").strip():
+        payload["conversation_id"] = str(extra.get("conversation_id")).strip()[:64]
     body = _json.dumps(payload).encode()
     req = urllib.request.Request(
         url, data=body, method="POST",
