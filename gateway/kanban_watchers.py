@@ -54,6 +54,35 @@ _LOCAL_PATH_RE = re.compile(
 )
 
 
+# //// Neoffice — added. The `gave_up` event carries two very different situations and
+# telling them apart inline got it wrong: a tripped circuit breaker (three crashed runs)
+# sets the task to `blocked` and emits `gave_up`, and the old condition
+# `status != "gave_up"` skipped exactly that — the desk stayed silent after "je transmets
+# votre demande à votre pôle" and the user never learned the request had died
+# (tracker #246). A pure function so the rule is testable instead of re-derived.
+def _gave_up_delivery(status: str, result: str, payload: dict | None) -> str | None:
+    """What to tell the user about a ``gave_up`` event — or nothing.
+
+    Returns ``"breaker"`` (auto-blocked after repeated failures: the request ends
+    here and the user must be told), ``"give_up"`` (the worker genuinely gave up),
+    or ``None`` to stay silent because something else already speaks for this task.
+    """
+    payload = payload or {}
+    if (result or "").strip():
+        # The worker produced a real outcome; its own event delivered it.
+        return None
+    if "protocol violation" in str(payload.get("error", "")).lower():
+        # Internal protocol noise — the task is retried, nothing to announce.
+        return None
+    status = (status or "").strip()
+    if status == "blocked" and payload.get("failures"):
+        return "breaker"
+    if status == "gave_up":
+        return "give_up"
+    # ready / review / running: a retry is in flight, its outcome will speak.
+    return None
+
+
 def _safe_review_reason(value: Any, limit: int = 160) -> str:
     """Return a mobile-friendly review reason safe for external delivery."""
     from agent.redact import redact_sensitive_text
@@ -744,23 +773,29 @@ class GatewayKanbanWatchersMixin:
                                 # //// END Neoffice ////
                             msg = f"✋ {dom}{reason}"
                         elif kind == "gave_up":
-                            # //// Neoffice — the gave_up event is an INTERNAL recovery signal
-                            # the spawn-finalize emits ON TOP OF the worker's real terminal
-                            # outcome (a worker that blocked with a reason or completed with a
-                            # result still trips it). Surfacing a generic "aboutir" double-posted
-                            # on the desk and could be picked over the real answer. Skip it when
-                            # the task actually produced an outcome OR is being retried OR it's a
-                            # mere protocol violation; only surface a give-up when there is
-                            # genuinely none. grep "//// Neoffice".
-                            _gu_res = (getattr(task, "result", "") or "").strip() if task else ""
-                            _gu_st = (getattr(task, "status", "") or "") if task else ""
-                            _gu_err = str((ev.payload or {}).get("error", "")).lower() if ev.payload else ""
-                            if _gu_res or _gu_st != "gave_up" or "protocol violation" in _gu_err:
-                                continue
-                            msg = (
-                                f"✋ {dom} — je n'ai pas pu aboutir sur cette demande. "
-                                f"Pouvez-vous la reformuler ?"
+                            # //// Neoffice — the gave_up event is emitted both as an INTERNAL
+                            # recovery signal on top of a worker's real outcome AND by a tripped
+                            # circuit breaker, which is the end of the request and must reach the
+                            # user. The rule lives in _gave_up_delivery() — it is subtle enough
+                            # that it was wrong once and left the desk silent (#246).
+                            # grep "//// Neoffice".
+                            _gu_kind = _gave_up_delivery(
+                                (getattr(task, "status", "") or "") if task else "",
+                                (getattr(task, "result", "") or "") if task else "",
+                                ev.payload,
                             )
+                            if not _gu_kind:
+                                continue
+                            if _gu_kind == "breaker":
+                                msg = (
+                                    f"✋ {dom} — je n'ai pas pu traiter votre demande : "
+                                    f"incident technique répété. Pouvez-vous la renvoyer ?"
+                                )
+                            else:
+                                msg = (
+                                    f"✋ {dom} — je n'ai pas pu aboutir sur cette demande. "
+                                    f"Pouvez-vous la reformuler ?"
+                                )
                         elif kind == "crashed":
                             msg = f"✋ {dom} — incident technique, je réessaie."
                         elif kind == "timed_out":
