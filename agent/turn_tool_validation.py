@@ -91,6 +91,18 @@ def validate_tool_calls(
     for tc in tool_calls:
         if tc.function.name not in valid_names:
             repaired = agent._repair_tool_call(tc.function.name)
+            if not repaired:
+                # //// Neoffice — MCP-prefix tolerance. Some models (Mistral notably) emit
+                # //// the BARE tool name (frappe_revenue_summary) instead of the registered
+                # //// MCP-prefixed one (mcp_<server>_frappe_revenue_summary), which upstream
+                # //// reports as "Unknown tool" and burns the 3-strike budget. Resolve by
+                # //// UNIQUE suffix match only: a real hallucination (frappe.get_all) matches
+                # //// nothing and stays unknown. Drop if upstream ever normalises MCP names.
+                _bare = tc.function.name
+                _cands = [v for v in valid_names if v.endswith("_" + _bare)]
+                if len(_cands) == 1:
+                    repaired = _cands[0]
+                # //// END Neoffice ////
             if repaired:
                 print(f"{agent.log_prefix}🔧 Auto-repaired tool name: '{tc.function.name}' -> '{repaired}'")
                 tc.function.name = repaired
