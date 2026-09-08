@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+# //// Neoffice — needed by the accounting-block guard and the gave_up rule below.
+import re
+# //// END Neoffice ////
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -35,6 +38,129 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"}
 _GC_INTERVAL_SECONDS = 3600.0
 _HEALTH_WINDOW = 6
+
+
+# //// Neoffice — event-driven dispatch poke. The dispatcher used to discover a
+# new task only at its NEXT periodic tick (0..interval seconds of pure waiting;
+# measured 3 s on a live run — the single biggest e2e variance). The chat
+# router runs in the SAME process/loop, so it can wake the dispatcher the
+# instant it creates a task. Best-effort by design: without the event the
+# periodic tick still guarantees progress.
+KANBAN_POKE: "asyncio.Event | None" = None
+
+
+def poke_kanban_dispatcher() -> None:
+    """Wake the dispatcher loop now (same-loop callers only; best-effort)."""
+    ev = KANBAN_POKE
+    if ev is not None:
+        try:
+            ev.set()
+        except Exception:
+            pass
+# //// END Neoffice ////
+
+
+# //// Neoffice — added. The `gave_up` event carries two very different situations and
+# telling them apart inline got it wrong: a tripped circuit breaker (three crashed runs)
+# sets the task to `blocked` and emits `gave_up`, and the old condition
+# `status != "gave_up"` skipped exactly that — the desk stayed silent after "je transmets
+# votre demande à votre pôle" and the user never learned the request had died
+# (tracker #246). A pure function so the rule is testable instead of re-derived.
+def _gave_up_delivery(status: str, result: str, payload: dict | None) -> str | None:
+    """What to tell the user about a ``gave_up`` event — or nothing.
+
+    Returns ``"breaker"`` (auto-blocked after repeated failures: the request ends
+    here and the user must be told), ``"give_up"`` (the worker genuinely gave up),
+    or ``None`` to stay silent because something else already speaks for this task.
+    """
+    payload = payload or {}
+    if (result or "").strip():
+        # The worker produced a real outcome; its own event delivered it.
+        return None
+    if "protocol violation" in str(payload.get("error", "")).lower():
+        # Internal protocol noise — the task is retried, nothing to announce.
+        return None
+    status = (status or "").strip()
+    if status == "blocked" and payload.get("failures"):
+        return "breaker"
+    if status == "gave_up":
+        return "give_up"
+    # ready / review / running: a retry is in flight, its outcome will speak.
+    return None
+
+
+def _safe_review_reason(value: Any, limit: int = 160) -> str:
+    """Return a mobile-friendly review reason safe for external delivery."""
+    from agent.redact import redact_sensitive_text
+
+    reason = redact_sensitive_text(
+        "" if value is None else str(value),
+        force=True,
+        redact_url_credentials=True,
+    )
+    reason = _LOCAL_PATH_RE.sub("[local path]", reason)
+    reason = " ".join(reason.split())
+    if len(reason) > limit:
+        reason = reason[: limit - 1].rstrip() + "…"
+    return reason
+
+# //// Neoffice — deterministic anti-hallucination guard for blocked Swiss-
+# accounting allocation questions. A worker may correctly block for a missing
+# fact yet still leak speculative account numbers in the explanation around its
+# question. The user-facing notifier keeps only explicit, number-free questions
+# for this narrow class of task; the complete raw reason remains in Kanban for
+# auditors. This is a delivery guard, never an accounting decision engine.
+_ACCOUNT_ALLOCATION_MARKERS = (
+    "imput", "quel compte", "dans quel compte", "compte comptable",
+    "numéro de compte", "numero de compte", "account allocation",
+)
+_ACCOUNT_NUMBER_RE = re.compile(r"(?<!\d)\d{3,4}(?:[.,]\d+)?(?!\d)")
+_QUESTION_FRAGMENT_RE = re.compile(r"(?:^|(?<=[.!?])\s+|\n+)([^\n.!?]*\?)")
+_ACCOUNTING_BLOCK_FALLBACK = (
+    "Quelle information factuelle manque-t-il pour départager les traitements "
+    "comptables possibles ?"
+)
+_ACTIVATION_CLARIFICATION = (
+    "Quel est le montant de l'achat et quelle politique ou quel seuil "
+    "d'activation votre entreprise applique-t-elle à ce type de matériel ?"
+)
+
+
+def _safe_accounting_block_reason(
+    reason: str,
+    *,
+    assignee: str | None,
+    title: str = "",
+    body: str = "",
+) -> str:
+    """Remove speculative account proposals from a blocked delivery.
+
+    The rule is deliberately narrow: only the ``compta`` profile and tasks
+    explicitly about choosing an account are filtered. Other blocked reasons
+    (including legal references, ticket numbers and dates) are unchanged.
+    """
+    cleaned = str(reason or "").strip()
+    context = f"{title}\n{body}".lower()
+    if assignee != "compta" or not any(
+        marker in context for marker in _ACCOUNT_ALLOCATION_MARKERS
+    ):
+        return cleaned[:600]
+
+    questions = []
+    for match in _QUESTION_FRAGMENT_RE.finditer(cleaned):
+        question = " ".join(match.group(1).split())
+        if question and not _ACCOUNT_NUMBER_RE.search(question):
+            questions.append(question)
+    if not questions:
+        ambiguity = f"{context}\n{cleaned.lower()}"
+        if "activation" in ambiguity and any(
+            marker in ambiguity for marker in ("montant", "seuil", "immobil", "ordinateur")
+        ):
+            return _ACTIVATION_CLARIFICATION
+        return _ACCOUNTING_BLOCK_FALLBACK
+    return " ".join(questions)[:600]
+# //// END Neoffice ////
+
 
 
 class GatewayKanbanWatchersMixin:
@@ -76,6 +202,20 @@ class GatewayKanbanWatchersMixin:
             return
 
         sub_fail_counts: dict[tuple, int] = getattr(self, "_kanban_sub_fail_counts", {})
+
+        # //// Neoffice — the notifier delivers the worker's terminal result to the user;
+        # upstream's 5s poll adds up to ~5s of pure DELIVERY latency to every métier reply
+        # (a big chunk of the "20-30s" complaint). Make it config-driven
+        # (kanban.notifier_interval_seconds, default 1s) so results reach the voice/desk
+        # client promptly. The poll is a light SQLite read in a thread, so 1s is fine.
+        try:
+            from hermes_cli.config import load_config as _load_config
+            _kcfg = (_load_config() or {}).get("kanban", {})
+            interval = float(_kcfg.get("notifier_interval_seconds", 1.0) or 1.0)
+        except Exception:
+            interval = 1.0
+        interval = max(interval, 1.0)  # the tick sleeps in whole seconds
+        # //// END Neoffice ////
         self._kanban_sub_fail_counts = sub_fail_counts
         notifier_profile = getattr(self, "_kanban_notifier_profile", None) or self._active_profile_name()
         self._kanban_notifier_profile = notifier_profile
@@ -231,6 +371,10 @@ class GatewayKanbanWatchersMixin:
         return _load_config, _kb, kanban_cfg
 
     async def _kanban_dispatcher_watcher(self) -> None:
+        # //// Neoffice — register the poke event for event-driven dispatch.
+        global KANBAN_POKE
+        KANBAN_POKE = asyncio.Event()
+        # //// END Neoffice ////
         """Embedded kanban dispatcher — one tick every `dispatch_interval_seconds`.
 
         Gated by `kanban.dispatch_in_gateway` (default True); when false the
@@ -301,6 +445,25 @@ class GatewayKanbanWatchersMixin:
             except Exception:
                 logger.exception("kanban dispatcher: unexpected watcher error")
 
+            # Sleep in 1s slices so shutdown is snappy — otherwise a stop()
+            # waits up to `interval` seconds for the current sleep to finish.
+            # //// Neoffice — a poke (task created by the chat router) breaks
+            # the wait immediately: dispatch happens the instant work exists
+            # instead of at the next periodic tick.
+            slept = 0.0
+            while slept < interval and self._running:
+                ev = KANBAN_POKE
+                if ev is not None:
+                    try:
+                        await asyncio.wait_for(ev.wait(), timeout=min(1.0, interval - slept))
+                        ev.clear()
+                        break  # poked → tick now
+                    except asyncio.TimeoutError:
+                        pass
+                else:
+                    await asyncio.sleep(min(1.0, interval - slept))
+                slept += 1.0
+            # //// END Neoffice ////
             await self._sleep_between_ticks(interval)
 
         self._release_kanban_dispatcher_lock()

@@ -589,6 +589,41 @@ def finalize_turn(
     agent.clear_interrupt()
     agent._stream_callback = None  # don't leak into future calls
 
+    # //// Neoffice — deterministic auto-complete net for kanban workers. A weak model
+    # (Gemma/Qwen) sometimes emits its final answer as TEXT and exits WITHOUT calling
+    # kanban_complete → the dispatcher logs a "protocol violation" and RESPAWNS the task
+    # (2x latency + a delivery flake). If this worker is on a kanban task STILL 'running'
+    # at turn finalization, complete it IN CODE with the final answer — exactly what
+    # kanban_complete would have done (incl. the completed event the desk notifier delivers).
+    # Re-read the live status and only fire on 'running': a legitimate kanban_block /
+    # kanban_complete must never be overridden. Gated on HERMES_KANBAN_TASK → zero impact on
+    # the orchestrator / interactive / DIRECT chat. grep "//// Neoffice".
+    _kb_task_id = os.environ.get("HERMES_KANBAN_TASK")
+    _kb_answer = final_response.strip() if isinstance(final_response, str) else ""
+    if _kb_task_id and _kb_answer and _kb_answer != "(empty)":
+        try:
+            from hermes_cli import kanban_db as _kb_net
+            _kb_conn = _kb_net.connect(board=os.environ.get("HERMES_KANBAN_BOARD") or None)
+            try:
+                _kb_row = _kb_conn.execute(
+                    "SELECT status FROM tasks WHERE id = ?", (_kb_task_id,)
+                ).fetchone()
+            finally:
+                _kb_conn.close()
+            if _kb_row and _kb_row[0] == "running":
+                from tools.kanban_tools import _handle_complete as _kb_handle_complete
+                _kb_handle_complete({"summary": _kb_answer[:4000]})
+                logger.info(
+                    "kanban auto-complete net: completed %s in code "
+                    "(worker answered but never called kanban_complete)",
+                    _kb_task_id,
+                )
+        except Exception as _kb_net_exc:  # noqa: BLE001
+            logger.warning(
+                "kanban auto-complete net failed for %s: %s", _kb_task_id, _kb_net_exc
+            )
+    # //// END Neoffice ////
+
     # Skill trigger is checked NOW — based on how many tool iterations THIS turn used.
     _should_review_skills = (
         agent._skill_nudge_interval > 0

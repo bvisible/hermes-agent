@@ -680,6 +680,18 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     text = str(message or "").strip()
     if not text:
         return None
+    #//// Neoffice — the webhook platform is NOT a programmatic surface for us: its
+    #//// routes (nora_chat desk/mobile, whatsapp_inbox) end in a customer's chat.
+    #//// Upstream keeps webhook in _GATEWAY_RAW_TEXT_PLATFORMS, so interim status
+    #//// callbacks ("⏳ Retrying in 2.9s (attempt 1/3)...", fallback notices,
+    #//// compression chatter) were delivered to the desk as if they were NORA's
+    #//// reply — and the Quick Chat, taking that bubble for the final answer,
+    #//// stopped polling: the worker's real answer arrived 70 s later and was never
+    #//// shown (dmis, 2026-09-01, Olares 503). The desk has its own "thinking"
+    #//// indicator; the final reply or the failure notice is all it must receive.
+    if _gateway_platform_value(platform) == "webhook":
+        return None
+    #//// END Neoffice ////
     if _gateway_surface_passes_raw_text(platform):
         return text
 

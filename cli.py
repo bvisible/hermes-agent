@@ -4091,12 +4091,23 @@ def _run_quiet_single_query(cli, effective_query):
     _exit_code = 0
     if isinstance(result, dict) and result.get("failed"):
         _exit_code = 1
-        if os.environ.get("HERMES_KANBAN_TASK") and result.get("failure_reason") in ("rate_limit", "billing"):
+        # //// Neoffice — `overloaded` (503/529) and `upstream_rate_limit` belong in this
+        # //// tuple too. Our model server (Olares) answers a saturated queue with 503 +
+        # //// Retry-After instead of a bare 502 — a deliberate contract so the caller can
+        # //// wait instead of dying. Without these two, such a run exited 1, the task
+        # //// counted a real failure, and after three the breaker blocked the card for a
+        # //// fault that was never the task's (WI-00355: 1808 model calls in 3h44, 32%
+        # //// failed, no imputation ever completed on lo-alabouche). Infrastructure being
+        # //// busy is not the task being broken. Drop if upstream folds these reasons in.
+        if os.environ.get("HERMES_KANBAN_TASK") and result.get("failure_reason") in (
+            "rate_limit", "billing", "overloaded", "upstream_rate_limit",
+        ):
             try:
                 from hermes_cli.kanban_db import KANBAN_RATE_LIMIT_EXIT_CODE as _RL_CODE
                 _exit_code = _RL_CODE
             except Exception:
                 _exit_code = 1
+        # //// END Neoffice ////
     sys.exit(_exit_code)
 
 

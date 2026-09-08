@@ -18,6 +18,10 @@ from agent.context_compressor import (
 from agent.lazy_forward import forward as _forward, forward_static as _forward_static
 from agent.memory_manager import sanitize_context
 
+# //// Neoffice — shared with the webhook delivery path; see neoffice_branding.py.
+from neoffice_branding import strip_internal_mechanics as _neoffice_strip
+# //// END Neoffice ////
+
 from agent.tool_dispatch_helpers import _is_multimodal_tool_result, _multimodal_text_summary
 from agent.trajectory import save_trajectory as _save_trajectory_to_file
 from agent.transcript_repair import sync_flushed_message_markers
@@ -160,6 +164,18 @@ def _db_flush_row(agent, msg: Dict, is_current_turn_user: bool) -> Dict[str, Any
         and sanitize_context(content).strip() != content.strip()
     ):
         api_content = content
+    # //// Neoffice — branding filter on the PERSISTED transcript. Runs after the
+    # //// api_content sidecar above, so the sidecar keeps wire-truth (replay fidelity)
+    # //// while the saved transcript matches what the customer actually received. NORA
+    # //// speaks as one assistant: a persisted assistant message must not leak the
+    # //// internal machinery ("le spécialiste de la compta", "tâche kanban", mem0,
+    # //// hermes, olares, mcp, worker, board) — the delivery filter strips the same
+    # //// terms on the way out, and a transcript that disagrees with the chat confuses
+    # //// support. Local variable only: the in-memory message and every user/tool row
+    # //// stay intact. Drop when the assistant no longer names its own internals.
+    if role == "assistant":
+        content = _neoffice_strip(content)
+    # //// END Neoffice ////
     # Key order is the divert-JSONL wire order (divert_session_transcript_jsonl).
     row = {
         "role": role, "content": _durable_content(content), "tool_name": msg.get("tool_name"),

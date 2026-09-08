@@ -407,6 +407,21 @@ class AIAgent(
         # Copilot x-initiator: True for the first API call of a user turn, False for tool-loop follow-ups.
         self._is_user_initiated_turn = False
 
+        # //// Neoffice — Kanban worker no-progress / narration-loop breaker (conversation_loop).
+        # Counts consecutive assistant turns that made no real progress (only
+        # kanban_comment/show/heartbeat or text-only narration — no business or
+        # terminal tool). Reset to 0 on any progress/terminal turn. Drives a
+        # one-shot nudge then a deterministic kanban_block. No-op outside
+        # dispatcher-spawned workers (gated on HERMES_KANBAN_TASK at the call site).
+        self._kanban_no_progress_streak = 0
+        self._kanban_no_progress_nudged = False
+        # Structural signal for the auto-complete net (cli.py): True once the
+        # worker called at least one REAL business/MCP tool this run. The net
+        # only delivers a result when this is True — a worker that only
+        # narrated/commented has no genuine result to deliver. Deterministic
+        # (set by the no-progress classifier), not guessed from the text.
+        self._kanban_made_progress = False
+        # //// END Neoffice ////
         self._transition_context_engine_session(
             old_session_id=old_session_id, new_session_id=getattr(self, "session_id", None),
             previous_messages=previous_messages, carry_over_context=carry_over_context, reset_engine=True,
@@ -727,6 +742,65 @@ class AIAgent(
         return not self._has_natural_response_ending(visible_text)
 
     _looks_like_codex_intermediate_ack = _forward("agent.agent_runtime_helpers", "looks_like_codex_intermediate_ack")
+
+    # //// Neoffice — the two methods below back the kanban no-progress breaker
+    # //// (agent/neoffice_kanban_breaker.py): _kanban_worker_run_id scopes a force-block
+    # //// to OUR dispatcher run so it no-ops once the task was reclaimed, and
+    # //// _force_kanban_block_no_progress writes the block in code when the model will
+    # //// not. Upstream has no worker progress breaker; drop both if it ships one.
+    def _kanban_worker_run_id(self, task_id: str) -> Optional[int]:
+        """This worker's dispatcher run id when scoped to ``task_id`` (else None).
+
+        Mirrors ``tools.kanban_tools._worker_run_id`` so a force-block only fires
+        on OUR run (no-op if the dispatcher already reclaimed the task)."""
+        import os as _os
+        if _os.environ.get("HERMES_KANBAN_TASK") != task_id:
+            return None
+        raw = _os.environ.get("HERMES_KANBAN_RUN_ID")
+        if not raw:
+            return None
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+
+    def _force_kanban_block_no_progress(self, task_id: str, streak: int) -> str:
+        """Deterministically block a narration-looping worker's task.
+
+        Driven by the no-progress breaker in ``conversation_loop`` (not the
+        model). Transitions ``running -> blocked`` so the task surfaces on the
+        board for human input (the KANBAN_GUIDANCE escape hatch) instead of
+        silently looping to the iteration cap. Best-effort — never raises into
+        the loop. Returns the French reason to deliver as the final response."""
+        reason = (
+            f"Boucle détectée : le worker n'a pas appelé d'outil métier après "
+            f"{streak} tours (narration en boucle) — tâche mise en attente."
+        )
+        try:
+            from hermes_cli import kanban_db as _kb
+            conn = _kb.connect()
+            try:
+                _kb.block_task(
+                    conn, task_id,
+                    reason=reason,
+                    expected_run_id=self._kanban_worker_run_id(task_id),
+                )
+                logger.warning(
+                    "force-blocked kanban task %s after %d non-progress turns",
+                    task_id, streak,
+                )
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        except Exception:
+            logger.warning(
+                "force kanban_block failed for %s", task_id, exc_info=True
+            )
+        return reason
+    # //// END Neoffice ////
+
     _extract_reasoning = _forward("agent.agent_runtime_helpers", "extract_reasoning")
     _cleanup_task_resources = _forward("agent.chat_completion_helpers", "cleanup_task_resources")
 

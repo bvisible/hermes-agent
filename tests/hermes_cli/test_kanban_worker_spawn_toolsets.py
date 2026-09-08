@@ -133,7 +133,14 @@ def test_default_spawn_model_override_survives_real_cli_parse(monkeypatch, tmp_p
 
     assert args.command == "chat"
     assert args.model == "gpt-5.6-sol"
-    assert args.query == "work kanban task t_spawn_tools"
+    # //// Neoffice — upstream asserts the query is EXACTLY "work kanban task <id>". Our
+    # //// dispatcher inlines the card after that header (see _neoffice_worker_prompt) so a
+    # //// self-contained worker skips the mandatory kanban_show round-trip, which means the
+    # //// literal equality can never hold on this fork — it was red here before the
+    # //// v2026.9.7 port too. What this test actually guards is that the model override
+    # //// survives the real CLI parse, so assert the header as a prefix and keep the rest of
+    # //// the contract intact. Restore the equality if the inlining is ever dropped.
+    assert args.query.startswith("work kanban task t_spawn_tools")
 
 
 def test_resolve_worker_cli_toolsets_uses_profile_home_not_parent_config(monkeypatch, tmp_path):

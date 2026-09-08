@@ -2025,6 +2025,55 @@ def _worker_terminal_timeout_env(
     return str(desired)
 
 
+
+# //// Neoffice — added helper (no upstream equivalent): builds the spawn prompt that
+# //// inlines the card, plus the accounting protocol for the compta pole. See the call
+# //// site in the spawn builder for why.
+def _neoffice_worker_prompt(task: Any) -> str:
+    """Spawn prompt carrying the task itself, so a self-contained worker skips kanban_show."""
+    import re as _re
+    import unicodedata as _unicodedata
+
+    from hermes_cli.profiles import normalize_profile_name
+
+    prompt = f"work kanban task {task.id}"
+    title = (task.title or "").strip()
+    body = (task.body or "").strip()
+    if body == title:
+        body = ""
+    ctx = (title + "\n\n" + body).strip()
+    if not ctx:
+        return prompt
+    prompt += (
+        "\n\n[kanban_show — ALREADY EXECUTED for this task; the FULL task is below. "
+        "Do NOT call kanban_show for THIS task]\n\n" + ctx[:6000]
+    )
+    # A concrete accounting answer must start from the tenant's real chart, never from a
+    # plausible Käfer-family number found in doctrine. Stating the protocol in the task
+    # prompt puts it at the decision point, so a weak worker does not burn its context on
+    # repeated wiki reads after the completion gate rejects a guess.
+    if normalize_profile_name(task.assignee) != "compta":
+        return prompt
+    folded = _unicodedata.normalize("NFKD", ctx.lower())
+    folded = "".join(ch for ch in folded if not _unicodedata.combining(ch))
+    if _re.search(
+        r"(?:dans quel compte|quel compte(?: exact)?|ou imputer|ou passer cette "
+        r"depense|imput(?:er|ation).{0,100}(?:facture|depense)|compte.{0,100}imput)",
+        folded,
+    ):
+        # French: this protocol is read by the model that answers a French-speaking customer.
+        prompt += (
+            "\n\n[PROTOCOLE OBLIGATOIRE — IMPUTATION DANS LE PLAN REEL]\n"
+            "Premier geste: appelle mcp__neoffice_compta__get_chart_of_accounts. Conserve "
+            "dans la requête les noms économiques distinctifs de la facture; ne les remplace "
+            "pas par un terme générique. Le wiki fournit la doctrine, jamais la preuve qu'un "
+            "numéro existe chez ce tenant. Inspecte le numéro ET le libellé renvoyés par le "
+            "plan réel avant de répondre et avant kanban_complete. Ne relis pas le wiki pour "
+            "contourner cette étape.]"
+        )
+    return prompt
+# //// END Neoffice ////
+
 def _resolve_worker_cli_toolsets(hermes_home: Optional[str]) -> Optional[list[str]]:
     """Return the assigned profile's effective CLI toolsets for a worker.
 
@@ -2114,7 +2163,19 @@ def _worker_argv(task: Task, profile_arg: str, hermes_home: Optional[str]) -> li
     worker_toolsets = _resolve_worker_cli_toolsets(hermes_home)
     if worker_toolsets:
         cmd.extend(["--toolsets", ",".join(worker_toolsets)])
-    cmd.extend(["chat", "-q", f"work kanban task {task.id}"])
+    # //// Neoffice — inline the task in the spawn prompt instead of sending the bare
+    # //// "work kanban task <id>". The mandatory first kanban_show is the single biggest
+    # //// avoidable latency in a worker run (~3 s: one full Olares turn at ~2.5 s plus the
+    # //// tool round-trip), and for a self-contained task it returns exactly what the
+    # //// prompt could already carry. KANBAN_GUIDANCE tells the model it may skip that
+    # //// read, but the weak worker model obeys only intermittently — framing the prompt
+    # //// as the ALREADY EXECUTED read removes the reason to call it at all. Reading OTHER
+    # //// tasks (parent handoffs, retries) stays legitimate and untouched. The chat router
+    # //// creates tasks whose body IS the title, hence the dedupe. Drop when the dispatcher
+    # //// inlines the card itself.
+    _worker_prompt = _neoffice_worker_prompt(task)
+    cmd.extend(["chat", "-q", _worker_prompt])
+    # //// END Neoffice ////
     if task.goal_mode:
         # The kanban goal-loop hook only runs in cli.py's fully-quiet branch.
         # Without -Q the worker gets one turn, prints text, exits rc=0, and the

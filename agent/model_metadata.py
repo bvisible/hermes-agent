@@ -652,7 +652,13 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
     waterfall = (
         ("lm-studio", (f"{lmstudio_url}/api/v1/models",), lambda r: True),
         ("ollama", (f"{server_url}/api/tags",), lambda r: "models" in r.json()),
-        ("llamacpp", (f"{server_url}/v1/props", f"{server_url}/props"), lambda r: "default_generation_settings" in r.text),
+        # //// Neoffice — /props probed FIRST (upstream order is /v1/props then /props).
+        # //// Our llama.cpp build (b10450, Olares) serves only the unprefixed route, so the
+        # //// upstream order costs a guaranteed 404 on every probe — 767 wasted round trips
+        # //// a day, measured 2026-09-01. Builds that do expose /v1/props still resolve via
+        # //// the second entry. Drop this swap once the fleet's llama.cpp serves /v1/props.
+        ("llamacpp", (f"{server_url}/props", f"{server_url}/v1/props"), lambda r: "default_generation_settings" in r.text),
+        # //// END Neoffice ////
         ("vllm", (f"{server_url}/version",), lambda r: "version" in r.json()),
     )
     result: Optional[str] = None
@@ -855,14 +861,20 @@ def _lmstudio_native_models(normalized: str, headers: Dict[str, str]) -> Dict[st
 
 
 def _apply_llamacpp_props(cache: Dict[str, Dict[str, Any]], request_candidate: str, headers: Dict[str, str], verify) -> None:
-    """Overwrite ``context_length`` with llama.cpp's allocated ``n_ctx`` from /props (``/v1/props``, then
-    ``/props`` for older builds). In router mode the bare endpoint 400s, so each LOADED child is read
+    """Overwrite ``context_length`` with llama.cpp's allocated ``n_ctx`` from /props (``/props``, then
+    ``/v1/props``). In router mode the bare endpoint 400s, so each LOADED child is read
     via ``/props?model=``; unloaded children are skipped — probing could autoload them."""
     base = request_candidate.rstrip("/").replace("/v1", "")
     def _props(params=None):
-        resp = requests.get(base + "/v1/props", params=params, headers=headers, timeout=5, verify=verify)
+        # //// Neoffice — /props probed FIRST (upstream tries /v1/props first). Our
+        # //// llama.cpp build (b10450, Olares) serves only the unprefixed route, so the
+        # //// upstream order spends a guaranteed 404 on every metadata lookup. Builds
+        # //// that expose /v1/props still resolve via the fallback below. Same swap as
+        # //// the transport waterfall above. Drop once the fleet serves /v1/props.
+        resp = requests.get(base + "/props", params=params, headers=headers, timeout=5, verify=verify)
         if not resp.ok:
-            resp = requests.get(base + "/props", params=params, headers=headers, timeout=5, verify=verify)
+            resp = requests.get(base + "/v1/props", params=params, headers=headers, timeout=5, verify=verify)
+        # //// END Neoffice ////
         return resp
     def _n_ctx(props: Dict[str, Any]) -> Any:
         return (props.get("default_generation_settings") or {}).get("n_ctx")

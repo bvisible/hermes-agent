@@ -30,6 +30,9 @@ except ImportError:
     web = None  # type: ignore[assignment]
 
 from gateway.config import Platform, PlatformConfig
+# //// Neoffice — shared with the persisted-transcript path; see neoffice_branding.py.
+from neoffice_branding import strip_internal_mechanics
+# //// END Neoffice ////
 from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.webhook_filters import DEFAULT_SCRIPT_TIMEOUT_SECONDS, WebhookRouteProcessor
@@ -250,13 +253,64 @@ class WebhookAdapter(BasePlatformAdapter):
         if is_autonomous_silence_response(content):
             logger.info("[webhook] Response for %s is a silence marker — not delivering", chat_id)
             return SendResult(success=True)
+
+        # //////////////////////////////////////////////////////////////////////////
+        # //// Neoffice — desk delivery: branding anti-leak (was tagged "NORA CORE PATCH",
+        # //// the legacy alias) + async desk conversation_id rebuild. grep "//// Neoffice"
+        # //// across the tree to list every divergence before an upstream rebase.
+        # //////////////////////////////////////////////////////////////////////////
+        # Branding: for the customer there is only Nora. Strip the internal vocabulary the
+        # model may still emit in a reply or an ack ("le spécialiste `compta`…", "kanban").
+        # Runs once, at the single delivery chokepoint. The SAME rules are applied to the
+        # persisted transcript (agent/session_persistence.py) so the saved conversation and
+        # the delivered one cannot disagree — hence one shared module, not two copies.
+        content = strip_internal_mechanics(content)
         delivery = self._delivery_info.get(chat_id, {})
+        # NORA #41: an async kanban notifier delivery carries the desk conversation_id
+        # in metadata. The volatile _delivery_info may have expired (1h TTL) or never
+        # resolved the "{conversation_id}" placeholder; rebuild a delivery from the
+        # STABLE route config (callback_url/token) + that conversation_id so the late
+        # reply still reaches the desk under the exact id it polls.
+        _md_cid = (metadata or {}).get("conversation_id") if metadata else None
+        if _md_cid:
+            if not delivery:
+                _rname = chat_id.split(":")[1] if chat_id.count(":") >= 1 else ""
+                _rc = self._routes.get(_rname) or {}
+                if _rc.get("deliver"):
+                    _de = dict(_rc.get("deliver_extra", {}))
+                    # NORA #41 WhatsApp fix: a kanban worker reply runs in a separate
+                    # process (no _delivery_info, no original payload), so the raw route
+                    # deliver_extra still carries the literal "{phone}". The chat_id is
+                    # session-keyed by phone -> resolve {phone} from it so the async
+                    # reply reaches the real number, not "{phone}".
+                    if any(isinstance(v, str) and "{phone}" in v for v in _de.values()):
+                        import re as _rephone
+                        _m = _rephone.search(r"\+?\d{6,}", chat_id)
+                        if _m:
+                            _ph = _m.group(0)
+                            _de = {k: (v.replace("{phone}", _ph) if isinstance(v, str) else v) for k, v in _de.items()}
+                    delivery = {"deliver": _rc["deliver"], "deliver_extra": _de}
+            if isinstance(delivery.get("deliver_extra"), dict):
+                delivery = {
+                    **delivery,
+                    "deliver_extra": {**delivery["deliver_extra"], "conversation_id": _md_cid},
+                }
+        # //// END Neoffice ////
         deliver_type = delivery.get("deliver", "log")
         if deliver_type == "log":
             logger.info("[webhook] Response for %s: %s", chat_id, content[:200])
             return SendResult(success=True)
         if deliver_type == "github_comment":
             return await self._deliver_github_comment(content, delivery)
+
+        # //// Neoffice — desk + WhatsApp deliver types (legacy alias "NORA CORE PATCH"): the
+        # //// customer chat is reached through our own adapters, not a built-in platform. ////
+        if deliver_type == "nora":
+            return await self._deliver_nora(content, chat_id, delivery)
+
+        if deliver_type == "whatsapp_router":
+            return await self._deliver_whatsapp_router(content, delivery)
+        # //// END Neoffice ////
         if self.gateway_runner and _is_known_platform(deliver_type):
             return await self._deliver_cross_platform(deliver_type, content, delivery)
         logger.warning("[webhook] Unknown deliver type: %s", deliver_type)
@@ -393,6 +447,153 @@ class WebhookAdapter(BasePlatformAdapter):
             return _PROFILE_REJECTED
         return profile if profile in served else _PROFILE_REJECTED
 
+    # //// Neoffice — direct verbatim retain into mem0 for an explicit user (no agent run).
+    # Powers NORA's end-of-day consolidation: facts already extracted + confidence-filtered
+    # Frappe-side are stored verbatim into that user's mem0 bucket. The mem0 OSS backend is a
+    # process singleton (keyed by the oss config), so a throwaway provider re-scoped to this
+    # user writes the SAME store the chat agent reads. mem0 add() blocks on Olares embeddings, so it
+    # runs in an executor — never block the aiohttp loop. Auth = the route HMAC (validated in
+    # _handle_webhook before dispatch). grep "//// Neoffice".
+    async def _handle_memory_retain(self, payload: dict) -> "web.Response":
+        user = str(payload.get("user") or "").strip()
+        raw_facts = payload.get("facts") or []
+        if not user or not isinstance(raw_facts, list):
+            return web.json_response(
+                {"error": "memory_retain requires 'user' and 'facts' (list)"}, status=400
+            )
+        # //// Neoffice — throwaway test users must never pollute the memory
+        # store: smoke tests, canaries and probes use these prefixes by
+        # convention, and their facts were showing up in the production
+        # qdrant (purged 2026-07-05). No-op with an explicit status so the
+        # test still sees a valid response shape.
+        if user.startswith(("probe-", "test-", "det-", "canary-")):
+            return web.json_response({"status": "skipped_test_user", "user": user, "stored": 0})
+        # //// END Neoffice ////
+        scope = str(payload.get("scope") or "user").lower()
+        texts: List[str] = []
+        for f in raw_facts:
+            raw = f.get("text", "") if isinstance(f, dict) else f
+            text = ("" if raw is None else str(raw)).strip()
+            if text:
+                texts.append(text)
+        if not texts:
+            return web.json_response(
+                {"status": "stored", "user": user, "stored": 0}, status=200
+            )
+
+        def _store() -> int:
+            from plugins.memory.mem0 import Mem0MemoryProvider
+
+            prov = Mem0MemoryProvider()
+            prov.initialize("memory_retain", user_id=user)
+            return prov.retain_facts(texts, scope=scope)
+
+        try:
+            stored = await asyncio.get_running_loop().run_in_executor(None, _store)
+        except Exception as e:  # noqa: BLE001 — surface as 502, never crash the loop
+            logger.exception("[webhook] memory_retain failed user=%s", user)
+            return web.json_response({"status": "error", "error": str(e)}, status=502)
+        logger.info(
+            "[webhook] memory_retain user=%s stored=%d/%d", user, stored, len(texts)
+        )
+        return web.json_response(
+            {"status": "stored", "user": user, "stored": stored}, status=200
+        )
+
+    # //// Neoffice — read a user's mem0 (profile or search) for an external caller (the
+    # real-time voice console: it talks to the LLM directly, so it never triggers the gateway's
+    # in-agent mem0 read). Mirrors _handle_memory_retain — same route HMAC (already validated in
+    # _handle_webhook), a throwaway provider re-scoped to this user, mem0 read off the aiohttp
+    # loop (FAISS + embeddings block). Returns the SAME merged per-user+company view the chat
+    # agent sees, so the voice console can know the user from the first word.
+    async def _handle_memory_read(self, payload: dict) -> "web.Response":
+        user = str(payload.get("user") or "").strip()
+        if not user:
+            return web.json_response({"error": "memory_read requires 'user'"}, status=400)
+        query = str(payload.get("query") or "").strip()
+        top_k = min(int(payload.get("top_k") or 10), 50)
+        # //// Neoffice — paging for the nightly consolidation. A profile read is
+        # capped at 100 entries and sorted newest-first, so without paging the
+        # OLDEST memories are never reachable and the dream pass could never
+        # clean them. Defaults are unchanged for every other caller. ////
+        page = max(1, int(payload.get("page") or 1))
+        page_size = min(max(1, int(payload.get("page_size") or 100)), 200)
+
+        def _read() -> dict:
+            from plugins.memory.mem0 import Mem0MemoryProvider
+
+            prov = Mem0MemoryProvider()
+            prov.initialize("memory_read", user_id=user)
+            raw = (
+                prov.handle_tool_call("mem0_search", {"query": query, "top_k": top_k})
+                if query
+                else prov.handle_tool_call(
+                    "mem0_profile", {"page": page, "page_size": page_size}
+                )
+            )
+            try:
+                return json.loads(raw)
+            except (ValueError, TypeError):
+                return {"result": str(raw)}
+
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, _read)
+        except Exception as e:  # noqa: BLE001 — surface as 502, never crash the loop
+            logger.exception("[webhook] memory_read failed user=%s", user)
+            return web.json_response({"status": "error", "error": str(e)}, status=502)
+        return web.json_response(
+            {"status": "ok", "user": user, "memory": result}, status=200
+        )
+
+    # //// Neoffice — memory_forget: retire superseded memories by id. This is the
+    # write half of NORA's nightly "dream" pass: mem0 OSS is purely ADDITIVE (see
+    # plugins/memory/mem0/__init__.py) so contradicting facts pile up — 23 distinct
+    # values for one code, measured on osiris. NORA's consolidation identifies which
+    # memories are superseded (vector recall for candidates + an LLM judging, in
+    # French, whether two facts state the same thing) and posts the losing ids here.
+    # The decision stays on NORA's side; this endpoint only executes it, mirroring
+    # our "the model classifies, the code acts" rule. Same HMAC channel as
+    # memory_retain / memory_read. grep "//// Neoffice".
+    async def _handle_memory_forget(self, payload: dict) -> "web.Response":
+        user = str(payload.get("user") or "").strip()
+        raw_ids = payload.get("ids")
+        ids = [str(i).strip() for i in raw_ids if str(i).strip()] if isinstance(raw_ids, list) else []
+        if not user or not ids:
+            return web.json_response(
+                {"error": "memory_forget requires 'user' and a non-empty 'ids' list"},
+                status=400,
+            )
+
+        def _forget() -> dict:
+            from plugins.memory.mem0 import Mem0MemoryProvider
+
+            prov = Mem0MemoryProvider()
+            prov.initialize("memory_forget", user_id=user)
+            removed, failed = 0, []
+            for memory_id in ids:
+                try:
+                    out = prov.handle_tool_call("mem0_delete", {"memory_id": memory_id})
+                    # handle_tool_call reports failures in-band as {"error": ...}
+                    if isinstance(out, str) and '"error"' in out:
+                        failed.append(memory_id)
+                    else:
+                        removed += 1
+                except Exception:  # noqa: BLE001 — one bad id must not abort the pass
+                    failed.append(memory_id)
+            return {"removed": removed, "failed": failed}
+
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, _forget)
+        except Exception as e:  # noqa: BLE001 — surface as 502, never crash the loop
+            logger.exception("[webhook] memory_forget failed user=%s", user)
+            return web.json_response({"status": "error", "error": str(e)}, status=502)
+        logger.info(
+            "[webhook] memory_forget user=%s removed=%s failed=%s",
+            user, result["removed"], len(result["failed"]),
+        )
+        return web.json_response({"status": "ok", "user": user, **result}, status=200)
+    # //// END Neoffice ////
+
     @staticmethod
     def _route_allows_profile(route_config: dict, request_profile: Optional[str]) -> bool:
         """Omitting ``profile`` binds a route to default; an explicit null/blank/non-string fails closed."""
@@ -524,6 +725,19 @@ class WebhookAdapter(BasePlatformAdapter):
         headers = request.headers
         event_type = (headers.get("X-GitHub-Event", "") or headers.get("X-GitLab-Event", "")
                       or payload.get("event_type", "") or payload.get("type", "") or "unknown")
+        # //// Neoffice — end-of-day memory consolidation write-path. NORA's nightly cron POSTs
+        # //// {event_type:"memory_retain", user:<canonical_id>, facts:[...]} signed with the SAME
+        # //// HMAC as nora_chat (validated above). Each fact is stored verbatim into that user's
+        # //// mem0 — no agent run, no LLM. Handled HERE, before the event allowlist and the
+        # //// prompt path, because it is a pure data write: an existing route's allowlist would
+        # //// otherwise drop it silently. Drop when upstream exposes a memory write endpoint.
+        if event_type == "memory_retain":
+            return await self._handle_memory_retain(payload)
+        if event_type == "memory_read":
+            return await self._handle_memory_read(payload)
+        if event_type == "memory_forget":
+            return await self._handle_memory_forget(payload)
+        # //// END Neoffice ////
         allowed_events = route_config.get("events", [])
         if allowed_events and event_type not in allowed_events:
             logger.debug("[webhook] Ignoring event %s for route %s (allowed: %s)", event_type, route_name,
@@ -557,26 +771,171 @@ class WebhookAdapter(BasePlatformAdapter):
             return web.json_response({"status": "duplicate", "delivery_id": delivery_id}, status=200)
         if route_config.get("deliver_only"):
             return await self._handle_deliver_only(prompt, payload, route_config, route_name, event_type, delivery_id)
-        return self._dispatch_agent_run(request, route_config, route_name, profile, payload, prompt, event_type,
-                                        delivery_id, now)
+        return self._dispatch_agent_run(request, route_config, route_name, profile, payload, prompt, event_type, delivery_id, now)
 
     def _dispatch_agent_run(self, request, route_config: dict, route_name: str, profile, payload: Any, prompt: str,
                             event_type: str, delivery_id: str, now: float) -> "web.Response":
         """Record delivery info, spawn the agent run, and return 202 immediately."""
-        # delivery_id in the session key → concurrent webhooks on one route get independent runs.
-        session_chat_id = f"webhook:{route_name}:{delivery_id}"
+        # //// Neoffice — per-route session_key (was tagged "NORA CORE PATCH"). Upstream always
+        # //// keys the session on delivery_id, so every inbound is an independent run — right
+        # //// for a GitHub or monitoring webhook, wrong for a conversation: each desk message
+        # //// and each WhatsApp message would start from scratch, with no context and no
+        # //// short-term memory. A route may set `session_key: phone` (or any dotted payload
+        # //// path) so every message from the same user reuses one chat_id. Default stays
+        # //// upstream's "unique". Drop when upstream supports conversational webhook routes.
+        session_key_mode = route_config.get("session_key", "unique")
+        if session_key_mode == "unique":
+            session_chat_id = f"webhook:{route_name}:{delivery_id}"
+        else:
+            # Dotted-path lookup into payload ("phone", "sender.id", ...).
+            _sk_value: Any = payload
+            for _part in session_key_mode.split("."):
+                if isinstance(_sk_value, dict):
+                    _sk_value = _sk_value.get(_part)
+                else:
+                    _sk_value = None
+                    break
+            _sk_value = (str(_sk_value).strip() if _sk_value else "") or delivery_id
+            session_chat_id = f"webhook:{route_name}:{session_key_mode}:{_sk_value}"
+        # //// END Neoffice ////
         self._delivery_info[session_chat_id] = {
             "deliver": route_config.get("deliver", "log"),
             "deliver_extra": self._render_delivery_extra(route_config.get("deliver_extra", {}), payload)}
         self._delivery_info_created[session_chat_id] = now
         self._delivery_info_order.append((now, session_chat_id))
         self._prune_delivery_info(now)
-        source = self.build_source(chat_id=session_chat_id, chat_name=f"webhook/{route_name}", chat_type="webhook",
-                                   user_id=f"webhook:{route_name}", user_name=route_name)
+
+        # //// Neoffice — deterministic chat pre-router (legacy alias "NORA CORE PATCH") ////
+        # Ministral's native routing is only ~1/3 reliable (it narrates an ack WITHOUT
+        # calling kanban_create = the "empty promise" → desk timeout; measured on the
+        # staging soak: soak-ca-004/008 answered directly, no task). For the chat routes,
+        # classify (1-word LLM) then CREATE the kanban task in code + deliver the ack
+        # deterministically. DIRECT (greetings/meta) or any failure falls through to the
+        # normal agent dispatch below — the message is never dropped. grep "//// Neoffice".
+        if route_name in ("nora_chat", "whatsapp_inbox") and isinstance(payload, dict):
+            try:
+                from agent.auxiliary_client import call_llm
+                from gateway.nora_chat_router import route_chat_message
+                from hermes_cli.profiles import get_active_profile_name
+
+                _user_msg = str(payload.get("message") or payload.get("text") or "")
+                if _user_msg.strip():
+                    _decision = route_chat_message(
+                        message=_user_msg,
+                        session_chat_id=session_chat_id,
+                        conversation_id=payload.get("conversation_id"),
+                        thread_id=None,
+                        user_id=(
+                            str(payload.get("user") or payload.get("phone") or "").strip()
+                            or f"webhook:{route_name}"
+                        ),
+                        notifier_profile=(get_active_profile_name() or "default"),
+                        idempotency_key=delivery_id,
+                        call_llm_fn=call_llm,
+                        main_runtime=None,
+                        deliver_extra=deliver_config.get("deliver_extra"),
+                        chat_user=payload.get("user"),
+                        # //// Neoffice — the desk page the user is on (send_chat posts it) ////
+                        page_context=(payload.get("context") if isinstance(payload.get("context"), dict) else None),
+                        # //// Neoffice — user's response language (multilingual ack + worker) ////
+                        language=str((payload or {}).get("language") or "").strip() or None,
+                        # //// Neoffice — phone → match a pending briefing CTA offer (WhatsApp
+                        # reply continuity); falls back to digits from the session chat_id. ////
+                        chat_phone=(
+                            str((payload or {}).get("phone") or "").strip()
+                            or str(session_chat_id or "")
+                        ),
+                    )
+                    if _decision.get("routed"):
+                        logger.info(
+                            "[webhook] nora-router %s → %s task=%s (skip agent)",
+                            route_name, _decision.get("category"),
+                            _decision.get("task_id"),
+                        )
+                        return web.json_response(
+                            {
+                                "status": "routed",
+                                "route": route_name,
+                                "category": _decision.get("category"),
+                                "task_id": _decision.get("task_id"),
+                                "delivery_id": delivery_id,
+                            },
+                            status=202,
+                        )
+            except Exception:
+                logger.exception(
+                    "[webhook] nora-router errored; agent fallback route=%s", route_name
+                )
+        # //// END Neoffice ////
+
+        # //// Neoffice — the agent fallback keeps the page (05.09). When the router lets
+        # a job-page message through (DIRECT, or any router failure), the orchestrator
+        # must still know WHICH job the user is looking at: its own kanban body said « le
+        # chantier actif de l'utilisateur » and the ventes worker guessed the project.
+        try:
+            _fb_ctx = payload.get("context") if isinstance(payload, dict) else None
+            _fb_job = _fb_ctx.get("job") if isinstance(_fb_ctx, dict) and isinstance(_fb_ctx.get("job"), dict) else {}
+            _fb_project = str((_fb_ctx or {}).get("project") or _fb_job.get("project") or "").strip() if isinstance(_fb_ctx, dict) else ""
+            if _fb_project and route_name in ("nora_chat", "whatsapp_inbox"):
+                prompt = (
+                    f"[Page context — the user is on building job {_fb_project}: « ce chantier » / "
+                    f"« ce projet » means it. Any delegation or job tool call must name "
+                    f'project="{_fb_project}"; never guess another job.]\n\n' + str(prompt or "")
+                )
+        except Exception:  # noqa: BLE001 — a context glitch must never block a message
+            pass
+        # //// END Neoffice ////
+
+        # Build source and event
+        source = self.build_source(
+            chat_id=session_chat_id,
+            chat_name=f"webhook/{route_name}",
+            chat_type="webhook",
+            # //// Neoffice — per-user mem0 scoping (desk=Frappe user, WhatsApp=phone) ////
+            user_id=(
+                str(payload.get("user") or payload.get("phone") or "").strip()
+                or f"webhook:{route_name}"
+            ),
+            # //// END Neoffice ////
+            user_name=route_name,
+        )
         if profile and isinstance(profile, str):
             source.profile = profile
-        event = MessageEvent(text=prompt, message_type=MessageType.TEXT, source=source, raw_message=payload,
-                             message_id=delivery_id)
+        # //// Neoffice — per-user response language (multilingual NORA). Carry it as a
+        # channel_prompt: a per-message ephemeral system line that lands at the BACK of the
+        # prompt (after the cached SOUL), so llama.cpp's prefix cache for the big SOUL prefix
+        # stays warm. The language is stable per conversation → cache-safe. The SOUL itself
+        # says "reply in the user's language; default French", so this just supplies it.
+        # grep "//// Neoffice".
+        _lang_code = str((payload or {}).get("language") or "").strip()
+        _lang_channel_prompt = None
+        _event_text = prompt
+        if _lang_code:
+            _lang_names = {
+                "fr": "French", "de": "German", "it": "Italian", "en": "English",
+                "es": "Spanish", "pt": "Portuguese", "nl": "Dutch", "rm": "Romansh",
+            }
+            _lang_name = _lang_names.get(_lang_code.split("-")[0].lower(), _lang_code)
+            _lang_channel_prompt = (
+                f"User language: {_lang_name}. Reply to the user in {_lang_name}."
+            )
+            # NOTE: channel_prompt is resolved from CHANNEL CONFIG (Discord/Telegram style),
+            # NOT from event.channel_prompt, on the webhook DIRECT path — so it never reaches
+            # the orchestrator here (verified: "User language" was absent from every prompt).
+            # So ALSO carry the directive on the user message for EVERY language (French
+            # INCLUDED — 2026-06-18: a cold model drifts to English even for fr when nothing is
+            # explicit): it reliably reaches the model AND sits after the cached SOUL (the user
+            # turn is always last → cache-safe). The desk shows the user's ORIGINAL text (not
+            # event.text), so this stays invisible to the user.
+            _event_text = f"(System: reply to the user in {_lang_name}. Do not reply in any other language.)\n\n{prompt}"
+        # //// END Neoffice ////
+        # //// Neoffice — text carries the language directive and channel_prompt the ephemeral
+        # //// system line (both built just above); upstream passes the raw prompt and no
+        # //// channel_prompt. Drop when the webhook DIRECT path resolves channel_prompt itself.
+        event = MessageEvent(text=_event_text, message_type=MessageType.TEXT, source=source,
+                             raw_message=payload, message_id=delivery_id,
+                             channel_prompt=_lang_channel_prompt)
+        # //// END Neoffice ////
         logger.info("[webhook] %s event=%s route=%s prompt_len=%d delivery=%s", request.method, event_type, route_name,
                     len(prompt), delivery_id)
         # The per-delivery session is closed by ``on_processing_complete`` once the run finishes
@@ -709,6 +1068,259 @@ class WebhookAdapter(BasePlatformAdapter):
         if deliver_type == "github_comment":
             return await self._deliver_github_comment(content, delivery)
         return await self._deliver_cross_platform(deliver_type, content, delivery)
+
+        # Fall through to the cross-platform dispatcher, which validates the
+        # target name and routes via the gateway runner.
+        return await self._deliver_cross_platform(
+            deliver_type, content, delivery
+        )
+
+    # //////////////////////////////////////////////////////////////////////////
+    # //// Neoffice — desk + WhatsApp delivery (legacy alias "NORA CORE PATCH")
+    # //// methods: _deliver_nora (Frappe desk callback), _deliver_whatsapp_router
+    # //// (+ vocal TTS) and _synthesize_voice_b64. grep "//// Neoffice" to audit.
+    # //////////////////////////////////////////////////////////////////////////
+    async def _deliver_whatsapp_router(
+        self, content: str, delivery: dict
+    ) -> SendResult:
+        """Deliver the agent's final response to the central Neoservice WhatsApp router.
+
+        UPD-00248 osiris: Qwen3.6 ignores the prompt instruction to call the
+        whatsapp_send tool, so the gateway POSTs every final response straight to the
+        router and bypasses the tool entirely. ``deliver_extra`` carries
+        ``{router_url, router_api_key, phone, is_audio}`` (templated from the inbound
+        payload via _render_delivery_extra).
+
+        Vocal-in -> vocal-out (NORA #30): when ``is_audio`` is truthy (the user sent a
+        voice note), synthesize the reply with edge-tts and push it as a WhatsApp voice
+        note (PTT) via ``/api/sendAudio`` (the router transcodes MP3 -> OGG/Opus). Any
+        synthesis/delivery failure falls back to plain text so the user always gets a
+        reply."""
+        extra = delivery.get("deliver_extra", {}) or {}
+        url = extra.get("router_url", "")
+        token = extra.get("router_api_key", "")
+        phone = extra.get("phone", "")
+        is_audio = str(extra.get("is_audio", "")).strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        if not url or not token or not phone:
+            logger.error(
+                "[webhook] whatsapp_router deliver misconfigured (url=%s, token=%s, phone=%s)",
+                bool(url),
+                bool(token),
+                bool(phone),
+            )
+            return SendResult(
+                success=False, error="whatsapp_router deliver misconfigured"
+            )
+        base = url.rstrip("/")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        # Vocal-out: try a synthesized voice note first when the inbound was audio.
+        if is_audio:
+            audio_b64 = await self._synthesize_voice_b64(content)
+            if audio_b64:
+                try:
+                    import aiohttp
+
+                    async with aiohttp.ClientSession() as session:
+                        async with session.post(
+                            base + "/api/sendAudio",
+                            json={
+                                "phone": phone,
+                                "audio_base64": audio_b64,
+                                "mimetype": "audio/mpeg",
+                                "caption": content[:4096],
+                            },
+                            headers=headers,
+                            timeout=aiohttp.ClientTimeout(total=30),
+                        ) as resp:
+                            if resp.status == 200:
+                                logger.info(
+                                    "[webhook] whatsapp_router voice deliver ok (phone=%s)",
+                                    phone,
+                                )
+                                return SendResult(success=True)
+                            body = await resp.text()
+                            logger.warning(
+                                "[webhook] whatsapp_router sendAudio %s: %s — text fallback",
+                                resp.status,
+                                body[:200],
+                            )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(
+                        "[webhook] whatsapp_router sendAudio error: %s — text fallback",
+                        e,
+                    )
+
+        # Text delivery (default, and fallback when voice synth/push failed).
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    base + "/api/sendText",
+                    json={"phone": phone, "text": content},
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(
+                            "[webhook] whatsapp_router deliver ok (phone=%s, %d chars)",
+                            phone,
+                            len(content),
+                        )
+                        return SendResult(success=True)
+                    body = await resp.text()
+                    logger.error(
+                        "[webhook] whatsapp_router deliver failed %s: %s",
+                        resp.status,
+                        body[:200],
+                    )
+                    return SendResult(
+                        success=False,
+                        error=f"whatsapp_router deliver {resp.status}",
+                    )
+        except Exception as e:  # noqa: BLE001
+            logger.error("[webhook] whatsapp_router deliver error: %s", e)
+            return SendResult(success=False, error=str(e))
+
+    async def _synthesize_voice_b64(self, text: str):
+        """Synthesize *text* to base64 MP3 with edge-tts (NORA #30, vocal-out).
+
+        Strips markdown/URLs/code (they read terribly aloud) and caps length on a
+        sentence boundary so a long reply doesn't become a multi-minute note. Returns
+        None on any failure (caller falls back to text). Voice is configurable via
+        WHATSAPP_TTS_VOICE (default fr-FR-VivienneMultilingualNeural — female,
+        multilingual: pronounces German/English terms cleanly)."""
+        import asyncio
+        import base64
+        import os
+        import re
+        import tempfile
+
+        raw = text or ""
+        for rx, repl in (
+            (r"```.*?```", " "),
+            (r"`[^`]*`", " "),
+            (r"https?://\S+", "lien"),
+            (r"[#*_>~|]+", " "),
+        ):
+            raw = re.sub(rx, repl, raw, flags=re.S)
+        # Strip ALL emojis (ZWJ sequences, skin tones, flags, keycaps, dingbats,
+        # pictographs, symbols…) via the `emoji` lib — a unicode-range regex always
+        # misses multi-codepoint sequences. Fall back to a broad range regex if the
+        # lib is absent. Accent-bearing Latin (é/ü/ç) sits far below these ranges,
+        # and dashes/ellipses are preserved for prosody.
+        try:
+            import emoji as _emoji
+
+            raw = _emoji.replace_emoji(raw, replace="")
+        except Exception:
+            raw = re.sub(
+                "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U00002300-\U000023FF"
+                "\U00002B00-\U00002BFF\U00002190-\U000021FF\U00002900-\U0000297F]",
+                "",
+                raw,
+            )
+        # drop orphan variation-selectors / ZWJ / enclosing-keycap left behind
+        raw = re.sub("[\uFE00-\uFE0F\u200d\u20e3]", "", raw)
+        raw = re.sub(r"\s+", " ", raw)
+        spoken = raw.strip()
+        if not spoken:
+            return None
+        max_chars = int(os.environ.get("WHATSAPP_TTS_MAX_CHARS", "1200"))
+        if len(spoken) > max_chars:
+            cut = spoken[:max_chars]
+            end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+            spoken = (cut[: end + 1] if end >= max_chars // 2 else cut).strip()
+        voice = os.environ.get(
+            "WHATSAPP_TTS_VOICE", "fr-FR-VivienneMultilingualNeural"
+        )
+        timeout = float(os.environ.get("WHATSAPP_TTS_TIMEOUT", "15"))
+        try:
+            import edge_tts
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[webhook] edge-tts unavailable: %s — text fallback", e)
+            return None
+        fd, path = tempfile.mkstemp(suffix=".mp3")
+        os.close(fd)
+        try:
+            communicate = edge_tts.Communicate(spoken, voice=voice)
+            await asyncio.wait_for(communicate.save(path), timeout=timeout)
+            with open(path, "rb") as fh:
+                data = fh.read()
+            return base64.b64encode(data).decode("ascii") if data else None
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[webhook] edge-tts synth failed: %s — text fallback", e)
+            return None
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+    async def _deliver_nora(
+        self, content: str, chat_id: str, delivery: dict
+    ) -> SendResult:
+        """Deliver the agent's final response to the NORA desk/mobile chat callback.
+
+        NORA #41 — the chat agent doesn't reliably call the nora_reply tool (skips it
+        for short messages, loops on complex ones), so the gateway delivers EVERY
+        final response here. ``chat_id`` is ``webhook:nora_chat:<conversation_id>:<ts>``;
+        the conversation_id is the 3rd colon-segment. ``deliver_extra`` carries the
+        callback_url + callback_token (written by configure.sh)."""
+        extra = delivery.get("deliver_extra", {}) or {}
+        url = extra.get("callback_url", "")
+        token = extra.get("callback_token", "")
+        # conversation_id is rendered into deliver_extra from the payload (the UI
+        # generates it in send_chat and polls get_replies on it). Fall back to the
+        # 3rd chat_id segment only for legacy delivery-id chat_ids.
+        conversation_id = (extra.get("conversation_id") or "").strip()
+        if not conversation_id:
+            parts = chat_id.split(":")
+            conversation_id = parts[2] if len(parts) >= 3 else ""
+        if not url or not token or not conversation_id:
+            logger.error(
+                "[webhook] nora deliver misconfigured (url/token/cid) chat_id=%s",
+                chat_id,
+            )
+            return SendResult(success=False, error="nora deliver misconfigured")
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    url,
+                    json={"conversation_id": conversation_id, "text": content, "user": (chat_id.rsplit(":", 1)[-1] if chat_id else "")},
+                    headers={
+                        "X-Hermes-Token": token,
+                        "Content-Type": "application/json",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(
+                            "[webhook] nora deliver ok (cid=%s, %d chars)",
+                            conversation_id,
+                            len(content),
+                        )
+                        return SendResult(success=True)
+                    body = await resp.text()
+                    logger.error(
+                        "[webhook] nora deliver failed %s: %s", resp.status, body[:200]
+                    )
+                    return SendResult(
+                        success=False, error=f"nora deliver {resp.status}"
+                    )
+        except Exception as e:  # noqa: BLE001
+            logger.error("[webhook] nora deliver error: %s", e)
+            return SendResult(success=False, error=str(e))
+
+    # //// END Neoffice ////
 
     async def _deliver_github_comment(self, content: str, delivery: dict) -> SendResult:
         """Post agent response as a GitHub PR/issue comment via ``gh`` CLI."""

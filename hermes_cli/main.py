@@ -2714,6 +2714,21 @@ def _command_has_dedicated_mcp_startup(args) -> bool:
 
 
 def _should_background_mcp_startup(args) -> bool:
+    # //// Neoffice — a kanban worker must NOT background MCP discovery (was tagged
+    # //// "NORA CORE PATCH", the legacy alias). Upstream 0c6e133c0 backgrounds discovery
+    # //// for `chat` so interactive startup never blocks. But a worker is a short-lived,
+    # //// dispatcher-spawned `chat -q` one-shot (HERMES_KANBAN_TASK is set by the kanban
+    # //// spawn): it reaches its first tool snapshot — and often exits — BEFORE the
+    # //// background thread has connected its per-pole MCP server (Frappe REST auth,
+    # //// 1.5-20 s), so it boots with ONLY the kanban_* tools and self-blocks
+    # //// ("je n'ai pas accès", or an empty completion — the staging-soak bug: kanban_show
+    # //// then an empty kanban_complete, revenue_summary never called). Returning False
+    # //// forces the synchronous discovery path in _prepare_agent_startup, which is what
+    # //// worked before 0c6e133c0. Interactive chat keeps the fast default. Drop when
+    # //// upstream lets a one-shot wait for discovery.
+    if os.environ.get("HERMES_KANBAN_TASK"):
+        return False
+    # //// END Neoffice ////
     return not _is_tui_chat_launch(args) and args.command in {None, "chat", "rl"}
 
 

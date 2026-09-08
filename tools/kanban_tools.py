@@ -537,6 +537,77 @@ def _handle_list(args: dict, **kw) -> str:
                            if truncated and limit < KANBAN_LIST_MAX_LIMIT else None),
             "promoted": promoted})
 
+# //// Neoffice — an account answer is invalid until the live tenant chart was read.
+def _neoffice_requires_tenant_account_lookup(task: Any) -> bool:
+    """Return whether a compta worker task asks for a concrete posting account."""
+    if os.environ.get("HERMES_PROFILE") != "compta":
+        return False
+    import re
+    import unicodedata
+
+    value = f"{getattr(task, 'title', '')}\n{getattr(task, 'body', '') or ''}".lower()
+    value = unicodedata.normalize("NFKD", value)
+    value = "".join(ch for ch in value if not unicodedata.combining(ch))
+    return bool(re.search(
+        r"(?:dans quel compte|quel compte(?: exact)?|ou imputer|ou passer cette "
+        r"depense|imput(?:er|ation).{0,100}(?:facture|depense)|"
+        r"compte.{0,100}imput)",
+        value,
+    ))
+
+
+def _neoffice_has_tenant_account_lookup(kb: Any, tid: str, board: Optional[str]) -> bool:
+    """Check the current worker log for the real-chart MCP call."""
+    import re
+
+    log_text = kb.read_worker_log(tid, tail_bytes=512_000, board=board) or ""
+    return bool(re.search(
+        r"preparing\s+(?:mcp__[a-z0-9_]+__)?get_chart_of_accounts\b",
+        log_text,
+        re.IGNORECASE,
+    ))
+
+
+def _neoffice_has_account_doctrine_search(kb: Any, tid: str, board: Optional[str]) -> bool:
+    """Check the current worker log for a focused doctrine search."""
+    import re
+
+    log_text = kb.read_worker_log(tid, tail_bytes=512_000, board=board) or ""
+    return bool(re.search(
+        r"preparing\s+(?:mcp__[a-z0-9_]+__)?wiki_search\b",
+        log_text,
+        re.IGNORECASE,
+    ))
+# //// END Neoffice ////
+
+
+# //// Neoffice — the account guard's decision, factored out so the complete handler keeps
+# //// upstream's shape: one call, one optional rejection string. Probes are just above.
+def _neoffice_account_guard_rejection(kb: Any, task: Any, tid: str, board: Optional[str]):
+    """Rejection text when a compta account answer lacks its evidence, else None."""
+    if not (task and _neoffice_requires_tenant_account_lookup(task)):
+        return None
+    if not _neoffice_has_tenant_account_lookup(kb, tid, board):
+        return (
+            "kanban_complete blocked: this task asks for a concrete posting account, but "
+            "get_chart_of_accounts was not called. Your NEXT action must be "
+            "mcp__neoffice_compta__get_chart_of_accounts, not wiki_read. The Swiss SME family "
+            "from the wiki is not the tenant's exact account. Preserve the invoice's "
+            "distinctive economic nouns in the query and inspect the returned numbers and "
+            "labels. The task is still in-flight."
+        )
+    if not _neoffice_has_account_doctrine_search(kb, tid, board):
+        return (
+            "kanban_complete blocked: the live tenant account was checked, but its Swiss "
+            "accounting doctrine was not. Your NEXT action must be "
+            "mcp__neoffice_wiki__wiki_search with the invoice's economic nature plus "
+            "'imputation facture plan comptable PME'. Use the returned snippet; do not call "
+            "wiki_read unless a legal condition is missing. Then retry kanban_complete. The "
+            "task is still in-flight."
+        )
+    return None
+# //// END Neoffice ////
+
 
 @_kanban_handler("kanban_complete")
 def _handle_complete(args: dict, **kw) -> str:
@@ -561,6 +632,15 @@ def _handle_complete(args: dict, **kw) -> str:
         # judge by calling kanban_complete before acceptance criteria are met. Only enforce when a judge is
         # actually reachable — see _goal_judge_available for why an unavailable judge fails open.
         task = kb.get_task(conn, tid)
+        # //// Neoffice — reject plausible Käfer-family guesses on NORA's accounting pole.
+        # //// A worker may only finish an account-allocation answer after the live tenant
+        # //// chart tool has actually run, and after the Swiss doctrine was searched. The
+        # //// rejection keeps the task in-flight so the SAME worker can call the tool and
+        # //// retry kanban_complete without spawning another task. Compta profile only.
+        _neoffice_rejection = _neoffice_account_guard_rejection(kb, task, tid, args.get("board"))
+        if _neoffice_rejection is not None:
+            return tool_error(_neoffice_rejection)
+        # //// END Neoffice ////
         _goal_gate("kanban_complete", task, tid, (summary or result or "").strip())
         try:
             ok = kb.complete_task(
@@ -591,7 +671,20 @@ def _handle_complete(args: dict, **kw) -> str:
         _check(ok, (task.last_failure_error if task else None) or
                f"could not complete {tid} (unknown id, stale run, or already terminal)")
         run = kb.latest_run(conn, tid)
-        return _ok(task_id=tid, run_id=run.id if run else None)
+        # //// Neoffice — explicit terminal signal on the tool RESULT. KANBAN_GUIDANCE tells
+        # //// the model to stop after a terminal call, but the weak worker models obey it
+        # //// only intermittently: they keep reasoning and re-call kanban_complete (the
+        # //// second fails "already terminal"), which costs a wasted ~2.5 s Olares turn per
+        # //// completion and, worse, has let a worker keep acting after finishing — that is
+        # //// how duplicate purchase orders were created (2026-08-21). Saying it in the tool
+        # //// result reaches the model at the exact moment it decides what to do next.
+        # //// Drop when upstream marks terminal results itself.
+        return _ok(
+            task_id=tid, run_id=run.id if run else None, terminal=True,
+            note="Task complete — STOP now. Do not call any more tools (including "
+                 "kanban_complete); your work is done.",
+        )
+        # //// END Neoffice ////
 
 
 @_kanban_handler("kanban_block")

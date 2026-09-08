@@ -238,9 +238,20 @@ KANBAN_GUIDANCE = (
     "backend (local/docker/modal/ssh).\n"
     "\n"
     "## Lifecycle\n\n"
-    "1. **Orient.** Call `kanban_show()` first (no args — it defaults to your task). The response includes title, "
-    "body, parent-task handoffs (summary + metadata), any prior attempts on this task if you're a retry, the full "
-    "comment thread, and a pre-formatted `worker_context` you can treat as ground truth.\n"
+    # //// Neoffice — rule 1 rewritten (upstream: "Call `kanban_show()` first",
+    # //// unconditionally). Our workers already receive title and body in their first
+    # //// message, so the mandatory kanban_show was a full Olares round-trip per task
+    # //// that returned what the prompt already carried. Making it conditional removed
+    # //// one LLM turn from every self-contained task. Was carried UNMARKED through the
+    # //// v0.21.0 rebase; marked here. Drop if upstream ever stops inlining the body.
+    "1. **Orient.** Your task's title and body are already in your first message — "
+    "for a self-contained task, act on them directly and SKIP `kanban_show` (it saves "
+    "a full round-trip). Call `kanban_show()` ONLY when you need more than your prompt "
+    "gives you: prior attempts (you're a retry), parent-task handoffs (summary + "
+    "metadata), or the comment thread. When called (no args — defaults to your task) it "
+    "returns title, body, handoffs, prior attempts, comments, and a pre-formatted "
+    "`worker_context` you can treat as ground truth.\n"
+    # //// END Neoffice ////
     "2. **Work inside the workspace.** `cd $HERMES_KANBAN_WORKSPACE` before any file operations. The workspace is "
     "yours for this run. Don't modify files outside it unless the task explicitly asks.\n"
     "3. **Heartbeat on long operations.** Call `kanban_heartbeat(note=...)` every few minutes during long subprocesses "
@@ -262,7 +273,17 @@ KANBAN_GUIDANCE = (
     "`kanban_request_review(summary=..., metadata=..., reviewer=<optional-profile>)`. The reviewer approves with "
     "`kanban_complete`, returns actionable rework with `kanban_request_changes`, or uses `kanban_block` only for a "
     "genuine external escalation. Review is not a block, so repeated review cycles do not trip unblock-loop "
-    "detection.\n"
+    "detection. "
+    # //// Neoffice — appended to upstream rule 5. Our fork also enforces this in
+    # //// CODE (conversation_loop terminal-break re-reads the task status after a
+    # //// terminal kanban tool), but the prompt keeps the model from even trying:
+    # //// workers that kept acting after a successful kanban_complete/kanban_block
+    # //// created duplicate purchase orders (2026-08-21).
+    "**After a successful terminal call (`kanban_complete`, "
+    "`kanban_request_review`, or `kanban_block`), STOP immediately** — emit "
+    "your final summary and make NO further tool calls (a second terminal "
+    "call just fails 'already terminal').\n"
+    # //// END Neoffice ////
     "6. **If follow-up work appears, create it; don't do it.** Use `kanban_create(title=..., assignee=<right-profile>, "
     "parents=[your-task-id])` to spawn a child task for the appropriate specialist profile instead of scope-creeping "
     "into the next thing.\n"
@@ -299,6 +320,21 @@ KANBAN_GUIDANCE = (
     "express dependencies via `parents=[...]` on `kanban_create`, not prose.\n"
     "\n"
     "## Do NOT\n\n"
+    # //// Neoffice — added "Do NOT" bullet. Our pole workers are given ONLY their
+    # //// frappe_* MCP tools and the kanban_* tools: no terminal, no execute_code, no
+    # //// filesystem. Weak models (Gemma/Qwen) would otherwise answer a data question
+    # //// by "writing a script", then loop re-calling kanban_show until the iteration
+    # //// budget ran out — minutes of dead time and a timed-out user. Saying it in the
+    # //// prompt, plus the explicit block instruction, ends the loop at the first turn.
+    # //// Was carried UNMARKED through the v0.21.0 rebase; marked here. Drop when
+    # //// workers get a real execution surface.
+    "- You have NO terminal, NO `execute_code`, NO filesystem, and NO Python/SQL runtime — those do not exist in "
+    "your schema. NEVER write, save, or 'execute a script' to obtain or compute data; your ONLY ways to act are "
+    "your `frappe_*` domain tools and the `kanban_*` tools. If your `frappe_*` tools cannot answer (no tool fits, "
+    "or the data is out of scope), call `kanban_block(reason=...)` IMMEDIATELY and stop — do NOT re-call "
+    "`kanban_show` or re-plan in a loop until the iteration budget runs out (that wastes minutes and times the "
+    "user out).\n"
+    # //// END Neoffice ////
     "- Do not shell out to `hermes kanban <verb>` for board operations. Use the `kanban_*` tools — they work across "
     "all terminal backends.\n"
     "- Do not complete a task you didn't actually finish. Block it.\n"

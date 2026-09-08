@@ -282,46 +282,26 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
         # up-to-date report).
         return _tips_behind(head_rev, _upstream_main_sha(), repo_dir)
 
-    # Installer checkouts are shallow (`git clone --depth 1`): a plain `git fetch` would unshallow
-    # the repo and `rev-list --count HEAD..origin/main` would report a bogus "12492 commits
-    # behind". Fetch with --depth 1 to preserve the boundary and compare tip SHAs instead. Full
-    # clones keep the exact count path. Mirrors apps/desktop/electron/main.cjs.
-    is_shallow = _git_stdout(["rev-parse", "--is-shallow-repository"], cwd=repo_dir) == "true"
-
-    def _fetch() -> bool:
-        # Self-heal abandoned git lock files first. A stale .git/shallow.lock from a crashed fetch
-        # makes every fetch fail silently and stale refs get compared against HEAD until a human
-        # removes the lock. This passive check is also the main tmp_pack GENERATOR on flaky lines,
-        # so it must be the janitor too (#93732).
-        from hermes_cli.gitlock import clear_stale_git_locks, clear_stale_tmp_packs
-        clear_stale_git_locks(repo_dir)
-        clear_stale_tmp_packs(repo_dir)
-
-        # Scope the fetch to the one branch compared against: an unscoped ``git fetch origin``
-        # transfers ~1,400 remote heads (3.0 s vs 0.55 s measured) and can burn the full timeout.
-        # A scoped fetch still updates ``origin/main`` and FETCH_HEAD; ``--depth 1`` preserves
-        # the shallow boundary.
-        fetch_args = ["fetch", "origin", "main", *(["--depth", "1"] if is_shallow else []), "--quiet"]
-        return _git_ok(fetch_args, cwd=repo_dir, timeout=10, network=True)
-
-    fetch_ok = _quiet(_fetch, False)  # Offline or timeout — don't use stale refs
-    # When the fetch fails the local origin/main ref is stale: it cannot prove *currentness*, but
-    # if it already shows HEAD behind, that is sound evidence an update exists. Return the positive
-    # stale count; None (inconclusive) otherwise so the caller doesn't cache a false "up to date".
-    if is_shallow:
-        # (#82166, review #92578)
-        if not fetch_ok:
-            return None
-        # No history across the shallow boundary. `origin/main` may not be a tracking ref in a
-        # `clone --depth 1`, so prefer FETCH_HEAD (just updated) and fall back to origin/main.
-        head_rev = _git_stdout(["rev-parse", "HEAD"], cwd=repo_dir)
-        target_rev = (
-            _git_stdout(["rev-parse", "FETCH_HEAD"], cwd=repo_dir)
-            or _git_stdout(["rev-parse", "origin/main"], cwd=repo_dir))
-        return _tips_behind(head_rev, target_rev)
+    # //// Neoffice — read the remote tip with `ls-remote` instead of `git fetch`.
+    # //// A fetch downloads pack objects; short-lived CLI runs (chat warm-up, briefings)
+    # //// exit or hit the 10 s timeout mid-transfer, and every kill leaves a ~100 MB
+    # //// .git/objects/pack/tmp_pack_* orphan. At ~4 checks a day this silently filled
+    # //// fleet disks to 100% (2026-07-03: 164 orphans = 15 GB on one instance).
+    # //// v0.21.0 kept the fetch and bolted a janitor onto it (clear_stale_git_locks +
+    # //// clear_stale_tmp_packs, #93732) plus a scoped --depth 1 fetch; we stay on
+    # //// ls-remote because a refs-only transfer makes that debris impossible by
+    # //// construction — nothing to heal, and shallow clones behave identically. The
+    # //// behind-count itself is upstream's _tips_behind, unchanged. Drop this block if
+    # //// the passive check ever needs real objects locally.
+    remote_out = _git_stdout(["ls-remote", "origin", "refs/heads/main"], cwd=repo_dir, timeout=10, network=True)
+    remote_rev = remote_out.split()[0] if remote_out else None
+    if remote_rev:
+        return _tips_behind(_git_stdout(["rev-parse", "HEAD"], cwd=repo_dir), remote_rev, repo_dir)
+    # ls-remote failed (offline?): the local origin/main ref cannot prove currentness, but if
+    # it already shows HEAD behind that is sound evidence an update exists.
     behind = _git_count(["rev-list", "--count", "HEAD..origin/main"], cwd=repo_dir)
-    return behind if fetch_ok or (behind is not None and behind > 0) else None
-
+    return behind if (behind is not None and behind > 0) else None
+    # //// END Neoffice ////
 
 def _read_json(path: Path) -> Optional[dict]:
     """Parse ``path`` as a JSON object; None when missing, unreadable, or not a dict."""

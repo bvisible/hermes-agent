@@ -109,8 +109,22 @@ class ToolCallGuardrailConfig:
     stops are opt-in on interactive platforms, default on for unattended gateway/cron platforms."""
 
     warnings_enabled: bool = True
-    hard_stop_enabled: bool = False
+    # //// Neoffice — default ON (upstream ships False). Gemma 12b IGNORES the warn-only
+    # signal and loops on identical-arg failures (proven on Osiris: a worker calls
+    # skill_manage with no `name` -> "Skill name is required" -> retries the IDENTICAL call
+    # 13x -> ~30s of dead time, the <10s->30s regression). config.yaml omits the
+    # tool_loop_guardrails section, so from_mapping() falls back to THIS default - flipping
+    # it here enables loop-blocking (block identical-arg failure @5, halt same-tool @8,
+    # block no-progress @5) for the gateway AND the kanban workers, fleet-wide, no per-instance
+    # config needed. Thresholds (below) unchanged - high enough never to cut a legit retry.
+    # v2026.9.7 added `non_interactive_hard_stop_enabled` + _is_non_interactive_platform(),
+    # which turns hard stops on for unattended platforms - but our kanban workers are spawned
+    # as platform "cli" (kanban_db_dispatch: _get_platform_tools(cfg, "cli")), which upstream
+    # lists in _ATTENDED_PLATFORMS, so their new flag does NOT cover the loop we measured.
+    # Drop this default once dispatched workers report a non-attended platform of their own.
+    hard_stop_enabled: bool = True
     non_interactive_hard_stop_enabled: bool = True
+    # //// END Neoffice ////
     exact_failure_warn_after: int = 2
     exact_failure_block_after: int = 5
     same_tool_failure_warn_after: int = 3

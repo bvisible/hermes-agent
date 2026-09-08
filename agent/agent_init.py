@@ -1067,6 +1067,32 @@ def _load_tools(agent, enabled_toolsets, disabled_toolsets):
         quiet_mode=agent.quiet_mode,
     )
 
+    # //// Neoffice — per-TOOL diet (2026-07-18). disabled_toolsets is toolset-
+    # granular only; the NORA orchestrator must KEEP kanban_create (the
+    # empty-promise net when the deterministic pre-router misclassifies) while
+    # the 8 other kanban tools are worker-only dead weight — ~3.9k prompt
+    # tokens on EVERY Olares turn, out of a measured 14.7k tokens of tool
+    # schemas in a 22.3k-token payload. `agent.disabled_tools` in config.yaml
+    # (list of tool NAMES) drops individual tools from the schema after the
+    # toolset filter; execution-side validation follows agent.valid_tool_names,
+    # so a dropped tool is fully invisible to the model. grep "//// Neoffice".
+    try:
+        from hermes_cli.config import load_config as _load_dt_cfg
+
+        _dt = ((_load_dt_cfg() or {}).get("agent") or {}).get("disabled_tools") or []
+        _dt = {str(t).strip() for t in _dt if str(t).strip()}
+    except Exception:
+        _dt = set()
+    if _dt and agent.tools:
+        _before = len(agent.tools)
+        agent.tools = [
+            t for t in agent.tools
+            if (t.get("function") or {}).get("name") not in _dt
+        ]
+        if not agent.quiet_mode and len(agent.tools) != _before:
+            print(f"   ❌ Disabled tools ({_before - len(agent.tools)}): {', '.join(sorted(_dt))}")
+    # //// END Neoffice ////
+
     agent.valid_tool_names = {tool["function"]["name"] for tool in agent.tools} if agent.tools else set()
     # Kanban guidance is session-static (kanban_show iff HERMES_KANBAN_TASK); resolve once.
     from agent.prompt_builder import KANBAN_GUIDANCE

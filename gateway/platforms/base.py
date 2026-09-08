@@ -2519,10 +2519,16 @@ class BasePlatformAdapter(ABC):
                     _is_multi = bool(getattr(_cg._entries.get(clarify_id), "multi_select", False))
             except Exception:
                 _is_multi = False
-            hint = "Reply with the number, the option text, or your own answer."
+            # //// Neoffice — the two hints are user-facing and our audience is
+            # //// French-speaking (Swiss SMEs); upstream ships them in English.
+            # //// Structure, numbering and the multi-select branch are upstream's,
+            # //// untouched. Drop if these strings ever move into a message catalogue.
+            hint = "Répondez par le numéro, le texte de l'option, ou votre propre réponse."
             if _is_multi:
-                hint = ("Multiple selections allowed — reply with the numbers separated by commas "
-                        "or spaces (e.g. \"1, 3\"), the option text, or your own answer.")
+                hint = ("Plusieurs réponses sont possibles — indiquez les numéros séparés par des "
+                        "virgules ou des espaces (par exemple « 1, 3 »), le texte de l'option, ou "
+                        "votre propre réponse.")
+            # //// END Neoffice ////
             numbered = [f"  {i}. {choice}" for i, choice in enumerate(choices, start=1)]
             text = "\n".join([f"❓ {question}", "", *numbered, "", hint])
             # Text fallback: let the gateway intercept capture the typed reply.
