@@ -159,3 +159,25 @@ def test_nudge_still_fires_for_non_terminal_kanban_tool(clear_kanban_env):
     # The nudge offers every worker exit, not just close-out; a card that must go
     # through review must never be steered to ``kanban_complete`` alone.
     assert "kanban_request_review" in nudge and "kanban_block" in nudge
+
+
+# //// Neoffice — the terminal summary is what NORA delivers to the user.
+# Asserted on INTENT, not on exact wording: an earlier version of this test
+# pinned three literal sentences and broke the day the two Neoffice branches
+# were merged and the paragraph was reworded (2026-08-15). A prompt test that
+# fails on rephrasing teaches people to delete it; these checks fail only if
+# the guarantee itself is gone.
+def test_nudge_preserves_complete_user_facing_answer(clear_kanban_env):
+    clear_kanban_env.setenv("HERMES_KANBAN_TASK", "t_abc")
+    nudge = build_kanban_stop_nudge(messages=[], attempts=0)
+    assert nudge is not None
+    low = nudge.lower()
+    # 1. the summary is the answer the user reads, not a note about the work
+    assert "summary" in low and "answer" in low
+    # 2. the full content must be carried over, not paraphrased away
+    assert "full useful content" in low
+    # 3. a progress report is explicitly called out as delivering nothing
+    assert "delivers nothing" in low or "never replace" in low
+
+
+# //// END Neoffice ////
