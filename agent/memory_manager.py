@@ -82,6 +82,52 @@ def normalize_tool_schema(schema: Any) -> Optional[Dict[str, Any]]:
     return schema if name and isinstance(name, str) else None
 
 
+# //// Neoffice — NORA's gateway wraps every desk/WhatsApp turn in a deterministic
+# route prompt (date header + "Message ... de l'utilisateur <id> : \"<msg>\"" +
+# orchestrator/SOUL instructions naming kanban_create / nora_schedule_task). The
+# agent receives that WRAPPED string as the user message, so sync_all/prefetch_all
+# would otherwise feed the whole scaffolding to mem0.add — polluting the store and
+# embeddings with the datetime, the SOUL rules and tool names instead of what the
+# user actually said. We recover just the quoted user message here, at the single
+# choke point (_strip_skill_scaffolding), so it is fixed for sync AND prefetch and
+# for every provider at once. Templates live in the gateway config (config.yaml
+# whatsapp_inbox.prompt, webhook_subscriptions.json nora_chat.prompt), not here, so
+# this matches the shared shape rather than a fixed string.
+_NORA_ROUTE_PROMPT_RE = re.compile(
+    r"Message\b[^\n]*?\bde\s+l['’]utilisateur\b"  # "Message ... de l'utilisateur"
+    r"[^\n:]*:\s*"                                       # " <id> (interface ...) :"
+    r"[\"“«]"                                  # opening quote  "  “  «
+    r"(?P<msg>.*?)"                                      # the user's real message (lazy)
+    r"[\"”»]\.?[ \t]*"                         # closing quote, optional '.', spaces
+    r"(?:\n{2,}|Tu\s+es\s+Nora|R[eé]ponds)",       # orchestrator postamble boundary
+    re.DOTALL,
+)
+
+
+def _unwrap_nora_route_prompt(text: Optional[str]) -> Optional[str]:
+    """Recover the user's real message from NORA's gateway route-prompt wrapper.
+
+    The gateway substitutes the user message into a fixed template
+    (``... de l'utilisateur <id> : "<message>".`` followed by a double newline
+    and the orchestrator postamble). We capture just ``<message>``.
+
+    SAFE BY DESIGN: if ``text`` is not a wrapper (plain chat, CLI input,
+    already-clean text), or the captured message is empty, the original
+    ``text`` is returned UNCHANGED. This must never return empty on a
+    non-match — desk memory depends on it.
+    """
+    if not text:
+        return text
+    match = _NORA_ROUTE_PROMPT_RE.search(text)
+    if not match:
+        return text
+    message = match.group("msg").strip()
+    if not message:
+        return text
+    return message
+# //// END Neoffice ////
+
+
 def memory_provider_tools_enabled(enabled_toolsets: Optional[List[str]], disabled_toolsets: Optional[List[str]] = None,
                                   *, memory_tool_present: bool = False) -> bool:
     """Return whether external memory-provider tools should be exposed."""
@@ -389,7 +435,18 @@ class MemoryManager:
 
     # A /skill or /bundle turn embeds the whole skill body in the model-facing message;
     # providers get just the user's instruction (None for a bare invocation).
-    _strip_skill_scaffolding = staticmethod(extract_user_instruction_from_skill_message)
+    @staticmethod
+    def _strip_skill_scaffolding(text: Any) -> Optional[str]:
+        """Upstream's skill-body extraction, after unwrapping NORA's route prompt."""
+        # //// Neoffice — unwrap NORA's gateway route-prompt FIRST, so the
+        # skill-scaffolding extraction (and every provider's sync/prefetch that
+        # flows through here) sees the real user message, not the datetime +
+        # orchestrator/SOUL wrapper. Safe passthrough on a non-match. Upstream
+        # aliases this straight to extract_user_instruction_from_skill_message;
+        # we keep the alias as the tail call so their behaviour is unchanged.
+        text = _unwrap_nora_route_prompt(text)
+        # //// END Neoffice ////
+        return extract_user_instruction_from_skill_message(text)
 
     def prefetch_all(self, query: str, *, session_id: str = "") -> str:
         """Merge non-empty prefetch context from all providers (failures are non-fatal)."""

@@ -193,6 +193,21 @@ class OSSBackend(Mem0Backend):
     def search(self, query: str, *, filters: dict, top_k: int = 10, rerank: bool = False) -> list[dict]:
         return _unwrap_results(self._memory.search(query, filters=filters, top_k=top_k))
 
+    # //// Neoffice — upstream v0.19.0 dropped get_all from the OSS backend, but NORA's
+    # mem0_list / mem0_profile tools still page the whole bucket. Re-add it here. mem0 v3's
+    # Memory.get_all defaults to top_k=20, which silently caps this "list EVERYTHING then
+    # paginate in memory" call to the first 20 memories (mem0_list looked complete on small
+    # test stores and truncated in production) — ask for effectively all rows; the in-memory
+    # pagination below stays authoritative. grep "//// Neoffice".
+    def get_all(self, *, filters: dict, page: int = 1, page_size: int = 100) -> dict:
+        response = self._memory.get_all(filters=filters, top_k=100000)
+        all_results = _unwrap_results(response)
+        total = len(all_results)
+        start = (page - 1) * page_size
+        results = all_results[start : start + page_size]
+        return {"results": results, "count": total}
+
+
     def add(self, messages: list, *, user_id: str, agent_id: str, infer: bool = False, metadata: dict | None = None) -> dict:
         return self._memory.add(messages, **_add_kwargs(user_id, agent_id, infer, metadata))
 

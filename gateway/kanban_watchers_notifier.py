@@ -232,9 +232,21 @@ class _Collector:
         if not events:
             return None
         task = self.kb.get_task(conn, sub["task_id"])
+        # //// Neoffice — fetch the worker's FULL handoff HERE, while the connection is
+        # //// open. The completed-event payload carries only the FIRST LINE (kanban_db caps
+        # //// it for the dashboard), so a multi-line answer would be delivered as just its
+        # //// header. Delivery runs after conn.close(), hence carrying it in the dict.
+        # //// Consumed by _neoffice_fmt_completed. Drop when the payload carries the full
+        # //// summary itself.
+        try:
+            full_summary = self.kb.latest_summary(conn, sub["task_id"])
+        except Exception:
+            full_summary = None
+        # //// END Neoffice ////
         logger.debug("kanban notifier: claimed %d event(s) for %s on board %s cursor %s→%s",
                      len(events), sub["task_id"], slug, old_cursor, cursor)
-        return {"sub": sub, "old_cursor": old_cursor, "cursor": cursor, "events": events, "task": task, "board": slug}
+        return {"sub": sub, "old_cursor": old_cursor, "cursor": cursor, "events": events,
+                "task": task, "board": slug, "full_summary": full_summary}
 
     def collect_board(self, slug: str) -> None:
         """Claim events on one board, appending delivery dicts to ``deliveries``."""
@@ -252,6 +264,11 @@ class _Collector:
             # No explicit init_db(): connect() already runs the migration once per
             # process, and init_db() would re-run it on a second connection racing
             # the first.
+            # //// Neoffice — list_notify_subs runs OUTSIDE upstream's per-subscription
+            # //// try, so an empty or corrupt board DB (a leftover test board with no
+            # //// tables → "no such table: kanban_notify_subs") raises here, escapes to
+            # //// the bare finally, and wedges terminal delivery for every OTHER board —
+            # //// including the production `default`. Seen in production. Wrapped below.
             subs = _kbn().list_notify_subs(conn, notifier_profiles=self.notifier_profiles, include_unowned=self.include_unowned)
             if not subs:
                 logger.debug("kanban notifier: board %s has no subscriptions", slug)
@@ -264,6 +281,9 @@ class _Collector:
                     # One bad subscription must not block the rest of the tick.
                     logger.warning("kanban notifier: subscription for %s on board %s failed: %s",
                                    sub.get("task_id"), slug, sub_exc)
+        except Exception as board_exc:
+            logger.warning("kanban notifier: board %s failed, skipping it this tick: %s", slug, board_exc)
+        # //// END Neoffice ////
         finally:
             conn.close()
 
@@ -365,6 +385,115 @@ _EVENT_FORMATTERS: dict[str, Callable[[Any, "_KanbanNotification"], tuple]] = {
         None, None,
     ),
 }
+
+
+# //// Neoffice — branded, French delivery of terminal kanban events.
+# ////
+# //// Upstream renders operator-facing pings ("[board] @compta Kanban 41 done — …",
+# //// "🔄 Kanban 41 → running"). Our notify subscriptions do not point at an operator:
+# //// they point at the END CUSTOMER's desk chat or WhatsApp thread, where NORA speaks as
+# //// ONE assistant. A raw board id, an @assignee or the word "Kanban" leaking into that
+# //// thread is a product defect — the webhook branding filter would strip those words
+# //// anyway and leave a mangled sentence. So the formatters below replace upstream's,
+# //// keeping upstream's exact contract: (message | None, wake_handoff, wake_review_detail).
+# ////
+# //// Silent kinds: `status`, `review_requested` and `changes_requested` are intermediate
+# //// transitions between agents, not an outcome. Our subs are notify-only (no wake mode),
+# //// so the reviewer's final `completed` is what the customer receives. RESTORE upstream's
+# //// formatters for those three if we ever subscribe agent creators with delivery_mode wake.
+_NEOFFICE_DOMAINS = {"ventes": "Ventes", "compta": "Comptabilité", "support": "Support", "rh": "RH"}
+
+
+def _neoffice_head(n: "_KanbanNotification") -> str:
+    """The pole name the customer knows, never the board/assignee/task id."""
+    who = (getattr(n.task, "assignee", "") or "") if n.task else ""
+    return _NEOFFICE_DOMAINS.get(who, "Le service")
+
+
+def _neoffice_fmt_completed(ev, n) -> tuple:
+    """Deliver the worker's FULL handoff, not the event's first-line preview.
+
+    The completed-event payload ``summary`` is the first line only (kanban_db caps it for
+    the dashboard), so a multi-line answer — a dunning list, say — reached the customer as
+    just its header (reported 2026-06-19). The full handoff lives on ``task_runs.summary``
+    and was fetched by the collector while the connection was open, then carried here as
+    ``full_summary``. Falls back to ``task.result``, then upstream's payload preview.
+    """
+    full = n.d.get("full_summary")
+    if not full and n.task and n.task.result:
+        full = n.task.result
+    if not full:
+        payload_summary = _payload(ev, "summary")
+        if payload_summary:
+            full = str(payload_summary)
+    handoff = f"\n{full.strip()[:3500]}" if full else ""
+    # Upstream #70752: the wake turn carries the first line only (their cap), so a woken
+    # creator does not re-decompose work that already exists. The customer message above
+    # stays full length; the wake prompt is internal.
+    wake_handoff = _first_line(full, 200) if full else None
+    return f"✅ {_neoffice_head(n)} — {n.title}{handoff}", wake_handoff, None
+
+
+def _neoffice_fmt_blocked(ev, n) -> tuple:
+    """Strip speculative account proposals before the reason reaches the customer."""
+    from gateway.kanban_watchers import _safe_accounting_block_reason
+
+    reason = ""
+    raw = _payload(ev, "reason")
+    if raw:
+        safe = _safe_accounting_block_reason(
+            str(raw),
+            assignee=(getattr(n.task, "assignee", "") or "") if n.task else "",
+            title=n.title,
+            body=(getattr(n.task, "body", "") or "") if n.task else "",
+        )
+        reason = f" : {safe}"
+    return f"✋ {_neoffice_head(n)}{reason}", None, None
+
+
+def _neoffice_fmt_gave_up(ev, n) -> tuple:
+    """`gave_up` is BOTH an internal recovery signal and the end of a request.
+
+    A tripped circuit breaker (three crashed runs) sets the task to ``blocked`` and emits
+    ``gave_up``: that is the end of the customer's request and must be spoken. The same
+    event also rides on top of a worker's real outcome, where it must stay silent. The
+    rule lives in ``_gave_up_delivery`` — subtle enough that it was wrong once and left
+    the desk silent after "je transmets votre demande" (#246).
+    """
+    from gateway.kanban_watchers import _gave_up_delivery
+
+    kind = _gave_up_delivery(
+        (getattr(n.task, "status", "") or "") if n.task else "",
+        (getattr(n.task, "result", "") or "") if n.task else "",
+        ev.payload,
+    )
+    if not kind:
+        return None, None, None
+    head = _neoffice_head(n)
+    if kind == "breaker":
+        return (f"✋ {head} — je n'ai pas pu traiter votre demande : incident technique "
+                f"répété. Pouvez-vous la renvoyer ?"), None, None
+    return (f"✋ {head} — je n'ai pas pu aboutir sur cette demande. "
+            f"Pouvez-vous la reformuler ?"), None, None
+
+
+_EVENT_FORMATTERS.update({
+    "completed": _neoffice_fmt_completed,
+    "blocked": _neoffice_fmt_blocked,
+    "gave_up": _neoffice_fmt_gave_up,
+    "crashed": lambda ev, n: (f"✋ {_neoffice_head(n)} — incident technique, je réessaie.", None, None),
+    "timed_out": lambda ev, n: (
+        f"⏱ {_neoffice_head(n)} — la demande a pris trop de temps, je réessaie.", None, None),
+    # Upstream pings "🛑 … routed to TRIAGE"; without it a task stalls in triage SILENTLY,
+    # so we keep the alert but say it as Nora: no board id, no "Kanban", French, vouvoiement.
+    "block_loop_detected": lambda ev, n: (
+        f"🛑 {_neoffice_head(n)} — je bute sur cette demande et j'ai besoin de votre décision"
+        f"{_clip(ev, 'recurrences', ' (bloquée {} fois pour la même raison)', 200)}"
+        f"{_clip(ev, 'reason', ' : {}', 160)}", None, None),
+})
+for _silent in ("status", "review_requested", "changes_requested"):
+    _EVENT_FORMATTERS.pop(_silent, None)
+# //// END Neoffice ////
 
 
 # --- Delivery of one claimed batch (one subscription, N events) ---
@@ -537,6 +666,17 @@ class _KanbanNotification:
             raise RuntimeError(f"adapter send() reported failure: {getattr(_send_res, 'error', None) or 'unknown error'}")
         logger.debug("kanban notifier: delivered %s event for %s to %s/%s on board %s",
                      ev.kind, self.task_id, self.platform_str, sub["chat_id"], self.board_slug)
+        # //// Neoffice — record the delivered worker result in the conversation film (the
+        # //// router keeps it in this same process), so the customer's NEXT turn ("par
+        # //// email", "oui envoie") reaches a worker that knows what NORA just proposed.
+        # //// Best-effort: the film is an optimisation, never a delivery blocker.
+        if ev.kind == "completed" and metadata.get("conversation_id"):
+            try:
+                from gateway.nora_chat_router import note_nora_reply
+                note_nora_reply(metadata["conversation_id"], msg)
+            except Exception:
+                pass
+        # //// END Neoffice ////
         # Upload artifact paths from the completion payload / legacy result as
         # native files. Only on ``completed`` so retries never spam attachments.
         if ev.kind == "completed":

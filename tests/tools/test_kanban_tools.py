@@ -81,6 +81,87 @@ def test_show_defaults_to_env_task_id(worker_env):
     assert "runs" in d
 
 
+def test_show_explicit_task_id(worker_env):
+    """Peek at a different task than the one in env."""
+    from hermes_cli import kanban_db as kb
+    conn = kb.connect()
+    try:
+        other = kb.create_task(conn, title="other task", assignee="peer")
+    finally:
+        conn.close()
+    from tools import kanban_tools as kt
+    out = kt._handle_show({"task_id": other})
+    d = json.loads(out)
+    assert d["task"]["id"] == other
+
+
+# //// Neoffice — tenant chart proof is mandatory for concrete account answers. ////
+def test_compta_allocation_completion_requires_live_chart(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_PROFILE", "compta")
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.delenv("HERMES_SESSION_ID", raising=False)
+    from pathlib import Path as _Path
+    monkeypatch.setattr(_Path, "home", lambda: tmp_path)
+
+    from hermes_cli import kanban_db as kb
+    kb._INITIALIZED_PATHS.clear()
+    kb.init_db()
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="Compte exact d'une facture",
+            body="Dans quel compte exact imputer cette facture de foire ?",
+            assignee="compta",
+        )
+        kb.claim_task(conn, tid)
+    finally:
+        conn.close()
+    monkeypatch.setenv("HERMES_KANBAN_TASK", tid)
+
+    from tools import kanban_tools as kt
+    rejected = json.loads(kt._handle_complete({"summary": "6600 Publicité"}))
+    assert "get_chart_of_accounts was not called" in rejected["error"]
+
+    worker_log = kb.worker_log_path(tid)
+    worker_log.parent.mkdir(parents=True, exist_ok=True)
+    worker_log.write_text(
+        "preparing mcp__neoffice_compta__get_chart_of_accounts\n",
+        encoding="utf-8",
+    )
+    missing_doctrine = json.loads(kt._handle_complete({"summary": "6621 Foires et expositions"}))
+    assert "mcp__neoffice_wiki__wiki_search" in missing_doctrine["error"]
+
+    worker_log.write_text(
+        worker_log.read_text(encoding="utf-8")
+        + "preparing mcp__neoffice_wiki__wiki_search\n",
+        encoding="utf-8",
+    )
+    accepted = json.loads(kt._handle_complete({"summary": "6621 Foires et expositions"}))
+    assert accepted["terminal"] is True
+
+
+def test_account_lookup_gate_is_scoped_to_compta_profile(monkeypatch, worker_env):
+    monkeypatch.setenv("HERMES_PROFILE", "support")
+    from hermes_cli import kanban_db as kb
+    conn = kb.connect()
+    try:
+        conn.execute(
+            "UPDATE tasks SET title = ?, body = ? WHERE id = ?",
+            ("Question générale", "Dans quel compte imputer cette facture ?", worker_env),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    from tools import kanban_tools as kt
+    accepted = json.loads(kt._handle_complete({"summary": "handoff support"}))
+    assert accepted["terminal"] is True
+# //// END Neoffice ////
+
+
 def test_list_filters_tasks(monkeypatch, worker_env):
     """kanban_list gives orchestrators filtered board discovery."""
     monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
