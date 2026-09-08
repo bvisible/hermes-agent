@@ -256,6 +256,16 @@ _PROMPT_BODY = (
 )
 
 
+
+# //// Neoffice — v2026.9.7 removed the `_write_metadata()` method and inlined its body at
+# //// each upstream call site. Our raw per-turn capture and `retain_facts` still need it, so
+# //// keep one function with the SAME shape rather than re-inlining it twice and letting the
+# //// two drift. Drop if upstream reinstates a metadata helper.
+def _neoffice_write_metadata(provider: Any) -> Dict[str, Any]:
+    """Tag a write with the gateway channel, exactly as upstream's inlined literal does."""
+    return {"channel": provider._channel} if provider._channel else {}
+# //// END Neoffice ////
+
 class Mem0MemoryProvider(MemoryProvider):
     """Mem0 memory with server-side extraction and semantic search (platform, self-hosted or OSS)."""
 
@@ -412,7 +422,10 @@ class Mem0MemoryProvider(MemoryProvider):
         """Buckets a read covers: the caller's per-user bucket + the shared
         company bucket. Personal facts stay private; company facts are visible
         to every user of the instance."""
-        buckets = [self._read_filters()]
+        # //// Neoffice — v2026.9.7 removed the `_read_filters()` helper and inlined
+        # //// `filters={"user_id": self._user_id}` at each call site; mirror that literal
+        # //// here so the per-user bucket keeps the exact upstream shape.
+        buckets = [{"user_id": self._user_id}]
         company_id = getattr(self, "_company_id", None)
         if company_id and company_id != self._user_id:
             buckets.append({"user_id": company_id})
@@ -592,7 +605,7 @@ class Mem0MemoryProvider(MemoryProvider):
                     user_id=self._user_id,
                     agent_id=self._agent_id,
                     infer=False,
-                    metadata=self._write_metadata(),
+                    metadata=_neoffice_write_metadata(self),
                 )
                 # //// END Neoffice ////
                 self._record_success()
@@ -747,7 +760,7 @@ class Mem0MemoryProvider(MemoryProvider):
                     user_id=write_user_id,
                     agent_id=self._agent_id,
                     infer=False,
-                    metadata=self._write_metadata(),
+                    metadata=_neoffice_write_metadata(self),
                 )
                 stored += 1
             except Exception as e:
