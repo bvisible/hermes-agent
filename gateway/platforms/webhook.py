@@ -798,9 +798,18 @@ class WebhookAdapter(BasePlatformAdapter):
             _sk_value = (str(_sk_value).strip() if _sk_value else "") or delivery_id
             session_chat_id = f"webhook:{route_name}:{session_key_mode}:{_sk_value}"
         # //// END Neoffice ////
-        self._delivery_info[session_chat_id] = {
+        # //// Neoffice — keep the delivery config in a NAMED local: our deterministic
+        # //// pre-router (below) needs `deliver_extra` to post its immediate ack on the
+        # //// very same callback the final answer will use. Upstream inlines this dict
+        # //// straight into _delivery_info, which left our call site referencing an
+        # //// undefined name — the router raised NameError on EVERY desk message and fell
+        # //// back to a full agent run (0.2s routing became a 25-30s turn). Compilation
+        # //// cannot catch that; only running it does.
+        deliver_config = {
             "deliver": route_config.get("deliver", "log"),
             "deliver_extra": self._render_delivery_extra(route_config.get("deliver_extra", {}), payload)}
+        self._delivery_info[session_chat_id] = deliver_config
+        # //// END Neoffice ////
         self._delivery_info_created[session_chat_id] = now
         self._delivery_info_order.append((now, session_chat_id))
         self._prune_delivery_info(now)
