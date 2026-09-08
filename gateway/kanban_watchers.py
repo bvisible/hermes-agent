@@ -60,6 +60,17 @@ def poke_kanban_dispatcher() -> None:
 # //// END Neoffice ////
 
 
+# //// Neoffice — absolute paths must never reach a customer's chat: a block reason is
+# //// written by a worker and can quote a workspace path. Redacted by
+# //// _safe_accounting_block_reason below. Was lost when the v2026.9.7 port moved the
+# //// guard's neighbours; pyflakes caught the undefined name, compilation did not.
+_LOCAL_PATH_RE = re.compile(
+    r"(?<![\w:/])(?:/(?:Users|home|private|tmp|var|etc|workspace)/[^\s,;]+|"
+    r"[A-Za-z]:\\[^\s,;]+)"
+)
+# //// END Neoffice ////
+
+
 # //// Neoffice — added. The `gave_up` event carries two very different situations and
 # telling them apart inline got it wrong: a tripped circuit breaker (three crashed runs)
 # sets the task to `blocked` and emits `gave_up`, and the old condition
