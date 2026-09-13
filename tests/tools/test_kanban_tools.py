@@ -144,6 +144,66 @@ def test_compta_allocation_completion_requires_live_chart(monkeypatch, tmp_path)
     assert accepted["terminal"] is True
 
 
+
+# //// Neoffice — the chart proof must survive upstream's tool_call bridge (tracker #422). ////
+def test_compta_guard_accepts_a_chart_read_through_tool_call(monkeypatch, tmp_path):
+    """Replays the dev-instance run of 2026-09-13: the worker read the chart through
+    tool_call, the log only said ``preparing tool_call``, and the guard refused it
+    until the tool guardrail killed the run. The session store is the evidence."""
+    monkeypatch.setenv("HERMES_PROFILE", "compta")
+    home = tmp_path / ".hermes"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.delenv("HERMES_SESSION_ID", raising=False)
+    from pathlib import Path as _Path
+    monkeypatch.setattr(_Path, "home", lambda: tmp_path)
+
+    from hermes_cli import kanban_db as kb
+    kb._INITIALIZED_PATHS.clear()
+    kb.init_db()
+    conn = kb.connect()
+    try:
+        tid = kb.create_task(
+            conn,
+            title="Imputation facture électricité",
+            body="Sur quel compte dois-je imputer une facture d'électricité ?",
+            assignee="compta",
+        )
+        kb.claim_task(conn, tid)
+    finally:
+        conn.close()
+    monkeypatch.setenv("HERMES_KANBAN_TASK", tid)
+
+    worker_log = kb.worker_log_path(tid)
+    worker_log.parent.mkdir(parents=True, exist_ok=True)
+    worker_log.write_text("  ┊ ⚡ preparing tool_call…\n  ┊ ⚡ mcp__neof   0.1s\n", encoding="utf-8")
+
+    from hermes_state import SessionDB
+    from tools import kanban_tools as kt
+
+    sid = "sess-wrapped-chart"
+    with SessionDB() as db:
+        db.create_session(sid, "cli")
+        # The first batched attempt named the tool but read nothing: not evidence.
+        db.append_message(sid, "tool", content='{"error": "Local tools require one entry per tool_call"}',
+                          tool_name="tool_call")
+    rejected = json.loads(kt._handle_complete({"summary": "6400 Electricité"}, session_id=sid))
+    assert "get_chart_of_accounts was not called" in rejected["error"]
+
+    with SessionDB() as db:
+        db.append_message(sid, "tool", tool_name="mcp__neoffice_compta__get_chart_of_accounts",
+                          content='<untrusted_tool_result source="mcp__neoffice_compta__get_chart_of_accounts">'
+                                  '{"accounts": [{"name": "6400 - Electricité"}]}</untrusted_tool_result>')
+    missing_doctrine = json.loads(kt._handle_complete({"summary": "6400 Electricité"}, session_id=sid))
+    assert "mcp__neoffice_wiki__wiki_search" in missing_doctrine["error"]
+
+    with SessionDB() as db:
+        db.append_message(sid, "tool", tool_name="mcp__neoffice_wiki__wiki_search",
+                          content='<untrusted_tool_result source="mcp__neoffice_wiki__wiki_search">'
+                                  'Charges d\'énergie : compte 6400.</untrusted_tool_result>')
+    accepted = json.loads(kt._handle_complete({"summary": "6400 Electricité"}, session_id=sid))
+    assert accepted["terminal"] is True
+
 def test_account_lookup_gate_is_scoped_to_compta_profile(monkeypatch, worker_env):
     monkeypatch.setenv("HERMES_PROFILE", "support")
     from hermes_cli import kanban_db as kb

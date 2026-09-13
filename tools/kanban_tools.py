@@ -686,38 +686,80 @@ def _neoffice_requires_tenant_account_lookup(task: Any) -> bool:
     ))
 
 
-def _neoffice_has_tenant_account_lookup(kb: Any, tid: str, board: Optional[str]) -> bool:
-    """Check the current worker log for the real-chart MCP call."""
+def _neoffice_session_ran_tool(session_id: Optional[str], tool: str) -> bool:
+    """True if THIS worker session holds a successful result of ``tool`` (MCP-prefixed or not).
+
+    Upstream serves pole MCP tools behind tool_search -> tool_call. A wrapped call shows
+    in the worker log as ``preparing tool_call`` plus a name truncated to nine characters
+    (``mcp__neof``), so the log cannot say WHICH tool ran — the guard below then refused
+    every kanban_complete of a worker that had read the chart six times (dev instance,
+    2026-09-13, tracker #422). The session store can say it: each tool round is flushed
+    before it executes (agent/turn_tool_round.py) and a wrapped call's result row carries
+    the real tool name. Read-only; any failure means "no evidence", never a crash.
+    """
+    if not session_id:
+        return False
+    try:
+        from hermes_state import SessionDB
+
+        with SessionDB(read_only=True) as db:
+            rows = db.get_messages(session_id, include_inactive=True)  # survives compaction
+    except Exception:  # noqa: BLE001
+        return False
+    for row in rows:
+        if row.get("role") != "tool":
+            continue
+        name = str(row.get("tool_name") or row.get("name") or "")
+        if name != tool and not name.endswith(f"__{tool}"):
+            continue
+        if '"error"' in str(row.get("content") or "")[:400]:
+            continue  # the call ran but returned an error, not the data
+        return True
+    return False
+
+
+def _neoffice_has_tenant_account_lookup(
+    kb: Any, tid: str, board: Optional[str], session_id: Optional[str] = None
+) -> bool:
+    """Check the worker log, then this worker's session, for the real-chart MCP call."""
     import re
 
     log_text = kb.read_worker_log(tid, tail_bytes=512_000, board=board) or ""
-    return bool(re.search(
+    if re.search(
         r"preparing\s+(?:mcp__[a-z0-9_]+__)?get_chart_of_accounts\b",
         log_text,
         re.IGNORECASE,
-    ))
+    ):
+        return True
+    return _neoffice_session_ran_tool(session_id, "get_chart_of_accounts")
 
 
-def _neoffice_has_account_doctrine_search(kb: Any, tid: str, board: Optional[str]) -> bool:
-    """Check the current worker log for a focused doctrine search."""
+def _neoffice_has_account_doctrine_search(
+    kb: Any, tid: str, board: Optional[str], session_id: Optional[str] = None
+) -> bool:
+    """Check the worker log, then this worker's session, for a focused doctrine search."""
     import re
 
     log_text = kb.read_worker_log(tid, tail_bytes=512_000, board=board) or ""
-    return bool(re.search(
+    if re.search(
         r"preparing\s+(?:mcp__[a-z0-9_]+__)?wiki_search\b",
         log_text,
         re.IGNORECASE,
-    ))
+    ):
+        return True
+    return _neoffice_session_ran_tool(session_id, "wiki_search")
 # //// END Neoffice ////
 
 
 # //// Neoffice — the account guard's decision, factored out so the complete handler keeps
 # //// upstream's shape: one call, one optional rejection string. Probes are just above.
-def _neoffice_account_guard_rejection(kb: Any, task: Any, tid: str, board: Optional[str]):
+def _neoffice_account_guard_rejection(
+    kb: Any, task: Any, tid: str, board: Optional[str], session_id: Optional[str] = None
+):
     """Rejection text when a compta account answer lacks its evidence, else None."""
     if not (task and _neoffice_requires_tenant_account_lookup(task)):
         return None
-    if not _neoffice_has_tenant_account_lookup(kb, tid, board):
+    if not _neoffice_has_tenant_account_lookup(kb, tid, board, session_id):
         return (
             "kanban_complete blocked: this task asks for a concrete posting account, but "
             "get_chart_of_accounts was not called. Your NEXT action must be "
@@ -726,7 +768,7 @@ def _neoffice_account_guard_rejection(kb: Any, task: Any, tid: str, board: Optio
             "distinctive economic nouns in the query and inspect the returned numbers and "
             "labels. The task is still in-flight."
         )
-    if not _neoffice_has_account_doctrine_search(kb, tid, board):
+    if not _neoffice_has_account_doctrine_search(kb, tid, board, session_id):
         return (
             "kanban_complete blocked: the live tenant account was checked, but its Swiss "
             "accounting doctrine was not. Your NEXT action must be "
@@ -767,7 +809,8 @@ def _handle_complete(args: dict, **kw) -> str:
         # //// chart tool has actually run, and after the Swiss doctrine was searched. The
         # //// rejection keeps the task in-flight so the SAME worker can call the tool and
         # //// retry kanban_complete without spawning another task. Compta profile only.
-        _neoffice_rejection = _neoffice_account_guard_rejection(kb, task, tid, args.get("board"))
+        _neoffice_rejection = _neoffice_account_guard_rejection(
+            kb, task, tid, args.get("board"), kw.get("session_id"))
         if _neoffice_rejection is not None:
             return tool_error(_neoffice_rejection)
         # //// END Neoffice ////
