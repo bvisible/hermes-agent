@@ -88,10 +88,14 @@ def _gave_up_delivery(status: str, result: str, payload: dict | None) -> str | N
     if (result or "").strip():
         # The worker produced a real outcome; its own event delivered it.
         return None
-    if "protocol violation" in str(payload.get("error", "")).lower():
-        # Internal protocol noise — the task is retried, nothing to announce.
-        return None
     status = (status or "").strip()
+    # A protocol violation is NOT noise once it ends the request. It used to be filtered
+    # here as "the task is retried" — true while it is, but upstream's dispatcher also
+    # auto-blocks a task after a streak of violations (_protocol_violation_streak), and
+    # that block reached the desk as silence: a compta worker looping on a refused
+    # kanban_complete ended blocked while the user kept the acknowledgement alone
+    # (osiris 2026-09-13, tracker #422). The status decides, not the error text: a retry still
+    # in flight (ready / running) falls through to None below.
     if status == "blocked" and payload.get("failures"):
         return "breaker"
     if status == "gave_up":
