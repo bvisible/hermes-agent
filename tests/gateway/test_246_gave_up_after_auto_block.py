@@ -40,8 +40,23 @@ def test_a_retry_in_flight_says_nothing():
     assert _gave_up_delivery("running", "", {}) is None
 
 
-def test_protocol_violation_is_internal_noise():
-    assert _gave_up_delivery("blocked", "", {"failures": 3, "error": "Protocol violation: bad frame"}) is None
+_VIOLATION = "worker exited cleanly (rc=0) without calling kanban_complete or kanban_block — protocol violation."
+
+
+def test_a_protocol_violation_retry_stays_quiet():
+    """While the task goes back to ready, the next run's outcome will speak for it."""
+    assert _gave_up_delivery("ready", "", {"failures": 1, "error": _VIOLATION}) is None
+
+
+def test_a_violation_streak_that_blocks_the_task_reaches_the_user():
+    """The dispatcher auto-blocks after a streak of violations: the request is dead (tracker #422).
+
+    Payload observed on osiris 2026-09-13: failures 2 of an effective limit of 3, the
+    violation as the error, the task already `blocked`. It used to be filtered as noise,
+    and the desk kept only "je transmets votre demande".
+    """
+    payload = {"failures": 2, "effective_limit": 3, "limit_source": "dispatcher", "error": _VIOLATION}
+    assert _gave_up_delivery("blocked", "", payload) == "breaker"
 
 
 def test_blocked_without_a_failure_count_is_not_a_breaker_trip():
