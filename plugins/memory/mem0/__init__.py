@@ -29,7 +29,6 @@ from __future__ import annotations
 import atexit
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -139,13 +138,6 @@ def _is_client_error(exc: Exception) -> bool:
     err_str = str(exc).lower()
     return type(exc).__name__ in _CLIENT_ERROR_TYPES or any(s in err_str for s in ("404", "not found", "valid uuid"))
 
-
-def _read_mem0_json(config_path: Path) -> dict:
-    """Best-effort read of mem0.json; missing/corrupt file -> {}."""
-    if config_path.exists():
-        with suppress(Exception):
-            return json.loads(config_path.read_text(encoding="utf-8"))
-    return {}
 
 # //// Neoffice — pure conversational filler must never become a memory.
 # Greetings and acknowledgements ("Bonjour", "C'est bien noté, j'ai enregistré
