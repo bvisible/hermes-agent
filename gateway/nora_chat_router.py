@@ -304,6 +304,22 @@ _DID_WORK_RE = re.compile(
     r"|\b" + _J_AI + r"\s+pris\s+(?:un|une|des|le|la|deux|trois)\b",
     re.IGNORECASE,
 )
+# //// Neoffice — the same job matter given as an ORDER, not as a story. The two
+# rules above only know the first person ("j'ai passé", "je passe chez"), so
+# « Note une heure de travail sur le chantier PROJ-0087 » fell through to the
+# keyword rules, where « heures » is an HR word: it landed on RH, which holds no
+# job tool, and the worker looped until the guardrail answered the customer in
+# English (measured 16.09). ANCHORED on the job — an imperative alone is not
+# enough, or « ajoute deux heures de congé » would be stolen from RH, which is
+# exactly the mistake this rule exists to undo.
+_JOB_ORDER_RE = re.compile(
+    r"\b(?:note|notez|enregistre|enregistrez|pointe|pointez|saisis|saisissez|"
+    r"inscris|inscrivez|ajoute|ajoutez|rajoute|rajoutez|met[s]?|mettez)\b"
+    r"[^.!?]{0,80}?\b(?:chantier|intervention|PROJ-\d+)\b"
+    r"|\bPROJ-\d+\b[^.!?]{0,80}?\b(?:heure|heures|\dh\b|main[-\s]d.?oeuvre|"
+    r"mat[ée]riel|fourniture)",
+    re.IGNORECASE,
+)
 # //// END Neoffice ////
 
 _FAST_PATH_RULES = (
@@ -496,6 +512,9 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         return "projet"
     if _DID_WORK_RE.search(msg):
         logger.info("nora_chat_router: work already done → projet (keyword rules skipped)")
+        return "projet"
+    if _JOB_ORDER_RE.search(msg):
+        logger.info("nora_chat_router: job order → projet (keyword rules skipped)")
         return "projet"
     # //// END Neoffice ////
     for rx, pole in _FAST_PATH_RULES:
