@@ -432,6 +432,34 @@ _DIRECT_RE = re.compile(
     re.IGNORECASE,
 )
 
+
+# //// Neoffice — the pole an EXPLICIT rule claims, or None. No LLM, no context:
+# //// this is the deterministic half of the module, in ONE place so the first
+# //// turn and a follow-up can never disagree about what the rules say.
+# ////
+# //// The three job rules come FIRST: a visit and a report of work done win over
+# //// any keyword they happen to contain. All three go to `projet`, not `ventes`
+# //// — the fourteen building-job writes (frappe_job_book_visit, frappe_job_quick,
+# //// frappe_job_record_work and the rest) moved to `projet` on 16.09. Routed to
+# //// ventes they would reach a worker that no longer holds a single one of them,
+# //// and the user would get the guard's English text instead of an answer.
+# //// Change them together with DOMAIN_WRITES, never one without the other.
+def _keyword_pole(msg: str) -> Optional[str]:
+    if _APPOINTMENT_RE.search(msg):
+        logger.info("nora_chat_router: booking a visit → projet (keyword rules skipped)")
+        return "projet"
+    if _DID_WORK_RE.search(msg):
+        logger.info("nora_chat_router: work already done → projet (keyword rules skipped)")
+        return "projet"
+    if _JOB_ORDER_RE.search(msg):
+        logger.info("nora_chat_router: job order → projet (keyword rules skipped)")
+        return "projet"
+    for rx, pole in _FAST_PATH_RULES:
+        if rx.search(msg):
+            return pole
+    return None
+# //// END Neoffice ////
+
 # //// Neoffice — a question about what NORA CAN DO, carrying no concrete data.
 # Used ONLY to DEFER to the LLM classifier (never to decide): the domain keyword in
 # "tu sais gérer les devis ?" is the subject, not a task. Guards keep real work out:
@@ -521,30 +549,40 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         logger.info("nora_chat_router: capability question → DIRECT (no pole, no worker)")
         return "DIRECT"
     # //// END Neoffice ////
+    # //// Neoffice — a follow-up still obeys an EXPLICIT rule. Until now ANY turn
+    # //// with a prior pole skipped every deterministic rule and went to the LLM,
+    # //// which is the one thing this module exists to avoid: the rules are
+    # //// deterministic precisely because the classifier is not. Measured today on
+    # //// a three-turn desk conversation — turn 1 "quel est le statut du chantier
+    # //// PROJ-n" routed correctly, then "montre-moi l'apercu du devis de ce
+    # //// chantier" drifted to the sales pole although the qualified-quote rule
+    # //// matches it word for word. That pole holds no job tool, so its worker
+    # //// looped and the customer read the guardrail's ENGLISH text.
+    # //// The two scars this bail-out was built around are untouched: both were
+    # //// SHORT confirmations ("oui envoie", "ok crée le rappel"), and the GO-AHEAD
+    # //// rule above settles those before we ever get here. `recurrent` still
+    # //// belongs to the LLM, so an explicit rule does not steal it.
     if prior and prior.get("pole"):
-        return None  # follow-up → keep the context-aware LLM path
+        if not _RECUR_RE.search(msg):
+            _explicit = _keyword_pole(msg)
+            if _explicit:
+                logger.info(
+                    "nora_chat_router: follow-up matched an explicit rule → %s "
+                    "(prior=%s, classifier skipped)",
+                    _explicit,
+                    prior.get("pole"),
+                )
+                return _explicit
+        return None  # nothing explicit → keep the context-aware LLM path
+    # //// END Neoffice ////
     if _RECUR_RE.search(msg):
         return None  # recurring request → the LLM owns the 'recurrent' classification
-    # //// Neoffice — the visit wins over any keyword it happens to contain.
-    # //// Both go to `projet`, not `ventes`: the fourteen building-job writes
-    # //// (frappe_job_book_visit, frappe_job_quick, frappe_job_record_work and
-    # //// the rest) moved to the `projet` pole on 16.09. Routed to ventes they
-    # //// would reach a worker that no longer holds a single one of them, and
-    # //// the user would get the guard's English text instead of an answer.
-    # //// Change these two together with DOMAIN_WRITES, never one without the other.
-    if _APPOINTMENT_RE.search(msg):
-        logger.info("nora_chat_router: booking a visit → projet (keyword rules skipped)")
-        return "projet"
-    if _DID_WORK_RE.search(msg):
-        logger.info("nora_chat_router: work already done → projet (keyword rules skipped)")
-        return "projet"
-    if _JOB_ORDER_RE.search(msg):
-        logger.info("nora_chat_router: job order → projet (keyword rules skipped)")
-        return "projet"
+    # //// Neoffice — one evaluation of the explicit rules, shared with the
+    # //// follow-up branch above so both obey exactly the same table.
+    _explicit = _keyword_pole(msg)
+    if _explicit:
+        return _explicit
     # //// END Neoffice ////
-    for rx, pole in _FAST_PATH_RULES:
-        if rx.search(msg):
-            return pole
     if _DIRECT_RE.match(msg):
         return "DIRECT"
     return None
