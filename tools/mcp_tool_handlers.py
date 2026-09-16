@@ -572,7 +572,12 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                 _who = (get_session_env("HERMES_SESSION_USER_ID") or "").strip()
                 _params = args.get("params")
                 _target = _params if isinstance(_params, dict) else args
-                _target["bridge_user"] = _who if ("@" in _who and not _who.startswith("webhook:")) else ""
+                _keep = _who if ("@" in _who and not _who.startswith("webhook:")) else ""
+                _target["bridge_user"] = _keep
+                if not _keep:
+                    logger.info(
+                        "[bridge_user] %s.%s: no session user (raw=%r) — the tool will act "
+                        "as the service account", server_name, tool_name, _who)
             except Exception:  # a CLI run has no session — the tool stays as it was
                 pass
         # //// END Neoffice ////
