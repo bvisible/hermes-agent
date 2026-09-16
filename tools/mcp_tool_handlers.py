@@ -480,6 +480,25 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
     op = f"tools/call {tool_name}"
 
     def _handler(args: dict, **kwargs) -> str:
+        # //// Neoffice — carry WHO is asking into the call itself. A pole is a
+        # //// sub-agent of the gateway, not a kanban task, so the server it spawns
+        # //// cannot resolve the person; every « me » tool then ran as the service
+        # //// account and the model GUESSED a name — an hour was booked under a
+        # //// customer's (16.09). Read here, in the answering task's context, because
+        # //// the session lives in a ContextVar on purpose: an os.environ mirror would
+        # //// let one concurrent turn hand another turn's identity to a tool.
+        # //// Always written, even empty: what the model may have put must not survive.
+        if isinstance(args, dict) and server_name.startswith("neoffice-"):
+            try:
+                from gateway.session_context import get_session_env
+
+                _who = (get_session_env("HERMES_SESSION_USER_ID") or "").strip()
+                _params = args.get("params")
+                _target = _params if isinstance(_params, dict) else args
+                _target["bridge_user"] = _who if ("@" in _who and not _who.startswith("webhook:")) else ""
+            except Exception:  # a CLI run has no session — the tool stays as it was
+                pass
+        # //// END Neoffice ////
         # Security boundary: untrusted-server write tools need approval before ANY transport work (incl. lazy spawn).
         error = _trust_gate_check(server_name, tool_name) or _check_circuit_breaker(server_name)
         if error is not None:
