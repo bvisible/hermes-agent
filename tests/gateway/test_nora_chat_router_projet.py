@@ -56,6 +56,35 @@ def test_booking_and_reporting_work_route_to_projet(message):
     assert _fast_path(message, None) == "projet"
 
 
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Note une heure de travail sur le chantier PROJ-0001",
+        "enregistre 2h sur PROJ-0001",
+        "pointe trois heures sur l'intervention de mardi",
+        "ajoute du matériel sur le chantier",
+    ),
+)
+def test_a_job_order_routes_to_projet(message):
+    """The two other job rules only know the first person. An ORDER fell through
+    to the keyword rules, where « heures » is an HR word: it reached RH, which
+    holds no job tool, and the guardrail answered the customer in English."""
+    assert _fast_path(message, None) == "projet"
+
+
+@pytest.mark.parametrize(
+    ("message", "pole"),
+    (
+        ("ajoute deux heures de congé", "rh"),
+        ("enregistre le paiement de la facture", "compta"),
+    ),
+)
+def test_an_order_without_a_job_anchor_stays_with_its_own_pole(message, pole):
+    """The job-order rule is anchored on the job on purpose: an imperative alone
+    would steal leave hours from RH — the very mistake it exists to undo."""
+    assert _fast_path(message, None) == pole
+
+
 def test_projet_is_a_known_pole_with_a_label_in_every_language():
     """A pole the router can return but cannot name would reach the user unnamed."""
     assert "projet" in POLES
