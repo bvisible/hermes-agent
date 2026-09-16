@@ -57,6 +57,31 @@ PROVIDER_UNAVAILABLE_REPLY = (
 )
 
 
+# //// Neoffice — a guardrail message is addressed to the MODEL, not to the customer.
+# When a worker repeats the same call, upstream ends the turn with an instruction
+# written for the agent ("I stopped retrying <tool> because it hit the tool-call
+# guardrail (<code>) after N repeated non-progressing attempts. The last tool result
+# explains the blocker; the next step is to change strategy…", run_agent.py
+# _toolguard_controlled_halt_response). Measured end-to-end on 2026-09-16: a customer
+# asked for a job quotation, the turn was routed to a pole holding no job tool, its
+# worker looped, and THAT sentence arrived in the desk chat — in English, naming a
+# halt code, telling the reader to change strategy. Same shape as #450: the delivery
+# chain was fine, the only defect is what we let through (#476).
+#
+# Anchored on the fixed half of the template, so it holds whatever the tool name,
+# the code or the count. The technical text stays in the logs, where it is read.
+_GUARDRAIL_HALT_RE = re.compile(r"\bhit the tool-call guardrail\b", re.IGNORECASE)
+GUARDRAIL_HALT_REPLY = (
+    "Je n'ai pas réussi à traiter votre demande jusqu'au bout. "
+    "Reformulez-la ou précisez-la ; si cela se reproduit, prévenez votre administrateur."
+)
+
+# //// Neoffice — a kanban task id is opaque to the customer and useful to nobody
+# outside the machinery ("La tâche `t_51f94c26` est déjà en statut…"). Stripped
+# rather than rewritten: see the note in strip_internal_mechanics below (#476).
+_TASK_ID_RE = re.compile(r"`?\bt_[0-9a-f]{6,}\b`?", re.IGNORECASE)
+
+
 def strip_internal_mechanics(text: str) -> str:
     """Return ``text`` with NORA's internal vocabulary removed; non-strings pass through."""
     if not text or not isinstance(text, str):
@@ -67,8 +92,24 @@ def strip_internal_mechanics(text: str) -> str:
                        text[:200].replace("\n", " "))
         return PROVIDER_UNAVAILABLE_REPLY
     # //// END Neoffice ////
+    # //// Neoffice — see _GUARDRAIL_HALT_RE above (#476). Replaced WHOLE, like a
+    # //// provider failure: the sentence is machinery end to end, so stripping words
+    # //// out of it would leave a mangled half-sentence in the customer's chat.
+    if _GUARDRAIL_HALT_RE.search(text[:400]):
+        logger.warning("neoffice_branding: tool-call guardrail hidden from the customer: %s",
+                       text[:200].replace("\n", " "))
+        return GUARDRAIL_HALT_REPLY
+    # //// END Neoffice ////
     text = _ROLE_RE.sub("l'équipe", text)
     text = _SPECIALIST_RE.sub("équipe", text)
     text = _KANBAN_TASK_RE.sub("ta tâche", text)
+    # //// Neoffice — the id goes, the sentence stays (#476). A state sentence
+    # //// ("… est déjà en statut `done`") cannot be safely REWRITTEN this late: we
+    # //// would be telling a customer something about their own work from a regex,
+    # //// and a wrong state is worse than an awkward one. So the opaque id is
+    # //// removed here and the sentence itself is fixed where it is WRITTEN, in the
+    # //// kanban tool, not rescued at the door.
+    text = _TASK_ID_RE.sub("", text)
+    # //// END Neoffice ////
     text = _INTERNALS_RE.sub("", text)
     return _SPACES_RE.sub(" ", text).strip()
