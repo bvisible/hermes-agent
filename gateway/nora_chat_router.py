@@ -39,17 +39,17 @@ logger = logging.getLogger(__name__)
 # Business poles NORA routes to. Mirrors the orchestrator SOUL roster (the "Pôle"
 # column) — keep in sync with configs/SOUL.md so deterministic routing matches what
 # the orchestrator would have chosen on its good days.
-POLES = ("compta", "ventes", "support", "rh", "analyse")
+POLES = ("compta", "ventes", "support", "rh", "analyse", "projet")
 
 # Pole → user-facing label, PER LANGUAGE. NORA names the business "desk" to the user;
 # the internal key (compta/…) is never leaked. French is canonical (Swiss-FR audience)
 # and the default; the other languages mirror it for the multilingual chat path.
 # //// Neoffice — multilingual desk labels + ack templates (was French-only) ////
 POLE_LABELS = {
-    "fr": {"compta": "Comptabilité", "ventes": "Ventes", "support": "Support", "rh": "Ressources Humaines", "analyse": "Analyse"},
-    "de": {"compta": "Buchhaltung", "ventes": "Verkauf", "support": "Support", "rh": "Personalwesen", "analyse": "Analyse"},
-    "it": {"compta": "Contabilità", "ventes": "Vendite", "support": "Supporto", "rh": "Risorse Umane", "analyse": "Analisi"},
-    "en": {"compta": "Accounting", "ventes": "Sales", "support": "Support", "rh": "Human Resources", "analyse": "Analytics"},
+    "fr": {"compta": "Comptabilité", "ventes": "Ventes", "support": "Support", "rh": "Ressources Humaines", "analyse": "Analyse", "projet": "Projets"},
+    "de": {"compta": "Buchhaltung", "ventes": "Verkauf", "support": "Support", "rh": "Personalwesen", "analyse": "Analyse", "projet": "Projekte"},
+    "it": {"compta": "Contabilità", "ventes": "Vendite", "support": "Supporto", "rh": "Risorse Umane", "analyse": "Analisi", "projet": "Progetti"},
+    "en": {"compta": "Accounting", "ventes": "Sales", "support": "Support", "rh": "Human Resources", "analyse": "Analytics", "projet": "Projects"},
 }
 # Backwards-compat alias (the French label map, still referenced by name elsewhere).
 POLE_LABELS_FR = POLE_LABELS["fr"]
@@ -70,10 +70,10 @@ def _norm_lang(language: Optional[str]) -> str:
 # //// END Neoffice ////
 
 # Per-conversation last route (in-memory, gateway-process-scoped). Lets the classifier
-# resolve follow-ups IN CONTEXT: "Ceux de Daniel Moret" after "Combien de devis ouverts ?"
+# resolve follow-ups IN CONTEXT: "Ceux de ce client" after "Combien de devis ouverts ?"
 # (→ ventes) is the SAME ventes query filtered by a CLIENT — not an RH question about a
 # person. Without this, each message is classified blind and a name-only follow-up gets
-# mis-routed (verified 2026-06-03: "Ceux de Daniel Moret" → rh). Resets on gateway restart
+# mis-routed (verified 2026-06-03: "Ceux de ce client" → rh). Resets on gateway restart
 # (the first follow-up after a restart degrades to context-free classify — acceptable).
 _LAST_ROUTE: dict = {}
 _LAST_ROUTE_MAX = 1000  # bound the dict; cleared wholesale when exceeded (cheap, rare)
@@ -243,7 +243,7 @@ _CLASSIFIER_SYSTEM = (
     "mobiliser un pôle coûte 20 secondes pour finir par redemander les informations.\n"
     "- Le message demande une INFORMATION à aller chercher, ou FOURNIT les données, ou "
     "donne un ORDRE (« peux-tu me dire le montant de la dernière facture ? », "
-    "« crée le client Dupont, email jean@dupont.ch », « envoie la relance à Martin ») "
+    "« crée le client X, email contact@exemple.ch », « envoie la relance à Martin ») "
     "→ le pôle concerné, même si la phrase commence par « est-ce que tu peux ».\n\n"
     "SUITE DE CONVERSATION : si un contexte « message précédent → pôle X » t'est donné ET "
     "que le nouveau message est une PRÉCISION/SUITE (un nom seul, « ceux de … », « et pour … », "
@@ -262,7 +262,7 @@ _TOKEN_RE = re.compile(r"[a-zàâçéèêëîïôûùüÿñæœ]+", re.IGNORECAS
 # through to the LLM (with the full SOUL) so routing quality is never sacrificed for
 # speed. The fast-path is SKIPPED entirely when:
 #   - there is a follow-up `prior` pole → the LLM-with-context path must handle it
-#     ("Ceux de Daniel Moret" must stay on the prior pole), and
+#     ("Ceux de ce client" must stay on the prior pole), and
 #   - the message carries recurrence markers → the 'recurrent' decision belongs to the LLM.
 _RECUR_RE = re.compile(
     r"(tous les|chaque (jour|matin|soir|semaine|lundi|mardi|mercredi|jeudi|vendredi|mois)|"
@@ -364,6 +364,23 @@ _FAST_PATH_RULES = (
     ),
     # //// END Neoffice ////
     (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
+    # //// Neoffice — a quotation QUALIFIED BY A JOB belongs to `projet`, and must be
+    # //// tested before the plain `devis` rule below, which would otherwise swallow it.
+    # //// « compose le devis de ce chantier » is the sentence that failed on 15.09: it
+    # //// reached ventes, whose generic quotation tool produced a ONE-LINE document
+    # //// (a single generic service line named after the project) while the
+    # //// job's own costing was empty. `projet` holds frappe_job_quote and the
+    # //// composition that reads the ouvrages. An unqualified « fais un devis pour
+    # //// un client » stays a sales quotation and still falls through to ventes.
+    (
+        re.compile(
+            r"\b(devis|offre)\b.{0,40}\b(chantier|projet|intervention|PROJ-\d+)\b"
+            r"|\b(chantier|projet|intervention|PROJ-\d+)\b.{0,40}\b(devis|offre)\b",
+            re.IGNORECASE,
+        ),
+        "projet",
+    ),
+    # //// END Neoffice ////
     (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
     (re.compile(r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des))", re.IGNORECASE), "rh"),
 )
@@ -457,7 +474,7 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     # after an invoice question inherited compta→ventes, span a worker, and answered
     # "give me the name, email and address" after 21s — for a one-sentence question.
     # _CAPABILITY_RE is deliberately narrow: short question, no figure, no e-mail, so a
-    # real order ("crée le client Dupont, jean@x.ch") never reaches this branch and a
+    # real order ("crée le client X, contact@exemple.ch") never reaches this branch and a
     # data request ("peux-tu me dire le montant…") is not a capability question either.
     if _CAPABILITY_RE.match(msg) and not _RECUR_RE.search(msg):
         logger.info("nora_chat_router: capability question → DIRECT (no pole, no worker)")
@@ -467,13 +484,19 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         return None  # follow-up → keep the context-aware LLM path
     if _RECUR_RE.search(msg):
         return None  # recurring request → the LLM owns the 'recurrent' classification
-    # //// Neoffice — the visit wins over any keyword it happens to contain ////
+    # //// Neoffice — the visit wins over any keyword it happens to contain.
+    # //// Both go to `projet`, not `ventes`: the fourteen building-job writes
+    # //// (frappe_job_book_visit, frappe_job_quick, frappe_job_record_work and
+    # //// the rest) moved to the `projet` pole on 16.09. Routed to ventes they
+    # //// would reach a worker that no longer holds a single one of them, and
+    # //// the user would get the guard's English text instead of an answer.
+    # //// Change these two together with DOMAIN_WRITES, never one without the other.
     if _APPOINTMENT_RE.search(msg):
-        logger.info("nora_chat_router: booking a visit → ventes (keyword rules skipped)")
-        return "ventes"
+        logger.info("nora_chat_router: booking a visit → projet (keyword rules skipped)")
+        return "projet"
     if _DID_WORK_RE.search(msg):
-        logger.info("nora_chat_router: work already done → ventes (keyword rules skipped)")
-        return "ventes"
+        logger.info("nora_chat_router: work already done → projet (keyword rules skipped)")
+        return "projet"
     # //// END Neoffice ////
     for rx, pole in _FAST_PATH_RULES:
         if rx.search(msg):
@@ -619,7 +642,7 @@ def classify(
 
     ``prior`` (optional ``{"msg", "pole"}``) is the previous turn's user message and the
     pole it routed to; when present it is fed to the classifier so a follow-up/refinement
-    ("Ceux de Daniel Moret") stays on the same pole instead of being classified blind
+    ("Ceux de ce client") stays on the same pole instead of being classified blind
     (a client name in a devis context would otherwise look like an RH/person query).
 
     Defensive by construction: an empty message, an LLM error/timeout, or an
@@ -934,17 +957,18 @@ def route_chat_message(
     # //// Neoffice — on a job page, a business request is the job's (05.09). « Ajoute 2
     # heures de pose sur ce chantier » classified as RH (« heures ») and the RH worker,
     # which has no job tools, edited ANOTHER project's line with generic tools. The
-    # ventes pole owns the job tools; compta/analyse keep money and charts questions.
+    # `projet` pole owns the job tools (moved out of ventes on 16.09); compta/analyse
+    # keep money and charts questions.
     if category in ("rh", "support") and _page_project(page_context):
-        logger.info("nora_chat_router: %s → ventes (job page %s)", category, _page_project(page_context))
-        category = "ventes"
+        logger.info("nora_chat_router: %s → projet (job page %s)", category, _page_project(page_context))
+        category = "projet"
     # //// END Neoffice ////
     # //// Neoffice — on a job page, DIRECT is only for small talk (05.09). « Ajoute sur ce
     # chantier l'ouvrage … » came back DIRECT (a 'direct' verdict, or no verdict at all on a
     # freshly restarted gateway whose auxiliary runtime is unset until the first agent run):
     # the orchestrator then wrote its own task body WITHOUT the page context, and the ventes
     # worker guessed the job from keywords (« chambre », « peinture »). A business sentence
-    # on a job page belongs to ventes. Canned small talk and the capability question were
+    # on a job page belongs to projet. Canned small talk and the capability question were
     # settled before classify; a greeting-shaped message stays DIRECT.
     if (
         category == "DIRECT"
@@ -953,8 +977,8 @@ def route_chat_message(
         and not _DIRECT_RE.match((message or "").strip())
         and not _CAPABILITY_RE.match((message or "").strip())
     ):
-        logger.info("nora_chat_router: DIRECT → ventes (job page %s)", _page_project(page_context))
-        category = "ventes"
+        logger.info("nora_chat_router: DIRECT → projet (job page %s)", _page_project(page_context))
+        category = "projet"
     # //// END Neoffice ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
@@ -1160,9 +1184,9 @@ def route_chat_message(
         conn = kanban_db.connect(board=board)
         try:
             # Give the WORKER the conversation context too, so a follow-up is executed
-            # as a refinement of the prior turn — "Ceux de Daniel Moret" after "Combien de
-            # devis ouverts ?" must mean "the OPEN DEVIS of client Daniel Moret", not "show
-            # Daniel Moret's profile". The router already kept the right pole; this keeps the
+            # as a refinement of the prior turn — "Ceux de ce client" after "Combien de
+            # devis ouverts ?" must mean "the OPEN DEVIS of client ce client", not "show
+            # ce client's profile". The router already kept the right pole; this keeps the
             # right INTENT. Only when the previous turn routed to the same kind of request.
             # //// Neoffice — give the worker the conversation FILM (recent user turns) so a
             # MULTI-STEP request is CONTINUED, not restarted. The worker is session-less, so
@@ -1245,7 +1269,7 @@ def route_chat_message(
                 _wlang, _wlang
             )
             # //// Neoffice — partner guard (2026-08-21, osiris): a worker asked to
-            # "order ten" of an item picked a REAL customer (Daniel Moret) out of the
+            # "order ten" of an item picked a REAL customer (ce client) out of the
             # database — never named in the thread — and created a sales order AND an
             # uninvited invoice in his name. Guessing a business partner fabricates
             # documents in a real person's name; asking costs one turn. Carried on
