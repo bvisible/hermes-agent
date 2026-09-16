@@ -379,6 +379,31 @@ _FAST_PATH_RULES = (
         "compta",
     ),
     # //// END Neoffice ////
+    # //// Neoffice — a job named or ASKED ABOUT belongs to `projet`. The three
+    # //// rules above the table only know the imperative ("note une heure sur le
+    # //// chantier…") and the first person ("j'ai passé…"); a plain QUESTION —
+    # //// « quel est le statut du chantier PROJ-0091 ? » — matched no rule at all
+    # //// and fell through to the LLM classifier, which sent it to ventes, the
+    # //// pole that owned job matters until 16.09. Ventes answered honestly that
+    # //// it holds no job tool (measured 16.09).
+    # //// Deliberately narrow, in two halves that fail differently:
+    # ////   · a job NUMBER is unambiguous — nothing else in the system is PROJ-n;
+    # ////   · a job NOUN only counts next to a state word. « chantier » alone
+    # ////     would steal « recrute un ouvrier pour le chantier » from rh.
+    # //// Below the email and dunning rules on purpose: « envoie un mail au sujet
+    # //// du chantier X » is still support's, which alone holds the mail tools.
+    (
+        re.compile(
+            r"\bPROJ-\d+\b"
+            r"|\b(?:statut|[ée]tat|avancement|o[uù]\s+(?:en\s+est|ça\s+en\s+est|ca\s+en\s+est)|"
+            r"point\s+sur)\b[^.!?]{0,40}?\b(?:chantier|intervention)\b"
+            r"|\b(?:chantier|intervention)\b[^.!?]{0,40}?\b(?:statut|[ée]tat|avancement|"
+            r"o[uù]\s+en\s+est)\b",
+            re.IGNORECASE,
+        ),
+        "projet",
+    ),
+    # //// END Neoffice ////
     (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
     # //// Neoffice — a quotation QUALIFIED BY A JOB belongs to `projet`, and must be
     # //// tested before the plain `devis` rule below, which would otherwise swallow it.
