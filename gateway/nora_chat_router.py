@@ -272,6 +272,25 @@ _RECUR_RE = re.compile(
 )
 # (regex, pole) — first match wins. ANALYSE is checked FIRST: a chart/visual request goes
 # to analyse regardless of subject (SOUL rule). Then the unambiguous domain keywords.
+# //// Neoffice — booking a visit is a JOB matter, whatever words it contains (16.09).
+# « Je passe chez <client> demain à 14h30 pour changer une carte graphique » routed to
+# ANALYSE: the chart keyword matched « carte graphique », a piece of hardware. The
+# analyse worker holds no job tool, so it blocked for a partner and the user got
+# nothing — for the most ordinary request a tradesman makes. Narrowing the chart rule
+# would only postpone it (« diagramme de câblage », « tableau de bord » of a car): a
+# sentence that books a visit belongs to ventes, and it is decided BEFORE the keyword
+# rules. Deliberately narrow: someone must be GOING somewhere, or a rendez-vous must
+# be named. « Fais-moi un graphique des heures » is untouched.
+_APPOINTMENT_RE = re.compile(
+    r"\b(?:je|on|il|elle|tu)\s+(?:dois|doit|vais|va|passe|passons|serai|sera|repasse)\s+"
+    r"(?:\w+\s+){0,2}?(?:chez|voir|sur place|au domicile)\b"
+    r"|\bpasser\s+(?:\w+\s+){0,2}?chez\b"
+    r"|\brendez[-\s]?vous\b"
+    r"|\b(?:intervention|d[ée]placement|visite)\s+(?:chez|pour|le|demain|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\b",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — payment-reminder ("rappel de paiement" / "relance" / "rappel de facture")
@@ -433,6 +452,11 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         return None  # follow-up → keep the context-aware LLM path
     if _RECUR_RE.search(msg):
         return None  # recurring request → the LLM owns the 'recurrent' classification
+    # //// Neoffice — the visit wins over any keyword it happens to contain ////
+    if _APPOINTMENT_RE.search(msg):
+        logger.info("nora_chat_router: booking a visit → ventes (keyword rules skipped)")
+        return "ventes"
+    # //// END Neoffice ////
     for rx, pole in _FAST_PATH_RULES:
         if rx.search(msg):
             return pole
