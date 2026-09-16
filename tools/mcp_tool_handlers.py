@@ -4,6 +4,7 @@ ladder: trust gating, circuit breaker, auth (401) refresh, session-expired recon
 import logging
 import asyncio
 import contextvars
+import os  # //// Neoffice — read the kanban task of this worker ////
 import inspect
 import json
 import time
@@ -552,6 +553,63 @@ def _render_call_tool_result(result, server_name: str) -> str:
         return json.dumps({"result": text_result}, ensure_ascii=False)
 
 
+# //// Neoffice — the person a kanban worker is answering for.
+# //// The env cannot carry it (the dispatcher strips routing vars, and
+# //// delegated_child_subprocess_env scrubs the kanban task — both on purpose), but the
+# //// WORKER still has its task id, and the task's notify sub names the human. Resolved
+# //// here, once per task, and handed to the call. Without it every « me » tool runs as
+# //// the bridge's service account and the model guesses a name: an hour of work was
+# //// booked under a customer's on 16.09.
+_TASK_USER_CACHE: dict = {}
+
+
+def _kanban_task_user() -> str:
+    """The e-mail of the human this worker's task belongs to, or ''."""
+    task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    if not task_id:
+        return ""
+    if task_id in _TASK_USER_CACHE:
+        return _TASK_USER_CACHE[task_id]
+    found = ""
+    try:
+        import sqlite3
+
+        home = (os.environ.get("HERMES_HOME") or "").strip()
+        candidates = []
+        walk = os.path.abspath(home) if home else ""
+        for _ in range(3):  # a worker's home is <root>/profiles/<pole>
+            if not walk:
+                break
+            candidates.append(os.path.join(walk, "kanban.db"))
+            candidates.append(os.path.join(walk, "kanban", "kanban.db"))
+            walk = os.path.dirname(walk)
+        for db_path in candidates:
+            if not os.path.exists(db_path):
+                continue
+            conn = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=2)
+            try:
+                row = conn.execute(
+                    "SELECT chat_id, user_id FROM kanban_notify_subs "
+                    "WHERE task_id=? AND platform='webhook' ORDER BY rowid DESC LIMIT 1",
+                    (task_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            if not row:
+                continue
+            marker = ":user:"
+            chat_id = (row[0] or "")
+            if chat_id.startswith("webhook:nora_chat:") and marker in chat_id:
+                found = chat_id.split(marker, 1)[1].strip()
+            elif "@" in (row[1] or ""):
+                found = (row[1] or "").strip()
+            break
+    except Exception:  # a worker outside kanban, a locked probe — the tool stays as it was
+        found = ""
+    _TASK_USER_CACHE[task_id] = found
+    return found
+# //// END Neoffice ////
+
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
     """Sync registry handler (``handler(args_dict, **kwargs) -> str``) calling an MCP tool via the background loop."""
     op = f"tools/call {tool_name}"
@@ -570,6 +628,10 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
                 from gateway.session_context import get_session_env
 
                 _who = (get_session_env("HERMES_SESSION_USER_ID") or "").strip()
+                if not _who:
+                    # A pole worker has no session — the dispatcher stripped it. Its
+                    # task, however, still names the human.
+                    _who = _kanban_task_user()
                 _params = args.get("params")
                 _target = _params if isinstance(_params, dict) else args
                 _keep = _who if ("@" in _who and not _who.startswith("webhook:")) else ""
