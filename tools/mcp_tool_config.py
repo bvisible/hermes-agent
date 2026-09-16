@@ -289,7 +289,24 @@ def _interpolate_env_vars(value):
     if isinstance(value, str):
         def _replace(m):
             resolver = _CONTEXT_VAR_RESOLVERS.get(m.group(1).strip())
-            return resolver() if resolver is not None else (_get_secret(_env_ref_name(m.group(1)), m.group(0)) or m.group(0))
+            if resolver is not None:
+                return resolver()
+            _name = _env_ref_name(m.group(1))
+            _val = _get_secret(_name, m.group(0)) or m.group(0)
+            # //// Neoffice — a Hermes RUNTIME var falls back to os.environ. These are not
+            # //// secrets and they are not context vars, so they resolved to nothing: a
+            # //// stdio server gets a filtered env (_build_safe_env keeps only PATH/HOME/…),
+            # //// and the config's `env:` block was its only channel. Measured 16.09: a pole
+            # //// worker holds HERMES_KANBAN_TASK (the dispatcher sets it, the worker's own
+            # //// log opens with it) but its MCP server saw it EMPTY, so every per-user tool
+            # //// ran as the service account and the model guessed a name — an hour was
+            # //// booked under a customer's. Resolving here rather than widening
+            # //// _SAFE_ENV_KEYS keeps it OPT-IN: only a server whose own config asks for
+            # //// the var receives it, and a third-party server still gets nothing.
+            if _val == m.group(0) and _name.startswith("HERMES_"):
+                _val = os.environ.get(_name) or m.group(0)
+            return _val
+            # //// END Neoffice ////
         return _ENV_VAR_PATTERN.sub(_replace, value)
     if isinstance(value, dict):
         return {k: _interpolate_env_vars(v) for k, v in value.items()}
