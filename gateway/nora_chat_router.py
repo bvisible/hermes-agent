@@ -1260,8 +1260,28 @@ def route_chat_message(
             _pc = page_context if isinstance(page_context, dict) else {}
             _pc_job = _pc.get("job") if isinstance(_pc.get("job"), dict) else {}
             _pc_project = _page_project(page_context)
+            # //// Neoffice — the message itself can name the job, and then it is just
+            # //// as certain as the page context. Measured 16.09 on the new `projet`
+            # //// pole: « Note une heure de travail sur le chantier PROJ-0087 » arrived
+            # //// over WhatsApp (no page context), so no anchor was carried. The worker
+            # //// then called frappe_job_status FIVE times WITHOUT its `project`
+            # //// argument — the number was in the task title both times, and the model
+            # //// simply never copied it. The tool answered "project is required" five
+            # //// times, the run ended without calling kanban_complete, and the safety
+            # //// net closed the card as `done` with an empty summary: the hour was
+            # //// never recorded and nobody was told. Reading the id out of the message
+            # //// is code doing what the model was being trusted to do.
+            _pc_src = "Page context — the user is on building job"
+            if not _pc_project:
+                _m_proj = re.search(r"\bPROJ-\d+\b", str(message or ""), re.IGNORECASE)
+                if _m_proj:
+                    _pc_project = _m_proj.group(0).upper()
+                    # Say where it came from: the anchor must never claim a page the
+                    # user was not on — a lie in the body is a lie the worker repeats.
+                    _pc_src = "The request names the building job"
+            # //// END Neoffice ////
             if _pc_project:
-                _pc_line = f"[Page context — the user is on building job {_pc_project}"
+                _pc_line = f"[{_pc_src} {_pc_project}"
                 if _pc_job.get("title"):
                     _pc_line += f" « {str(_pc_job.get('title'))[:120]} »"
                 if _pc_job.get("customer"):
