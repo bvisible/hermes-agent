@@ -289,6 +289,21 @@ _APPOINTMENT_RE = re.compile(
     r"|\b(?:intervention|d[ée]placement|visite)\s+(?:chez|pour|le|demain|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\b",
     re.IGNORECASE,
 )
+# //// Neoffice — reporting work already done ("j'ai été chez X", "j'ai passé deux
+# heures", "j'ai pris un joint") is the same job matter as booking one, and it hits
+# the same trap from the other side: « heures » is an HR word, « pris » a stock one.
+# Measured 16.09: it landed on RH, which has no job tool, and the worker repeated
+# one call until the guardrail answered the customer in English. Narrow on purpose:
+# the speaker must be reporting what THEY did, in the past.
+_J_AI = r"j\s*['’]?\s*ai"
+_DID_WORK_RE = re.compile(
+    # _J_AI covers j'ai, j’ai and j ai — see above.
+    r"\b" + _J_AI + r"\s+(?:\w+\s+){0,2}?(?:pass[ée]|rest[ée]|bossé|travaill[ée])\b"
+    r"|\b" + _J_AI + r"\s+(?:été|fait un tour|fini)\s+(?:\w+\s+){0,2}?chez\b"
+    r"|\bje\s+(?:sors|reviens|rentre)\s+de\s+chez\b"
+    r"|\b" + _J_AI + r"\s+pris\s+(?:un|une|des|le|la|deux|trois)\b",
+    re.IGNORECASE,
+)
 # //// END Neoffice ////
 
 _FAST_PATH_RULES = (
@@ -455,6 +470,9 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     # //// Neoffice — the visit wins over any keyword it happens to contain ////
     if _APPOINTMENT_RE.search(msg):
         logger.info("nora_chat_router: booking a visit → ventes (keyword rules skipped)")
+        return "ventes"
+    if _DID_WORK_RE.search(msg):
+        logger.info("nora_chat_router: work already done → ventes (keyword rules skipped)")
         return "ventes"
     # //// END Neoffice ////
     for rx, pole in _FAST_PATH_RULES:
