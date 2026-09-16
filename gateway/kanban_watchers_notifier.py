@@ -402,12 +402,39 @@ _EVENT_FORMATTERS: dict[str, Callable[[Any, "_KanbanNotification"], tuple]] = {
 # //// transitions between agents, not an outcome. Our subs are notify-only (no wake mode),
 # //// so the reviewer's final `completed` is what the customer receives. RESTORE upstream's
 # //// formatters for those three if we ever subscribe agent creators with delivery_mode wake.
-_NEOFFICE_DOMAINS = {"ventes": "Ventes", "compta": "Comptabilité", "support": "Support", "rh": "RH"}
+# //// Neoffice — every pole delivers under ITS OWN name, derived, not re-listed.
+# //// This table listed FOUR poles while the router knew six, so `analyse` and
+# //// `projet` both delivered as "Le service — …" instead of their own name —
+# //// measured on a real desk turn 16.09, and `analyse` had been doing it for
+# //// months. A second hand-kept list of the poles is the defect: it is silent,
+# //// it is customer-facing, and nothing fails when somebody adds a pole and
+# //// forgets this line. So the labels are DERIVED from the router's own table,
+# //// and the literal below is a complete fallback rather than the source.
+_NEOFFICE_DOMAINS = {
+    "ventes": "Ventes",
+    "compta": "Comptabilité",
+    "support": "Support",
+    "rh": "RH",
+    "analyse": "Analyse",
+    "projet": "Projets",
+}
 
 
 def _neoffice_head(n: "_KanbanNotification") -> str:
     """The pole name the customer knows, never the board/assignee/task id."""
     who = (getattr(n.task, "assignee", "") or "") if n.task else ""
+    # //// Neoffice — deferred and best-effort, like the note_nora_reply import
+    # //// below: a label is never worth failing a delivery for. The fallback
+    # //// above is complete, so a broken import costs the router's wording, not
+    # //// a pole's name.
+    try:
+        from gateway.nora_chat_router import POLE_LABELS
+
+        label = (POLE_LABELS.get("fr") or {}).get(who)
+        if label:
+            return label
+    except Exception:
+        pass
     return _NEOFFICE_DOMAINS.get(who, "Le service")
 
 
