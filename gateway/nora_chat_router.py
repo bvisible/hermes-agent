@@ -321,11 +321,32 @@ _DID_WORK_RE = re.compile(
 # enough, or « ajoute deux heures de congé » would be stolen from RH, which is
 # exactly the mistake this rule exists to undo.
 _JOB_ORDER_RE = re.compile(
+    # //// Neoffice — opening a job and asking about one are orders too (17.09):
+    # //// « crée un chantier pour une rénovation » and « demande l'avis d'un expert
+    # //// sur ce chantier » matched no rule and depended on the classifier answering
+    # //// within its eight seconds. Still ANCHORED on the job, so « crée un client »
+    # //// is untouched.
     r"\b(?:note|notez|enregistre|enregistrez|pointe|pointez|saisis|saisissez|"
-    r"inscris|inscrivez|ajoute|ajoutez|rajoute|rajoutez|met[s]?|mettez)\b"
+    r"inscris|inscrivez|ajoute|ajoutez|rajoute|rajoutez|met[s]?|mettez|"
+    r"cr[ée]e|cr[ée]ez|cr[ée]er|ouvre|ouvrez|ouvrir|d[ée]marre|d[ée]marrez|"
+    r"lance|lancez|demande|demandez)\b"
     r"[^.!?]{0,80}?\b(?:chantier|intervention|PROJ-\d+)\b"
     r"|\bPROJ-\d+\b[^.!?]{0,80}?\b(?:heure|heures|\dh\b|main[-\s]d.?oeuvre|"
     r"mat[ée]riel|fourniture)",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
+# //// Neoffice — the job pole's own QUESTIONS. See the rule that uses this (below,
+# //// in _FAST_PATH_RULES) for why each half is shaped the way it is.
+_JOB_QUESTIONS_RE = re.compile(
+    r"\b(?:quels?|quelles?|combien\s+de|liste|listez|montre|montrez|affiche|affichez)\b"
+    r"[^.!?]{0,24}?\bchantiers\b"
+    r"|\b(?:natures?|types?|sortes?)\s+de\s+chantiers?\b"
+    r"|\bma\s+(?:journ[ée]e|tourn[ée]e)\b"
+    r"|\bj\s*['’]?\s*ai\s+le\s+temps\b"
+    r"|\blignes?\s+de\s+travail\b",
     re.IGNORECASE,
 )
 # //// END Neoffice ////
@@ -445,6 +466,23 @@ _FAST_PATH_RULES = (
     # //// is measured before it is priced; below the mail rules, like the job rules
     # //// above — « envoie le métré par mail » is still support, which holds the mail tools.
     (_MEASUREMENT_RE, "projet"),
+    # //// END Neoffice ////
+    # //// Neoffice — the job pole's own questions, made deterministic (17.09). Measured
+    # //// that day: the gateway gives the classifier EIGHT seconds and falls back to
+    # //// DIRECT when it does not answer — 33 times in this log, 14 on that day alone.
+    # //// DIRECT means the gateway agent replies, and it holds not one pole tool, so a
+    # //// sentence that matters must not depend on the model answering in time.
+    # //// Narrow, each half failing differently:
+    # ////   · a QUESTION about jobs in the PLURAL — « quels chantiers … ». The plural is
+    # ////     the discriminator: « recrute un ouvrier pour le chantier » is singular AND
+    # ////     carries no question word, so it stays rh, which is the collision the job
+    # ////     rules above exist to avoid;
+    # ////   · « natures / types de chantier » — vocabulary nothing else in the system uses;
+    # ////   · « ma journée » / « ma tournée » — the field worker's own day
+    # ////     (frappe_my_day, frappe_close_my_day), never anyone else's;
+    # ////   · « j'ai le temps » — frappe_can_i_make_it, a scheduling question;
+    # ////   · « ligne de travail » — the pole's own noun for what it writes.
+    (_JOB_QUESTIONS_RE, "projet"),
     # //// END Neoffice ////
     (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
     # //// Neoffice — a payment RECORDED against an invoice is compta's, and nothing
@@ -817,7 +855,22 @@ def classify(
             main_runtime=main_runtime,
         )
         raw = (resp.choices[0].message.content or "").strip().lower()
-    except Exception as exc:  # noqa: BLE001 — any failure must degrade to DIRECT
+    except Exception as exc:  # noqa: BLE001 — any failure must degrade, never raise
+        # //// Neoffice — degrade to the PRIOR pole, not to DIRECT (17.09). The classifier
+        # //// gets eight seconds; when the model is busy it does not answer in time, and
+        # //// the log shows this path taken 33 times. Falling to DIRECT hands the turn to
+        # //// the gateway agent, which holds not one pole tool — so a thread already on
+        # //// compta answered its follow-up with nothing. Staying put is strictly better:
+        # //// the prior pole was chosen by a classification that DID succeed. With no
+        # //// prior, DIRECT remains the safe default (never drop a message).
+        fallback = (prior or {}).get("pole")
+        if fallback in POLES:
+            logger.warning(
+                "nora_chat_router: classifier failed, staying on prior pole %s: %s",
+                fallback,
+                exc,
+            )
+            return fallback
         logger.warning("nora_chat_router: classifier failed, falling back to DIRECT: %s", exc)
         return "DIRECT"
     # //// Neoffice — the verdict is logged (05.09): a job-page write went DIRECT with no

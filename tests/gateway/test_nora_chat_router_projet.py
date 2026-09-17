@@ -173,3 +173,102 @@ def test_a_leave_request_is_still_not_a_work_report():
     """The widened rule must not reach across into RH, which owns « congé »."""
     assert _fast_path("ajoute deux heures de congé", None) == "rh"
     assert _fast_path("ajoute deux heures de conge", None) == "rh"
+
+
+# //// Neoffice — the job pole's own questions must not depend on the model answering.
+# //// Measured 17.09: the gateway gives the classifier EIGHT seconds and falls back when
+# //// it does not reply — 33 times in the log, 14 that day. Each of these sentences used
+# //// to match no rule at all, so each was one slow model call away from being answered
+# //// by an agent holding no pole tool.
+@pytest.mark.parametrize(
+    "message",
+    (
+        "crée un chantier pour une rénovation de salle de bain",
+        "ouvre un chantier chez le client",
+        "quels chantiers demandent mon attention ?",
+        "quels chantiers sont libres en ce moment ?",
+        "quels chantiers est-ce que je dois terminer ?",
+        "combien de chantiers en cours ?",
+        "quelles natures de chantier est-ce qu'on gère ?",
+        "c'est quoi ma journée aujourd'hui ?",
+        "clôture ma journée",
+        "montre-moi ma tournée",
+        "est-ce que j'ai le temps de passer avant 16h ?",
+        "j ai le temps de passer ?",
+        "transforme cette note en ligne de travail",
+        "demande l'avis d'un expert sur ce chantier",
+    ),
+)
+def test_the_job_poles_own_questions_are_deterministic(message):
+    assert _fast_path(message, None) == "projet"
+
+
+@pytest.mark.parametrize(
+    ("message", "pole"),
+    (
+        # The plural + question shape is the discriminator; these have neither.
+        ("recrute un ouvrier pour le chantier", None),
+        ("crée un client Jean Dupont", None),
+        ("quels employés sont disponibles ?", None),
+        # And the neighbours the job rules sit next to keep their own routes.
+        ("quel est le chiffre d'affaires du mois ?", "compta"),
+        ("fais un devis pour ce client", "ventes"),
+        ("ajoute deux heures de congé", "rh"),
+        ("envoie un mail au sujet du chantier PROJ-0094", "support"),
+    ),
+)
+def test_the_job_question_rule_stays_narrow(message, pole):
+    """None means « no rule » — the classifier still decides, which is correct here."""
+    assert _fast_path(message, None) == pole
+
+
+# //// Neoffice — a guard is tested FAILING, not only succeeding.
+class _Boom(Exception):
+    pass
+
+
+def _exploding_llm(**_kwargs):
+    raise _Boom("model busy")
+
+
+def test_a_failed_classification_stays_on_the_prior_pole():
+    """Falling to DIRECT hands the turn to an agent holding no pole tool.
+
+    The prior pole was chosen by a classification that DID succeed, so staying
+    there is strictly better than dropping the thread's tools mid-conversation.
+    """
+    from gateway.nora_chat_router import classify
+
+    verdict = classify(
+        "et pour ce client-là ?",
+        call_llm_fn=_exploding_llm,
+        main_runtime=None,
+        prior={"msg": "liste mes factures en retard", "pole": "compta"},
+    )
+    assert verdict == "compta"
+
+
+def test_a_failed_classification_with_no_prior_still_degrades_to_direct():
+    """No prior means nothing better to fall back to — never drop the message."""
+    from gateway.nora_chat_router import classify
+
+    verdict = classify(
+        "et pour ce client-là ?",
+        call_llm_fn=_exploding_llm,
+        main_runtime=None,
+        prior=None,
+    )
+    assert verdict == "DIRECT"
+
+
+def test_a_failed_classification_ignores_a_prior_that_is_not_a_pole():
+    """DIRECT is not a pole: a prior of DIRECT must not be echoed back as one."""
+    from gateway.nora_chat_router import classify
+
+    verdict = classify(
+        "et pour ce client-là ?",
+        call_llm_fn=_exploding_llm,
+        main_runtime=None,
+        prior={"msg": "bonjour", "pole": "DIRECT"},
+    )
+    assert verdict == "DIRECT"
