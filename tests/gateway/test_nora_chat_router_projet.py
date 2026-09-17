@@ -150,3 +150,26 @@ def test_the_measurement_rule_does_not_steal_its_neighbours(message, pole):
 def test_a_measurement_noun_without_figures_stays_unclaimed():
     """Half B needs a dimension arithmetic: a noun alone is not a métré."""
     assert _fast_path("la surface de vente du magasin est trop petite", None) != "projet"
+
+
+# //// Neoffice — the field types this one-handed, on site. The rule already tolerates
+# //// a missing apostrophe (« j ai »); a missing accent is the same sloppiness and must
+# //// not route differently — unaccented, the sentence reached no rule and « heures »
+# //// made it an HR matter.
+@pytest.mark.parametrize(
+    "message",
+    (
+        "j'ai été sur place, deux heures",
+        "j ai ete sur place, deux heures",
+        "jai bosse sur le chantier ce matin",
+        "j'ai été sur le chantier, trois heures",
+    ),
+)
+def test_a_work_report_survives_a_missing_accent_or_apostrophe(message):
+    assert _fast_path(message, None) == "projet"
+
+
+def test_a_leave_request_is_still_not_a_work_report():
+    """The widened rule must not reach across into RH, which owns « congé »."""
+    assert _fast_path("ajoute deux heures de congé", None) == "rh"
+    assert _fast_path("ajoute deux heures de conge", None) == "rh"

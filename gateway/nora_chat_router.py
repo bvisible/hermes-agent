@@ -298,13 +298,16 @@ _APPOINTMENT_RE = re.compile(
 _J_AI = r"j\s*['’]?\s*ai"
 _DID_WORK_RE = re.compile(
     # _J_AI covers j'ai, j’ai and j ai — see above.
-    r"\b" + _J_AI + r"\s+(?:\w+\s+){0,2}?(?:pass[ée]|rest[ée]|bossé|travaill[ée])\b"
+    # //// Neoffice — and the accents go the same way as the apostrophe: this is
+    # //// typed one-handed on a phone, on site. « j ai ete sur place » is the same
+    # //// sentence as « j'ai été sur place » and must not route differently.
+    r"\b" + _J_AI + r"\s+(?:\w+\s+){0,2}?(?:pass[ée]|rest[ée]|boss[ée]|travaill[ée])\b"
     # //// Neoffice — « sur place » / « sur le chantier » say the same thing as « chez »
     # //// and are what the field actually types: « j'ai été sur place, deux heures ».
     # //// Without them that sentence matched no rule at all, fell to the classifier,
     # //// and « heures » made it an HR matter — the very mistake _JOB_ORDER_RE below
     # //// was written to undo. The repo test for it has been red since it was written.
-    r"|\b" + _J_AI + r"\s+(?:été|fait un tour|fini)\s+(?:\w+\s+){0,2}?(?:chez|sur\s+place|sur\s+le\s+chantier)\b"
+    r"|\b" + _J_AI + r"\s+(?:[ée]t[ée]|fait un tour|fini)\s+(?:\w+\s+){0,2}?(?:chez|sur\s+place|sur\s+le\s+chantier)\b"
     r"|\bje\s+(?:sors|reviens|rentre)\s+de\s+chez\b"
     r"|\b" + _J_AI + r"\s+pris\s+(?:un|une|des|le|la|deux|trois)\b",
     re.IGNORECASE,
