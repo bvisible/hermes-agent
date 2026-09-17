@@ -41,6 +41,57 @@ def test_kanban_tools_hidden_without_env_var(monkeypatch, tmp_path):
 # Handler happy paths
 # ---------------------------------------------------------------------------
 
+# //// Neoffice — an interrupted turn is not a finished task (#512).
+def test_an_interruption_notice_is_not_a_completion(worker_env):
+    """A worker killed mid-wait must not turn the board green.
+
+    Measured 2026-09-17 during a model-backend outage: two tasks landed
+    `done / outcome=completed` whose whole summary was the interruption notice,
+    while four siblings killed by the same outage were recorded truthfully as
+    crashed. One event, two stories — and the reassuring one was false.
+    """
+    from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    from tools import kanban_tools as kt
+
+    notice = INTERRUPT_WAITING_FOR_MODEL_PREFIX + "674.0s elapsed)."
+    out = json.loads(kt._handle_complete({"summary": notice}))
+    assert out.get("error"), f"the notice was accepted as a result: {out}"
+
+    conn = kbc.connect()
+    try:
+        assert kb.get_task(conn, worker_env).status != "done", (
+            "the task was closed on an interruption notice")
+    finally:
+        conn.close()
+
+
+def test_a_real_handoff_that_mentions_an_interruption_still_completes():
+    """The guard anchors on upstream's prefix at the START, not on the words.
+
+    An answer that reports an interruption is an answer.
+    """
+    from tools import kanban_tools as kt
+
+    assert not kt._neoffice_interrupted_text(
+        "J'ai relanc\u00e9 la synchronisation : elle avait \u00e9t\u00e9 interrompue hier soir.")
+    assert not kt._neoffice_interrupted_text(None)
+    assert not kt._neoffice_interrupted_text(42)
+
+
+def test_the_guard_reads_upstreams_constant_rather_than_a_copy():
+    """A hand-kept literal drifts the day upstream rewords it — and then the guard
+    passes the lie through in silence, which is what it exists to prevent."""
+    import inspect
+
+    from tools import kanban_tools as kt
+
+    source = inspect.getsource(kt._neoffice_interrupted_text)
+    assert "INTERRUPT_WAITING_FOR_MODEL_PREFIX" in source
+    assert "Operation interrupted" not in source, "the literal is copied, not derived"
+
+
 @pytest.fixture
 def worker_env(monkeypatch, tmp_path):
     """Simulate being a worker: HERMES_HOME isolated, HERMES_KANBAN_TASK set

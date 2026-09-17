@@ -216,6 +216,27 @@ def _worker_run_id(task_id: str) -> Optional[int]:
         return None
 
 
+# //// Neoffice — an interrupted turn is not a finished task (#512).
+def _neoffice_interrupted_text(text) -> bool:
+    """True when ``text`` is upstream's cancellation metadata rather than an answer.
+
+    The prefix is IMPORTED, never copied. A hand-kept literal drifts the day upstream
+    rewords it, and this guard would then pass the lie through in silence — the exact
+    shape of failure it exists to prevent. When the import is unavailable we do NOT
+    guess: the completion goes through and we say so, because refusing a real handoff
+    is worse than letting one notice slip.
+    """
+    if not text or not isinstance(text, str):
+        return False
+    try:
+        from agent.conversation_loop import INTERRUPT_WAITING_FOR_MODEL_PREFIX as _prefix
+    except Exception:
+        logger.warning(
+            "kanban_tools: upstream interruption prefix unavailable — completion not checked")
+        return False
+    return text.strip().startswith(_prefix)
+
+
 def _stamp_worker_session_metadata(task_id: str, metadata: Optional[dict]) -> Optional[dict]:
     """Add trusted worker session id metadata for this worker's own task."""
     session_id = _own_task_env(task_id, "HERMES_SESSION_ID")
@@ -797,6 +818,22 @@ def _handle_complete(args: dict, **kw) -> str:
     if artifacts:
         metadata = _merge_artifacts(metadata, artifacts)
     _check(summary or result, "provide at least one of: summary (preferred), result")
+    # //// Neoffice — upstream's own comment calls this text "cancellation metadata, not
+    # //// assistant prose", yet a worker killed mid-wait hands it to kanban_complete and
+    # //// the board goes GREEN. Measured 2026-09-17 during a model-backend outage: two
+    # //// tasks `done / outcome=completed` whose entire summary was "Operation
+    # //// interrupted: waiting for model response (674.0s elapsed)." Their four siblings,
+    # //// killed by the same outage before reaching this call, were recorded truthfully
+    # //// by the reaper as blocked/crashed — one event, two stories, and the reassuring
+    # //// one was the false one (#512).
+    # //// Refusing leaves the task in flight. The worker is dying anyway, so the reaper
+    # //// then records it exactly like its siblings, and the board tells one story.
+    if _neoffice_interrupted_text(summary) or _neoffice_interrupted_text(result):
+        logger.warning("kanban_complete refused for %s: handoff is an interruption notice", tid)
+        return tool_error(
+            "kanban_complete refused: this handoff is an interruption notice, not a "
+            "result. The task stays in flight and is recorded as interrupted.")
+    # //// END Neoffice ////
     _require_dict_metadata(metadata)
     metadata = _stamp_worker_session_metadata(tid, metadata)
     with _board(args.get("board")) as (kb, conn):
