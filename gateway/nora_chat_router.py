@@ -371,6 +371,43 @@ _MEASUREMENT_RE = re.compile(
 
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
+    # //// Neoffice — chasing a JOB's quotation is projet's, not a collection (17.09).
+    # //// Same cause as the prospect rule below: the dunning rule matches \brelanc\w*
+    # //// and sits above the quotation rules, so « relance le devis du chantier PROJ-… »
+    # //// reached compta — which holds the dunning tools and not one job gesture, while
+    # //// projet holds frappe_job_quote and frappe_job_customer_said_yes. Pre-existing,
+    # //// measured 17.09 while testing the prospect rule.
+    # //// THREE lookaheads, like the mail rule above: the message must carry the chasing
+    # //// verb AND a quotation noun AND a job. « relance de paiement pour le chantier »
+    # //// has no quotation noun and stays compta, which is the whole point.
+    (
+        re.compile(
+            r"(?=.*\brelanc\w*\b)"
+            r"(?=.*\b(?:devis|offres?)\b)"
+            r"(?=.*\b(?:chantier|intervention|PROJ-\d+)\b)",
+            re.IGNORECASE,
+        ),
+        "projet",
+    ),
+    # //// END Neoffice ////
+    # //// Neoffice — relancer un PROSPECT is a sales follow-up, not a collection (17.09).
+    # //// The dunning rule just below matches \brelanc\w* — deliberately broad, because a
+    # //// payment reminder is phrased a dozen ways — and it was swallowing « relance ce
+    # //// prospect », which belongs to ventes. Measured that day: it reached compta, which
+    # //// holds the dunning tools and not one sales gesture.
+    # //// Deliberately NARROW: only « prospect » and « lead », the two words that can only
+    # //// mean a sale. « devis » is left out on purpose — « relance le devis du chantier »
+    # //// must keep reaching projet through the quotation rule further down, and a bare
+    # //// « relance-le » or « relance la facture » stays compta, as it should.
+    (
+        re.compile(
+            r"\brelanc\w*\b[^.!?]{0,30}?\b(?:prospects?|leads?)\b"
+            r"|\b(?:prospects?|leads?)\b[^.!?]{0,30}?\brelanc\w*\b",
+            re.IGNORECASE,
+        ),
+        "ventes",
+    ),
+    # //// END Neoffice ////
     # //// Neoffice — payment-reminder ("rappel de paiement" / "relance" / "rappel de facture")
     # routes DETERMINISTICALLY to compta. A dunning/Payment Reminder is a collections matter
     # (accounting), NOT a support ticket; the frappe_payment_reminder_create tool lives in compta
