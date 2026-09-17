@@ -299,7 +299,12 @@ _J_AI = r"j\s*['’]?\s*ai"
 _DID_WORK_RE = re.compile(
     # _J_AI covers j'ai, j’ai and j ai — see above.
     r"\b" + _J_AI + r"\s+(?:\w+\s+){0,2}?(?:pass[ée]|rest[ée]|bossé|travaill[ée])\b"
-    r"|\b" + _J_AI + r"\s+(?:été|fait un tour|fini)\s+(?:\w+\s+){0,2}?chez\b"
+    # //// Neoffice — « sur place » / « sur le chantier » say the same thing as « chez »
+    # //// and are what the field actually types: « j'ai été sur place, deux heures ».
+    # //// Without them that sentence matched no rule at all, fell to the classifier,
+    # //// and « heures » made it an HR matter — the very mistake _JOB_ORDER_RE below
+    # //// was written to undo. The repo test for it has been red since it was written.
+    r"|\b" + _J_AI + r"\s+(?:été|fait un tour|fini)\s+(?:\w+\s+){0,2}?(?:chez|sur\s+place|sur\s+le\s+chantier)\b"
     r"|\bje\s+(?:sors|reviens|rentre)\s+de\s+chez\b"
     r"|\b" + _J_AI + r"\s+pris\s+(?:un|une|des|le|la|deux|trois)\b",
     re.IGNORECASE,
@@ -439,6 +444,21 @@ _FAST_PATH_RULES = (
     (_MEASUREMENT_RE, "projet"),
     # //// END Neoffice ////
     (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
+    # //// Neoffice — a payment RECORDED against an invoice is compta's, and nothing
+    # //// claimed it: « enregistre le paiement de la facture » matched no rule and
+    # //// fell to the classifier. Deliberately the PAIR (payment + invoice), never
+    # //// « facture » alone — that word alone would steal « fais une facture pour ce
+    # //// client » from ventes. Below the dunning rule, which owns « rappel de
+    # //// paiement » and is tested first. The repo test for it has been red.
+    (
+        re.compile(
+            r"\b(?:paiement|encaissement|r[èe]glement)\b[^.!?]{0,40}?\bfactures?\b"
+            r"|\bfactures?\b[^.!?]{0,40}?\b(?:paiement|encaissement|r[èe]glement)\b",
+            re.IGNORECASE,
+        ),
+        "compta",
+    ),
+    # //// END Neoffice ////
     # //// Neoffice — a quotation QUALIFIED BY A JOB belongs to `projet`, and must be
     # //// tested before the plain `devis` rule below, which would otherwise swallow it.
     # //// « compose le devis de ce chantier » is the sentence that failed on 15.09: it
