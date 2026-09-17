@@ -76,6 +76,43 @@ GUARDRAIL_HALT_REPLY = (
     "Reformulez-la ou précisez-la ; si cela se reproduit, prévenez votre administrateur."
 )
 
+# //// Neoffice — upstream's TURN NOTICES are written for a developer at a CLI.
+# Typing a second message while the assistant is working is ordinary impatience, not
+# an edge case, and upstream answers it with its own status line: "↪ Redirected
+# current run (2 min elapsed, running: frappe_list). I'll adjust using your
+# correction." When a turn ends with no answer it says "⚠️ No reply: <reason>",
+# and every reason in agent/turn_explainers.py tells the reader to "Send `continue`"
+# or to "switch provider" — instructions for whoever runs the agent, addressed to
+# somebody who cannot do either.
+#
+# Measured on 2026-09-17 by llm/25_usage_chains on osiris, with the desk in French:
+# both literals arrived in the chat, in English. Same family as #450 and #476 — the
+# delivery chain is fine, the only defect is what we let through.
+#
+# The MEANING is kept (your message was taken into account / I could not finish),
+# because a silent chat is worse than an awkward one; the status detail (elapsed
+# minutes, iteration progress, the running tool) is machinery and goes. Anchored on
+# the fixed head of each template, at the START of the text, so a real answer that
+# happens to quote one of these is untouched.
+_BUSY_NOTICES = (
+    (re.compile(r"^\s*⇩?⏩?\s*Steered into current run\b", re.IGNORECASE),
+     "J'ai pris votre message en compte dans la demande en cours."),
+    (re.compile(r"^\s*↪?\s*Redirected current run\b", re.IGNORECASE),
+     "J'ai pris votre correction en compte et j'ajuste la demande en cours."),
+    (re.compile(r"^\s*⏳?\s*(Subagent working|Compressing context|Queued for the next turn)\b",
+                re.IGNORECASE),
+     "Je termine la demande en cours ; je réponds à votre message juste après."),
+    (re.compile(r"^\s*⚡?\s*Interrupting current task\b", re.IGNORECASE),
+     "J'arrête la demande en cours pour répondre à votre message."),
+)
+
+_NO_REPLY_RE = re.compile(r"^\s*⚠️?\s*No reply\s*:", re.IGNORECASE)
+NO_REPLY_REPLY = (
+    "Je n'ai pas réussi à aller au bout de ce message. "
+    "Reformulez-le ou précisez-le ; si cela se reproduit, prévenez votre administrateur."
+)
+
+
 # //// Neoffice — a kanban task id is opaque to the customer and useful to nobody
 # outside the machinery ("La tâche `t_51f94c26` est déjà en statut…"). Stripped
 # rather than rewritten: see the note in strip_internal_mechanics below (#476).
@@ -99,6 +136,19 @@ def strip_internal_mechanics(text: str) -> str:
         logger.warning("neoffice_branding: tool-call guardrail hidden from the customer: %s",
                        text[:200].replace("\n", " "))
         return GUARDRAIL_HALT_REPLY
+    # //// END Neoffice ////
+    # //// Neoffice — upstream turn notices, see _BUSY_NOTICES above (#491 thread).
+    # //// Replaced WHOLE: head, status detail and tail are machinery end to end, so
+    # //// stripping words would leave a mangled half-sentence in the customer's chat.
+    for _pattern, _french in _BUSY_NOTICES:
+        if _pattern.search(text[:120]):
+            logger.info("neoffice_branding: turn notice rewritten for the customer: %s",
+                        text[:200].replace("\n", " "))
+            return _french
+    if _NO_REPLY_RE.search(text[:120]):
+        logger.warning("neoffice_branding: unanswered turn hidden from the customer: %s",
+                       text[:200].replace("\n", " "))
+        return NO_REPLY_REPLY
     # //// END Neoffice ////
     text = _ROLE_RE.sub("l'équipe", text)
     text = _SPECIALIST_RE.sub("équipe", text)
