@@ -98,3 +98,55 @@ def test_every_pole_the_router_knows_can_be_named():
     must agree, in every language, for every pole — not just the new one."""
     for lang, labels in POLE_LABELS.items():
         assert set(labels) == set(POLES), f"{lang}: {set(POLES) ^ set(labels)}"
+
+
+# //// Neoffice — a MEASUREMENT reaches `projet`, the only pole holding frappe_measure.
+# //// The first message below is the one measured on 17.09: it matched no rule, fell
+# //// through to the LLM classifier, came back DIRECT, and was answered by the gateway
+# //// agent — which holds not one pole tool, so it improvised the arithmetic in prose.
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Sur le chantier, j ai trois murs identiques de 4.20 m de long sur 2.50 m de "
+        "haut, et il faut deduire une porte de 0.90 m sur 2.05 m. Quelle surface a "
+        "peindre au total ?",
+        "fais-moi le métré de la pièce",
+        "quel est le métré du sol ?",
+        "calcule la surface : 4,20 x 2,50",
+        "il me faut le cubage de la dalle",
+        "combien de m2 pour ce mur ?",
+        "ça fait combien de mètres carrés ?",
+        "quelle superficie pour 12 x 3 ?",
+    ),
+)
+def test_a_measurement_routes_to_projet(message):
+    assert _fast_path(message, None) == "projet"
+
+
+def test_the_decimal_point_does_not_cut_the_sentence():
+    """The gap is [\\s\\S], not [^.!?].
+
+    A dimension carries its own full stop — « 4.20 » — and the measurement noun
+    usually sits in the NEXT sentence: « voici les cotes. Quelle surface ? ».
+    A sentence-bounded gap can span neither, which is exactly how the first
+    version of this rule failed the one message it was written for.
+    """
+    assert _fast_path("Le mur fait 4.20 m sur 2.50 m. Quelle surface ?", None) == "projet"
+
+
+@pytest.mark.parametrize(
+    ("message", "pole"),
+    (
+        ("quel est le chiffre d'affaires du mois ?", "compta"),
+        ("fais un devis pour ce client", "ventes"),
+        ("combien de congés me reste-t-il ?", "rh"),
+    ),
+)
+def test_the_measurement_rule_does_not_steal_its_neighbours(message, pole):
+    """It sits above the `devis` and `chiffre d affaires` rules — so it must be narrow."""
+    assert _fast_path(message, None) == pole
+
+
+def test_a_measurement_noun_without_figures_stays_unclaimed():
+    """Half B needs a dimension arithmetic: a noun alone is not a métré."""
+    assert _fast_path("la surface de vente du magasin est trop petite", None) != "projet"

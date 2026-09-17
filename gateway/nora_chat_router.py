@@ -322,6 +322,24 @@ _JOB_ORDER_RE = re.compile(
 )
 # //// END Neoffice ////
 
+
+# //// Neoffice — what a quantity-surveying question looks like. Kept beside the rules
+# //// it feeds so the two halves stay readable; see the rule for why they differ.
+_DIMENSION = (
+    r"\d+(?:[.,]\d+)?\s*(?:mm|cm|m|m[èe]tres?)?\b[^.!?]{0,25}?"
+    r"(?:\bx\b|\*|\bsur\b|\bpar\b)\s*\d"
+)
+_MEASURE_NOUN = r"(?:surface|superficie|quantit[ée]|volume|p[ée]rim[èe]tre)"
+_MEASUREMENT_RE = re.compile(
+    r"\b(?:m[ée]tr[ée]s?|m[ée]trer|m[ée]trage|cubage)\b"
+    r"|\bm[²2³3]\b"
+    r"|\bm[èe]tres?\s+(?:carr[ée]s?|cubes?|lin[ée]aires?)\b"
+    r"|\b" + _MEASURE_NOUN + r"\w*\b[\s\S]{0,200}?" + _DIMENSION +
+    r"|" + _DIMENSION + r"[\s\S]{0,200}?\b" + _MEASURE_NOUN + r"\w*\b",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — payment-reminder ("rappel de paiement" / "relance" / "rappel de facture")
@@ -403,6 +421,22 @@ _FAST_PATH_RULES = (
         ),
         "projet",
     ),
+    # //// END Neoffice ////
+    # //// Neoffice — a MEASUREMENT belongs to `projet`, which alone holds frappe_measure
+    # //// and frappe_measure_onto_line. Without this rule a plain surveying question
+    # //// — « trois murs de 4.20 m sur 2.50 m, moins une porte, quelle surface ? » —
+    # //// matched nothing, fell through to the LLM classifier, and came back DIRECT:
+    # //// answered by the gateway agent, which holds not one of the 48 pole tools, so
+    # //// the arithmetic was improvised in prose instead of computed (measured 17.09).
+    # //// Two halves that fail differently, on purpose:
+    # ////   · a trade word nothing else in the system says (métré, cubage, m²) — enough
+    # ////     on its own, because no other pole has a use for it;
+    # ////   · a measurement NOUN only counts next to a dimension arithmetic. « surface
+    # ////     de vente du magasin » carries no figures and stays where it was.
+    # //// Above the `devis` and `chiffre d affaires` rules so « le métré pour le devis »
+    # //// is measured before it is priced; below the mail rules, like the job rules
+    # //// above — « envoie le métré par mail » is still support, which holds the mail tools.
+    (_MEASUREMENT_RE, "projet"),
     # //// END Neoffice ////
     (re.compile(r"(chiffre d'affaires|chiffre d affaires|\btva\b|impay[ée]|\bbilan\b|grand livre|écritures? comptables?|factures? fournisseur)", re.IGNORECASE), "compta"),
     # //// Neoffice — a quotation QUALIFIED BY A JOB belongs to `projet`, and must be
