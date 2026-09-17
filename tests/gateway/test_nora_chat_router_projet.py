@@ -272,3 +272,39 @@ def test_a_failed_classification_ignores_a_prior_that_is_not_a_pole():
         prior={"msg": "bonjour", "pole": "DIRECT"},
     )
     assert verdict == "DIRECT"
+
+
+# //// Neoffice — « relance » means three different jobs depending on ONE noun beside it.
+# //// The dunning rule matches \brelanc\w* on purpose — a payment reminder is phrased a
+# //// dozen ways — and it sits above the quotation rules, so until 17.09 it swallowed
+# //// both a sales follow-up and a chase on a job's quotation, landing them on compta:
+# //// the pole that holds the dunning tools and not one gesture either of them needs.
+@pytest.mark.parametrize(
+    ("message", "pole"),
+    (
+        # a prospect can only be a sale
+        ("relance ce prospect", "ventes"),
+        ("relance les prospects de la semaine", "ventes"),
+        ("ce lead, il faut le relancer", "ventes"),
+        # a quotation ON A JOB is projet's — it holds frappe_job_quote
+        ("relance le devis du chantier PROJ-0094", "projet"),
+        ("relance l'offre de ce chantier", "projet"),
+        # everything else is still a collection, which is what the broad rule is for
+        ("relance la facture FA-0042", "compta"),
+        ("envoie un rappel de paiement", "compta"),
+        ("relance-le", "compta"),
+        ("lettre de relance pour ce client", "compta"),
+    ),
+)
+def test_a_follow_up_goes_where_its_noun_points(message, pole):
+    assert _fast_path(message, None) == pole
+
+
+def test_a_payment_reminder_about_a_job_is_still_a_collection():
+    """The job rule needs a QUOTATION noun, not merely a job.
+
+    « relance de paiement pour le chantier X » is money, and compta holds the
+    dunning tools. Without this the job anchor alone would have stolen it, which
+    is the mistake the three lookaheads exist to prevent.
+    """
+    assert _fast_path("relance de paiement pour le chantier PROJ-0094", None) == "compta"
