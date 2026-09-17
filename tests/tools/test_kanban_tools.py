@@ -277,6 +277,64 @@ def test_complete_happy_path(worker_env):
         conn.close()
 
 
+# //// Neoffice — a second kanban_complete on one's OWN closed task is not a failure. ////
+def _pin_worker_run(monkeypatch, tid):
+    """Give the test the run id a dispatcher-spawned worker carries in its env."""
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    conn = kbc.connect()
+    try:
+        monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(kb.get_task(conn, tid).current_run_id))
+    finally:
+        conn.close()
+
+
+def test_complete_twice_answers_the_same_instead_of_erroring(worker_env, monkeypatch):
+    """Re-calling kanban_complete after finishing must return the terminal payload.
+
+    Weak worker models ignore the "STOP now" note and call again; upstream answered
+    "could not complete ... already terminal", the model relayed it, and a customer
+    read "la tache est deja en statut done" in their own chat (2026-09-16).
+    """
+    from tools import kanban_tools as kt
+
+    _pin_worker_run(monkeypatch, worker_env)
+    first = json.loads(kt._handle_complete({"summary": "the work is done"}))
+    assert first["ok"] is True
+    assert first["terminal"] is True
+
+    again = json.loads(kt._handle_complete({"summary": "calling again by mistake"}))
+    assert not again.get("error"), f"a second call must not be an error: {again}"
+    assert again["ok"] is True
+    assert again["terminal"] is True
+    assert "already complete" in again["note"]
+
+    # The first handoff is what survives; the stray second call overwrites nothing.
+    from hermes_cli import kanban_db as kb
+    from hermes_cli import kanban_db_connect as kbc
+    conn = kbc.connect()
+    try:
+        assert kb.latest_run(conn, worker_env).summary == "the work is done"
+    finally:
+        conn.close()
+
+
+def test_complete_on_a_task_closed_by_another_run_still_errors(worker_env, monkeypatch):
+    """The narrow gate: only the run that closed the task gets the quiet answer.
+
+    A worker whose run was superseded is a real conflict — it must keep its error
+    rather than be told its lost handoff was recorded.
+    """
+    from tools import kanban_tools as kt
+
+    _pin_worker_run(monkeypatch, worker_env)
+    assert json.loads(kt._handle_complete({"summary": "closed by the live run"}))["ok"] is True
+
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(int(os.environ["HERMES_KANBAN_RUN_ID"]) + 1000))
+    stale = json.loads(kt._handle_complete({"summary": "from a superseded run"}))
+    assert stale.get("error"), f"a foreign run must still be refused: {stale}"
+
+
 def test_complete_retry_with_empty_created_cards_succeeds(worker_env):
     """After a phantom rejection, retrying kanban_complete with
     created_cards=[] (the documented escape hatch) must complete the

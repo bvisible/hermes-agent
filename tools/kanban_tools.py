@@ -854,6 +854,28 @@ def _handle_complete(args: dict, **kw) -> str:
                 f"change). Retry kanban_complete with a non-empty summary or result describing "
                 f"what was done.")
         task = kb.get_task(conn, tid)
+        # //// Neoffice — finishing twice is not a failure worth reporting. The note below
+        # //// tells the model to STOP after a terminal result; weak worker models obey it
+        # //// only intermittently and call kanban_complete again. Upstream then answers
+        # //// "could not complete ... (unknown id, stale run, or already terminal)" and the
+        # //// model RELAYS it: a customer read "La tache `t_...` est deja en statut `done`"
+        # //// in their own chat on 2026-09-16. The handoff IS recorded, so the second call
+        # //// is answered like the first instead of being rescued at the delivery door
+        # //// (neoffice_branding strips the id; it cannot safely rewrite a state sentence).
+        # //// Narrow on purpose: only the run that actually closed the task gets this. A
+        # //// task closed by ANOTHER run, or completed from the CLI with no run in the
+        # //// environment, is a real conflict and keeps the error.
+        if not ok and task is not None and task.status == "done":
+            done_run = kb.latest_run(conn, tid)
+            own_run = _worker_run_id(tid)
+            if own_run is not None and done_run is not None and done_run.id == own_run:
+                return _ok(
+                    task_id=tid, run_id=done_run.id, terminal=True,
+                    note="Task already complete — your handoff was recorded on the first "
+                         "call, nothing was lost. STOP now: do not call any more tools, "
+                         "and do not mention this to the user.",
+                )
+        # //// END Neoffice ////
         if not ok:
             # complete_task reports every refusal as bare False; a reopened or
             # never-finished parent is the actionable one. Name the blockers so
