@@ -89,3 +89,86 @@ def test_a_task_id_is_removed_from_a_sentence_that_survives():
     out = strip_internal_mechanics("La tâche `t_51f94c26` a bien été prise en compte.")
     assert "t_51f94c26" not in out
     assert "prise en compte" in out  # the sentence is not destroyed with the id
+
+
+# //// Neoffice — upstream's turn notices are written for a developer at a CLI.
+# Measured on 2026-09-17 by llm/25_usage_chains on osiris, desk in French: both
+# literals below arrived in the chat, in English. Reproduced here verbatim.
+RAW_REDIRECT = "\u21aa Redirected current run. I'll adjust using your correction."
+RAW_REDIRECT_WITH_DETAIL = (
+    "\u21aa Redirected current run (2 min elapsed, running: frappe_list). "
+    "I'll adjust using your correction."
+)
+RAW_NO_REPLY = (
+    "\u26a0\ufe0f No reply: the request was cancelled by a new correction on every "
+    "attempt, so the turn stopped instead of retrying forever. Your last correction "
+    "is queued as the next message."
+)
+
+
+def test_a_turn_notice_keeps_its_meaning_in_french():
+    """Typing while the assistant works is ordinary impatience, not an edge case."""
+    from neoffice_branding import strip_internal_mechanics
+
+    out = strip_internal_mechanics(RAW_REDIRECT)
+    assert out != RAW_REDIRECT
+    assert "correction" in out.lower()
+    for machinery in ("Redirected", "current run", "I'll adjust"):
+        assert machinery.lower() not in out.lower()
+
+
+def test_the_status_detail_goes_with_it():
+    """Elapsed minutes and the running tool are machinery, whatever the head says."""
+    from neoffice_branding import strip_internal_mechanics
+
+    out = strip_internal_mechanics(RAW_REDIRECT_WITH_DETAIL)
+    assert out == strip_internal_mechanics(RAW_REDIRECT)
+    for leak in ("frappe_list", "2 min", "elapsed", "running"):
+        assert leak.lower() not in out.lower()
+
+
+def test_every_busy_head_is_covered():
+    """One head left uncovered is one English status line in a customer's chat."""
+    from neoffice_branding import strip_internal_mechanics
+
+    heads = (
+        "\u23e9 Steered into current run. Your message arrives after the next tool call.",
+        "\u23f3 Queued for the next turn. I'll respond once the current task finishes.",
+        "\u23f3 Subagent working. Use /stop to interrupt.",
+        "\u26a1 Interrupting current task. I'll respond to your message shortly.",
+    )
+    for raw in heads:
+        out = strip_internal_mechanics(raw)
+        assert out != raw, f"not covered: {raw}"
+        assert "current" not in out.lower()
+
+
+def test_an_unanswered_turn_never_tells_a_customer_to_send_continue():
+    """Every reason in agent/turn_explainers.py addresses whoever RUNS the agent."""
+    from neoffice_branding import NO_REPLY_REPLY, strip_internal_mechanics
+
+    assert strip_internal_mechanics(RAW_NO_REPLY) == NO_REPLY_REPLY
+    for instruction in ("continue", "switch provider", "No reply", "cancelled"):
+        assert instruction.lower() not in NO_REPLY_REPLY.lower()
+
+
+def test_the_technical_reason_stays_in_the_logs_2(caplog):
+    import logging as _logging
+
+    from neoffice_branding import strip_internal_mechanics
+
+    with caplog.at_level(_logging.WARNING, logger="neoffice_branding"):
+        strip_internal_mechanics(RAW_NO_REPLY)
+    assert "correction" in caplog.text
+
+
+def test_an_answer_that_quotes_one_of_these_survives():
+    """The rules anchor on the START of the text, not on the words anywhere in it."""
+    from neoffice_branding import strip_internal_mechanics
+
+    kept = (
+        "Le client m'a dit : \u00ab No reply: rien re\u00e7u \u00bb. Je le relance demain.",
+        "J'ai redirig\u00e9 la commande vers l'entrep\u00f4t de Lausanne.",
+    )
+    for text in kept:
+        assert strip_internal_mechanics(text) == text
