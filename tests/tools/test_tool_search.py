@@ -107,6 +107,24 @@ class TestClassification:
         assert not tool_search.is_deferrable_tool_name("mcp_notes_fetch", defer_tools=frozenset({"mcp_notes_fetch"}))
         assert tool_search.is_deferrable_tool_name("mcp_notes_query_data_sources")
 
+    def test_server_defer_false_pins_whole_toolset(self, monkeypatch):
+        """``mcp_servers.<name>.defer: false`` keeps every tool of that server loaded (kimi-code
+        per-server disclosure); a sibling server without the key still defers, and only an explicit
+        boolean False pins."""
+        import tools.tool_search as tool_search
+        import hermes_cli.config as cfg_mod
+        monkeypatch.setattr(cfg_mod, "load_config_readonly", lambda: {
+            "tools": {"tool_search": {"enabled": "on"}},
+            "mcp_servers": {"notes": {"url": "http://x", "defer": False},
+                            "big": {"url": "http://y"},
+                            "str": {"url": "http://z", "defer": "false"}}})
+        assert tool_search.load_config_readonly().eager_tools == frozenset({"mcp-notes"})
+        monkeypatch.setattr(tool_search, "_registry_toolset",
+                            lambda name: "mcp-" + name.split("_")[1])
+        assert not tool_search.is_deferrable_tool_name("mcp_notes_anything")
+        assert tool_search.is_deferrable_tool_name("mcp_big_search")
+        assert tool_search.is_deferrable_tool_name("mcp_str_tool")
+
     def test_bridge_tools_never_defer(self):
         from tools.tool_search import is_deferrable_tool_name, BRIDGE_TOOL_NAMES
         for name in BRIDGE_TOOL_NAMES:
