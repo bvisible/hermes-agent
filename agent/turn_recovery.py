@@ -20,7 +20,13 @@ from typing import Any, Dict, List, Optional, Tuple
 from agent.conversation_compression import COMPRESSION_RETRY_CONTEXT_REDUCED_STATUS_TEMPLATE
 from agent.fast_mode import fast_mode_unprovisioned, mark_fast_mode_unavailable
 from agent.model_metadata import is_output_cap_error, parse_available_output_tokens_from_error
-from agent.retry_utils import is_zai_coding_overload_error, zai_coding_overload_retry_ceiling
+from agent.retry_utils import (  # //// Neoffice — announced_wait_* added ////
+    announced_wait_kind,
+    announced_wait_retry_ceiling,
+    is_zai_coding_overload_error,
+    parse_retry_after_seconds,
+    zai_coding_overload_retry_ceiling,
+)
 from agent.error_classifier import FailoverReason, classify_api_error
 from agent.message_sanitization import (
     _looks_like_corrupt_image_rejection, _looks_like_image_content_rejection, _sanitize_messages_non_ascii,
@@ -1763,6 +1769,40 @@ def _is_genuine_nous_rate_limit(agent: Any, api_error: Exception, error_context:
     return _genuine
 
 
+# //// Neoffice — added function (no upstream equivalent, 20.09). The measurement and
+# //// the reasoning live on announced_wait_retry_ceiling in agent/retry_utils.py; this
+# //// is only the wiring: find the announced wait wherever the provider put it, and
+# //// widen the loop for THAT error alone.
+def announced_wait_ceiling_for(agent: Any, api_error: Exception, max_retries: int) -> int:
+    """``max_retries``, widened when the provider announced a wait and a budget is set.
+
+    Returns ``max_retries`` unchanged when no budget is configured (the default), when
+    the error announces nothing, or when no wait can be read — so the blind three-strike
+    path is exactly what it was.
+    """
+    kind = announced_wait_kind(api_error)
+    budget = float(getattr(agent, "_announced_wait_budget_seconds", 0.0) or 0.0)
+    if not kind or budget <= 0:
+        return max_retries
+    # Same order the backoff itself uses: header first, then the structured body.
+    wait = parse_retry_after_seconds(
+        getattr(getattr(api_error, "response", None), "headers", None))
+    if wait is None:
+        body = getattr(api_error, "body", None)
+        if isinstance(body, dict):
+            nested = body.get("error")
+            wait = parse_retry_after_seconds(
+                (nested if isinstance(nested, dict) else body).get("retry_after"))
+    if not wait:
+        return max_retries
+    widened = max(max_retries, announced_wait_retry_ceiling(budget, wait, floor=max_retries))
+    if widened != max_retries:
+        logger.info("announced %s: %.0fs wait, %.0fs budget -> retry ceiling %d",
+                    kind, wait, budget, widened)
+    return widened
+# //// END Neoffice ////
+
+
 def route_classified_error(
     agent: Any, api_error: Exception, classified: Any, _retry: TurnRetryState, *, error_msg: str,
     error_context: Any, recovered_with_pool: bool, base_url: Any, model: Any,
@@ -1887,6 +1927,11 @@ def route_classified_error(
     _is_zai_coding_overload = is_zai_coding_overload_error(base_url=str(base_url), model=model, error=api_error)
     if _is_zai_coding_overload:
         max_retries = max(max_retries, zai_coding_overload_retry_ceiling())
+    # //// Neoffice — same shape, one line below, for a provider that ANSWERS with a
+    # //// wait. Extracted so it can be tested: route_classified_error takes eighteen
+    # //// parameters, which is why nothing would have exercised this inline.
+    max_retries = announced_wait_ceiling_for(agent, api_error, max_retries)
+    # //// END Neoffice ////
     _should_fallback = (
         (is_rate_limited and _wrapped_output_cap_budget is None)
         or (_is_transport_failure and retry_count >= 2)

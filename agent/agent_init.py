@@ -1432,6 +1432,18 @@ def _apply_agent_section(agent, _agent_cfg):
     except (TypeError, ValueError):
         agent._auto_recovery_cycles = 5
 
+    # //// Neoffice — seconds of patience granted to an ANNOUNCED, self-resolving
+    # //// unavailability (the provider answered "retry after Ns"), on top of the blind
+    # //// api_max_retries above. 0.0 keeps today's behaviour exactly. Separate on
+    # //// purpose: raising api_max_retries would also lengthen the wait in front of a
+    # //// DEAD engine, where giving up fast is the right answer.
+    try:
+        agent._announced_wait_budget_seconds = max(
+            float(_agent_section.get("announced_wait_budget_seconds", 0.0)), 0.0)
+    except (TypeError, ValueError):
+        agent._announced_wait_budget_seconds = 0.0
+    # //// END Neoffice ////
+
 
 def _positive_int(raw: Any, *, reject: tuple = ()) -> Optional[int]:
     """``int(raw)`` when positive, else None. ``reject`` lists types refused outright (bool, float)."""

@@ -167,6 +167,61 @@ def adaptive_rate_limit_backoff(
     return jittered_backoff(1, base_delay=base_delay, max_delay=base_delay, jitter_ratio=0.2), "zai_coding_overload_long"
 
 
+# //// Neoffice — added (no upstream equivalent, 20.09). A provider that ANSWERS
+# //// "come back in 5s" is telling us it is alive and busy. A provider that is simply
+# //// broken tells us nothing. Upstream spends the same three-strike budget on both,
+# //// and that is what kills our turns: measured on osiris over every agent log since
+# //// 17.08, 336 calls were turned away by the express lane and 196 of them — 58 % —
+# //// died, with the Retry-After honoured every single time (537 sleeps of exactly
+# //// 5.0s out of 545). Three attempts are only TWO waits, so the real patience was
+# //// 10 seconds against a lane that two long prompts hold for 30 to 70.
+# ////
+# //// The shape is upstream's own, one function below: detect the announced condition,
+# //// raise the loop ceiling for THAT error only. What differs is the unit — a budget
+# //// in SECONDS, not in attempts — because the wait is set by the provider, not by us:
+# //// the same budget buys nine tries when it says 5s and two when it says 20s, which
+# //// is the right behaviour in both cases and needs no second knob.
+# ////
+# //// Deliberately OFF by default (budget 0.0 = today's behaviour, unchanged). The
+# //// recovery hazard measured per 5s wait is 25.0 % then 22.2 % — flat, not decaying —
+# //// which fits 336 x 0.765^2 = 196.6 against the 196 observed, and projects ~12 %
+# //// dead at 40s and ~7 % at 50s. But a flat hazard fitted on TWO points is an
+# //// assumption: a real queue's hazard usually DECAYS for long jobs, so that tail is
+# //// optimistic. Turning this on is a one-value decision that belongs with the lane's
+# //// occupancy distribution in hand, not with a projection.
+_ANNOUNCED_WAIT_TYPES = ("service_unavailable", "upstream_unavailable")
+
+
+def announced_wait_kind(error: Any) -> Optional[str]:
+    """The provider's own name for an announced, self-resolving unavailability.
+
+    Read from the error body (``error.type``, or the top level), never guessed from a
+    status code: a 503 alone does not say whether the far side is busy or broken.
+    """
+    body = getattr(error, "body", None)
+    if not isinstance(body, dict):
+        return None
+    nested = body.get("error")
+    payload = nested if isinstance(nested, dict) else body
+    kind = payload.get("type")
+    return kind if kind in _ANNOUNCED_WAIT_TYPES else None
+
+
+def announced_wait_retry_ceiling(budget_seconds: float, announced_wait: float,
+                                 floor: int = 3) -> int:
+    """Loop ceiling that spends ``budget_seconds`` at ``announced_wait`` per attempt.
+
+    ``floor`` keeps it from ever REDUCING the normal ceiling. Mirrors
+    ``zai_coding_overload_retry_ceiling``'s off-by-one: the loop gives up when
+    ``retry_count >= ceiling`` BEFORE computing that attempt's backoff, so N waits need
+    a ceiling of N + 1.
+    """
+    if budget_seconds <= 0 or announced_wait <= 0:
+        return floor
+    waits = int(budget_seconds // announced_wait)
+    return max(floor, waits + 1)
+
+
 def zai_coding_overload_retry_ceiling(short_attempts: int = _ZAI_CODING_OVERLOAD_SHORT_ATTEMPTS) -> int:
     """Retry-loop ceiling for the full Z.AI overload schedule: one past the last long entry,
     because the loop gives up when ``retry_count >= ceiling`` BEFORE computing the attempt's
