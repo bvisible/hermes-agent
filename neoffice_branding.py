@@ -33,7 +33,13 @@ logger = logging.getLogger(__name__)
 _ROLE_RE = re.compile(
     r"\b(le|la|notre|un|une|du|des|aux?)\s+(sp[ée]cialistes?|services?|collègues?|experts?)\b"
     r"[\s`'\"*_:.\-]*(?:de\s+(?:la\s+)?)?[\s`'\"*_:.\-]*"
-    r"(compta\w*|ventes?|support|rh|ressources?\s+humaines?|commercial\w*)\b[`'\"*]*",
+    # //// Neoffice — `analyse` and `projet` added (20.09). Without them the phrase
+    # //// escapes THIS rule and meets _SPECIALIST_RE below, which replaces the bare
+    # //// word: « Le spécialiste projet va… » came out « Le équipe projet va… ».
+    # //// A list of poles written by hand drifts the day a pole is added — these two
+    # //// arrived on 16.09 and nothing here knew.
+    r"(compta\w*|ventes?|support|rh|ressources?\s+humaines?|commercial\w*"
+    r"|analyses?|projets?)\b[`'\"*]*",
     re.IGNORECASE,
 )
 _SPECIALIST_RE = re.compile(r"\bsp[ée]cialistes?\b", re.IGNORECASE)
@@ -150,9 +156,34 @@ def strip_internal_mechanics(text: str) -> str:
                        text[:200].replace("\n", " "))
         return NO_REPLY_REPLY
     # //// END Neoffice ////
-    text = _ROLE_RE.sub("l'équipe", text)
+    # //// Neoffice — capitalised when it opens a sentence (20.09). The replacement
+    # //// was the bare « l'équipe », so « Le spécialiste compta va… » came out
+    # //// « l'équipe va… » — a sentence opening on a lowercase letter, on every pole,
+    # //// for as long as this rule has existed. What is replaced here is a NOUN
+    # //// PHRASE, and a noun phrase carries the case of the position it lands in.
+    # //// `source` is bound as a default so the closure reads the text being scanned,
+    # //// not whatever `text` is rebound to afterwards.
+    def _team(match, source=text):
+        head = source[: match.start()]
+        opens = (
+            not head.strip()
+            or head.rstrip(" \t").endswith("\n")
+            # //// Neoffice — no colon here: French does NOT capitalise after « : »
+            # //// (« Je transmets : l'équipe vous rappellera »). A bullet does open a
+            # //// phrase, so it stays.
+            or head.rstrip()[-1] in ".!?•-*"
+        )
+        return "L'équipe" if opens else "l'équipe"
+
+    text = _ROLE_RE.sub(_team, text)
     text = _SPECIALIST_RE.sub("équipe", text)
-    text = _KANBAN_TASK_RE.sub("ta tâche", text)
+    # //// Neoffice — « demande », not « ta tâche » (20.09). The machinery says
+    # //// « Votre tâche kanban est terminée » and the replacement turned it into
+    # //// « Votre ta tâche est terminée » — a determiner already stands in front of
+    # //// the noun, so the noun alone goes in. And this product vouvoies: « ta »
+    # //// addressed the customer as tu, which nothing else here does.
+    # //// Feminine like « tâche », so « votre / la / une » all still agree.
+    text = _KANBAN_TASK_RE.sub("demande", text)
     # //// Neoffice — the id goes, the sentence stays (#476). A state sentence
     # //// ("… est déjà en statut `done`") cannot be safely REWRITTEN this late: we
     # //// would be telling a customer something about their own work from a regex,

@@ -172,3 +172,45 @@ def test_an_answer_that_quotes_one_of_these_survives():
     )
     for text in kept:
         assert strip_internal_mechanics(text) == text
+
+
+# //// Neoffice — added 20.09, after finding two defects a customer reads. `_ROLE_RE`
+# //// carried a hand-written list of poles that had not moved since it was written:
+# //// `analyse` and `projet` arrived on 16.09 and the phrase « Le spécialiste projet
+# //// va… » came out « Le équipe projet va… ». The list is now tied to POLES, which is
+# //// the only place a pole is really declared, so the next pole cannot drift silently.
+def test_every_pole_is_softened_into_the_team():
+    """Each pole in POLES survives the round trip: no pole name, no « spécialiste »."""
+    from gateway.nora_chat_router import POLES
+
+    for pole in POLES:
+        phrase = f"Le spécialiste {pole} va s'occuper de votre demande."
+        rendu = strip_internal_mechanics(phrase)
+        assert "spécialiste" not in rendu.lower(), f"{pole}: « spécialiste » survived → {rendu}"
+        assert pole not in rendu.lower(), f"{pole}: the pole is named to the customer → {rendu}"
+        assert rendu.startswith("L'équipe "), f"{pole}: mangled determiner → {rendu}"
+
+
+def test_the_team_takes_the_case_of_where_it_lands():
+    """A noun phrase carries the case of its position, not of the words it replaced."""
+    assert strip_internal_mechanics(
+        "Le spécialiste compta va traiter la facture."
+    ).startswith("L'équipe")
+    assert "Bonjour. L'équipe" in strip_internal_mechanics(
+        "Bonjour. Le spécialiste compta va traiter la facture."
+    )
+    # French does not capitalise after a colon.
+    assert "transmets : l'équipe" in strip_internal_mechanics(
+        "Je transmets : le spécialiste ventes vous rappellera."
+    )
+
+
+def test_a_kanban_task_is_a_demande_and_the_determiner_is_not_doubled():
+    """« Votre tâche kanban » must not become « Votre ta tâche », and never tutoies."""
+    for phrase, attendu in (
+        ("Votre tâche kanban est terminée.", "Votre demande est terminée."),
+        ("La tâche kanban a été créée.", "La demande a été créée."),
+    ):
+        rendu = strip_internal_mechanics(phrase)
+        assert rendu == attendu, f"{phrase} → {rendu}"
+        assert " ta " not in f" {rendu} ", f"this product vouvoies: {rendu}"
