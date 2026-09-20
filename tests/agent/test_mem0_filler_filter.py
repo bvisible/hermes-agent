@@ -196,3 +196,43 @@ def test_a_probe_carrying_a_figure_is_still_a_probe():
 )
 def test_the_probe_rule_takes_nothing_else(text):
     assert not is_low_value(text), f"real content would be dropped: {text!r}"
+
+
+# //// Neoffice — added 20.09. `_RECALL_QUESTION_RE` is anchored at position 0, so
+# //// « Au fait, tu te souviens de mon identifiant du jour ? » was stored while the
+# //// identical sentence without « Au fait, » was dropped. Found by running the rule
+# //// over a real store: of its 21 stored questions, that is the ONLY miss of a phrase
+# //// the rule already knows. The other 18 (« Combien de factures en retard ? »,
+# //// « On en est où sur ce chantier ? ») would need a NEW class of rule, and this
+# //// file's contract refuses that on purpose — when in doubt, remember.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Au fait, tu te souviens de mon identifiant du jour ?",
+        "Dis-moi, tu te souviens de mon code ?",
+        "Une question : c'est quoi mon code de coffre ?",
+        "Rapidement — peux-tu me rappeler mon identifiant ?",
+    ],
+)
+def test_a_courtesy_opening_does_not_save_a_recall_question(text):
+    assert is_low_value(text), f"stored as a memory: {text!r}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The lead-in itself carries a value: the turn STATES something.
+        "Mon code coffre QW77 : tu te souviens de mon identifiant ?",
+        # Not a recall phrase at all — a real question about the business.
+        "On en est où sur ce chantier ?",
+        "Combien de factures en retard ?",
+        # A long lead-in is a sentence of its own, not a courtesy opening.
+        "J'ai changé de bureau la semaine dernière et je voulais te le dire, "
+        "au fait tu te souviens de mon code ?",
+        # Statements that merely contain the words.
+        "Retiens ceci : mon code de coffre est QW771234.",
+        "Le code d'accès au local est ZK293331.",
+    ],
+)
+def test_the_lead_in_rule_takes_nothing_else(text):
+    assert not is_low_value(text), f"real content would be dropped: {text!r}"
