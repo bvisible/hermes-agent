@@ -21,12 +21,23 @@ utilise celle indiquée ci-dessus ».
 That is what this file exists to stop: not the injection being wrong, but the injection
 being ABSENT and nobody noticing for a month.
 
-And it is no longer the only thing watching. An hourly automated turn renders this very
-line on every instance — cadence verified on osiris across ten consecutive turns (3527,
-3588, 3565, 3669, 3577, 3572, 3634 s), identified as the nora-model health check. So a
-future port that drops the injection makes the line go raw WITHIN THE HOUR, in
-state.db, where a deployed-side check reads it. Nobody has to remember to look, which is
-precisely what failed the first two times.
+And it is no longer the only thing watching — this part is worth more than the guard.
+
+The ``nora-model`` fleet check sends "Reponds uniquement par le mot NORAOK." through the
+real chat path and reads the answer back. It is a fleet-health provider, so it runs
+against every instance, roughly hourly: cadence measured across ten consecutive turns
+(3527, 3588, 3565, 3669, 3577, 3572, 3634 s), and 41 of the 43 desk turns since 19.09
+carry that phrase.
+
+So a port that drops this injection makes the line go raw WITHIN THE HOUR — not here,
+but on EVERY instance, including a client's, where neither the guard below nor anyone
+reading this file is looking. Nobody has to remember to check, which is precisely what
+failed the first two times this block went missing.
+
+The general form is worth keeping: the best defence against a regression that keeps
+getting lost at ports is not a reminder to verify, it is something that ALREADY crosses
+the path at a regular interval and whose trace can be read. Look for one before writing
+another test — there are probably others nobody has noticed.
 
 The cutover is in that table if anyone wants it:
 
