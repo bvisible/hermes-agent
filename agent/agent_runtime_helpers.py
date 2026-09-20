@@ -1257,6 +1257,28 @@ def _api_error_debug_info(error: Exception) -> Dict[str, Any]:
             info["response_text"] = response_obj.text
         except Exception as e:
             _ra().logger.debug("Could not extract error response details: %s", e)
+        # //// Neoffice — record the response HEADERS too (20.09). This dump is the only
+        # //// forensic record of a provider error, and it captured the status and the
+        # //// body while discarding the headers — which is exactly where the first and
+        # //// most authoritative lookup in compute_error_backoff reads `Retry-After`.
+        # //// So when our inference server started answering saturation with a 503 and
+        # //// the retries kept firing too early, 61 dumps of that error could say the
+        # //// response object had survived (every one carries response_status) but NOT
+        # //// whether the header was ever there. The question could not be settled from
+        # //// what we had recorded. An instrument that drops the field under
+        # //// investigation turns a five-minute answer into a guess.
+        # ////
+        # //// Kept small and defensive: header names only need to be readable, values go
+        # //// through the same redact_sensitive_text pass as the rest of the payload
+        # //// (this dump already captures the request body, so redaction is not optional
+        # //// here), and a header map that cannot be coerced is simply skipped.
+        try:
+            _headers = getattr(response_obj, "headers", None)
+            if _headers is not None:
+                info["response_headers"] = {str(k): str(v) for k, v in dict(_headers).items()}
+        except Exception as e:
+            _ra().logger.debug("Could not extract error response headers: %s", e)
+        # //// END Neoffice ////
     return info
 
 
