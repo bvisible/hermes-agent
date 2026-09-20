@@ -156,6 +156,47 @@ def _validate_svix_signature(body: bytes, secret: str, msg_id: str, timestamp: s
     return False
 
 
+# //// Neoffice — added function (no upstream equivalent, 20.09). See its call site in
+# //// the route handler for why it exists and why it has been lost twice.
+_NEOFFICE_MONTHS_FR = (
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+)
+_NEOFFICE_DAYS_FR = (
+    "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+)
+
+
+def _neoffice_inject_datetime_tokens(payload: dict, now=None) -> dict:
+    """Fill ``{date}``, ``{time}``, ``{year}``, ``{today_fr}`` unless the payload has them.
+
+    Europe/Zurich, because the server clock is UTC and the date is what the customer
+    reads: two hours behind also means the WRONG DAY between midnight and 02:00.
+    Falls back to the local clock only if the zone database is unavailable, which is
+    better than handing the model nothing.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    if now is None:
+        from datetime import datetime as _dt
+        try:
+            from zoneinfo import ZoneInfo
+
+            now = _dt.now(ZoneInfo("Europe/Zurich"))
+        except Exception:  # noqa: BLE001 — a missing tz database must not cost the date
+            now = _dt.now()
+    payload.setdefault("date", now.strftime("%Y-%m-%d"))
+    payload.setdefault("time", now.strftime("%H:%M"))
+    payload.setdefault("year", str(now.year))
+    payload.setdefault(
+        "today_fr",
+        f"{_NEOFFICE_DAYS_FR[now.weekday()]} {now.day} "
+        f"{_NEOFFICE_MONTHS_FR[now.month - 1]} {now.year}",
+    )
+    return payload
+# //// END Neoffice ////
+
+
 class WebhookAdapter(BasePlatformAdapter):
     """Generic webhook receiver that triggers agent runs from HTTP POSTs."""
 
@@ -837,6 +878,38 @@ class WebhookAdapter(BasePlatformAdapter):
                     logger.info("[webhook] script ignored event=%s route=%s", event_type, route_name)
                     return web.json_response({"status": "ignored", "reason": "script", "route": route_name})
                 payload = transformed_payload or payload
+            # //// Neoffice — datetime tokens for the route prompt. RESTORED 20.09, lost a
+            # //// SECOND time: the block was first added on 04.06 (8fc60f0a05, itself a
+            # //// re-add) and disappeared again in the v2026.9.7 port on 08.09. Proven by
+            # //// the request dumps on osiris: the last one carrying a real date is
+            # //// 2026-09-07 14:50; the first carrying the raw template is 2026-09-14
+            # //// 22:06, and 51 of 51 since. The deployed route prompt opens with
+            # //// « Date du jour : {today_fr} (heure : {time}). » and _render_prompt
+            # //// returns an unknown key AS ITSELF, so the orchestrator has been reading
+            # //// that literal string for weeks. Nothing raised, nothing logged — which
+            # //// is exactly why it survived two ports.
+            # ////
+            # //// What is lost is narrower than "the model has no date", and worth stating
+            # //// exactly: Hermes' own system prompt does carry one ("Conversation
+            # //// started: Sunday, September 20, 2026 (UTC, UTC+00:00)"). Three things
+            # //// go missing without this block:
+            # ////   1. the TIME. Nothing else supplies it, and « demain 8 h » needs it.
+            # ////   2. the right DAY. The system prompt uses the server clock — UTC here —
+            # ////      so between midnight and 02:00 Swiss it names YESTERDAY; and it is
+            # ////      the date the conversation STARTED, which drifts in a long session.
+            # ////   3. a clean prompt. The raw « Date du jour : {today_fr} » line arrives
+            # ////      verbatim immediately above « n'invente jamais de date, utilise
+            # ////      celle indiquée ci-dessus », which is the instruction it breaks.
+            # ////
+            # //// setdefault, so an explicit payload key still wins: nora now sends these
+            # //// tokens itself from send_chat, at the SITE's timezone, and that is the
+            # //// better source. This stays for the routes whose payload does not come
+            # //// from nora — whatsapp_inbox arrives from the central router.
+            # ////
+            # //// Europe/Zurich, not the server clock: osiris runs UTC, so the old block
+            # //// was two hours behind and gave the WRONG DAY between midnight and 02:00.
+            _neoffice_inject_datetime_tokens(payload)
+            # //// END Neoffice ////
             prompt = self._render_prompt(route_config.get("prompt", ""), payload, event_type, route_name)
             # cron_job routes: the job's own skills apply; the rendered prompt is only per-run context.
             if (skills := route_config.get("skills", [])) and not route_config.get("cron_job"):
