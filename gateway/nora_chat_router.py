@@ -801,13 +801,48 @@ _BUSINESS_RE = re.compile(
 # //// Neoffice — answer "can you do X?" in one sentence, and say what you need to
 # actually do it. This replaces a full worker round-trip (measured 21s) whose entire
 # output was "give me the name, the e-mail and the address".
+# //// Neoffice — the domain list now names the building-job side (20.09). It listed
+# //// "quotes, invoices, clients, articles, payment reminders, emails, HR and charts"
+# //// and stopped there, while `projet` became a pole of its own on 16.09 with
+# //// seventeen write tools. A capability question is settled BEFORE the keyword rules,
+# //// so every "tu peux ouvrir un chantier ?" landed here, on a prompt that had never
+# //// heard of a chantier — and the model filled the hole. Measured on osiris against
+# //// the live model, 20.09:
+# ////   « Tu peux ouvrir un chantier ? »  → "j'ai besoin du nom du client, de la date de
+# ////     début, du MONTANT ESTIMÉ OU DU DEVIS ASSOCIÉ, et de la description" — none of
+# ////     which frappe_job_create takes.
+# ////   « Peux-tu me faire un métré ? »   → "j'ai besoin des quantités, unités et PRIX
+# ////     UNITAIRES" — exactly backwards: frappe_measure is given shapes and dimensions
+# ////     and RETURNS the quantity. The answer asked the user for what the tool computes.
+# //// And the refusal it produced for an out-of-domain question read the old list back
+# //// to the customer verbatim — no chantiers, no visites, no métré.
+# //// The "say yes" is now conditional on the domain. That half was already holding in
+# //// practice (the same measurement: « Tu peux faire un virement bancaire ? » → « Non,
+# //// je ne peux pas effectuer de virements bancaires »), but it held on the model's
+# //// judgement rather than on anything written here, which is not a guarantee.
 _CAPABILITY_SYSTEM = (
     "You are NORA, the Neoffice business assistant. The user asks whether you CAN do "
-    "something. Answer in the user's language, in one or two sentences: say yes (you "
-    "handle quotes, invoices, clients, articles, payment reminders, emails, HR and "
-    "charts), then list ONLY the information you need to actually do it. "
-    "Do not perform the action, do not invent data, do not mention tools or internals."
+    "something. Answer in the user's language, in one or two sentences. "
+    "Your domain: quotes, orders, invoices, clients, articles and stock, payment "
+    "reminders, emails, HR, charts — and the whole building-job side: opening a job, "
+    "its visits and appointments, its work lines, its take-off (surfaces, dimensions, "
+    # //// Neoffice — the FRENCH product word is given, because the model translates
+    # //// the English one literally and lands beside the ERP: measured 20.09, it
+    # //// answered « contrats de maintenance » where every screen the customer reads
+    # //// says « contrat d'entretien ». Naming a domain is not enough if the word
+    # //// that comes back is not the one on the screen.
+    "m²), its costing, the workshop, maintenance contracts (in French say « contrat "
+    "d'entretien » — that is what the screens call it), and the hours and materials "
+    "recorded on a job. "
+    "If the request is in that domain, say yes, then list ONLY the information you need "
+    "to actually do it: ask for what the USER knows (a customer, a date, dimensions), "
+    "never for something the system works out by itself (a computed quantity, a total, "
+    "a document id). If it is NOT in that domain, say so plainly and name what you do "
+    "handle — never promise it. "
+    "Do not perform the action, do not invent data or fields, do not mention tools or "
+    "internals."
 )
+# //// END Neoffice ////
 
 _SMALLTALK_SYSTEM = (
     "You are NORA, the Neoffice business assistant. Reply to this small-talk message "
