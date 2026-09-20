@@ -20,6 +20,21 @@ utilise celle indiquée ci-dessus ».
 
 That is what this file exists to stop: not the injection being wrong, but the injection
 being ABSENT and nobody noticing for a month.
+
+And it is no longer the only thing watching. An hourly automated turn renders this very
+line on every instance — cadence verified on osiris across ten consecutive turns (3527,
+3588, 3565, 3669, 3577, 3572, 3634 s), identified as the nora-model health check. So a
+future port that drops the injection makes the line go raw WITHIN THE HOUR, in
+state.db, where a deployed-side check reads it. Nobody has to remember to look, which is
+precisely what failed the first two times.
+
+The cutover is in that table if anyone wants it:
+
+    #45166  17:02  Date du jour : {today_fr} (heure : {time}).       <- last raw
+    #45175  18:02  Date du jour : dimanche 20 septembre 2026 ...     <- this fallback
+    #45178  18:44  Today is Sunday 2026-09-20, 20:44 ...             <- nora's tokens
+
+14 raw then 5 filled on 20.09, no exception.
 """
 from datetime import datetime, timedelta, timezone
 
