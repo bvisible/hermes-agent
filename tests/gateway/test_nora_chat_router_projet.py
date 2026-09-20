@@ -339,3 +339,77 @@ def test_the_job_domain_names_its_boundary_with_ventes():
 
     assert "QUALIFIÉS PAR UN CHANTIER" in _CLASSIFIER_SYSTEM
     assert "SANS chantier reste" in _CLASSIFIER_SYSTEM
+
+
+# //// Neoffice — the anchor injected on a job page (20.09). It used to be built inline
+# //// inside route_chat, whole, for whatever pole the turn was routed to: compta, ventes,
+# //// rh, support and analyse were all told to read `chantier-gestes-nora` — a skill that
+# //// exists only under skills-poles/projet — and to pass `project` to seven tools that
+# //// moved to `projet` on 16.09. Naming a tool the worker does not hold teaches a tool
+# //// that does not exist, and the worker spends its turn finding out.
+JOB = {"title": "Rénovation salle de bain", "customer": "Dupont"}
+
+
+def test_every_pole_learns_which_job_the_user_is_looking_at():
+    """The IDENTITY half is for everyone: « facture ce chantier » is a compta sentence."""
+    from gateway.nora_chat_router import POLES, job_page_anchor
+
+    for pole in POLES:
+        ancre = job_page_anchor(pole, "Page context — the user is on building job", "PROJ-0087", JOB)
+        assert ancre.startswith("[") and ancre.endswith("]"), f"{pole}: {ancre}"
+        assert "PROJ-0087" in ancre, f"{pole} is not told which job"
+        assert 'project="PROJ-0087"' in ancre, f"{pole} is not told what to pass"
+        assert "Never guess another job." in ancre, pole
+
+
+def test_only_the_job_pole_is_sent_to_the_job_skill():
+    """`chantier-gestes-nora` lives under skills-poles/projet and nowhere else."""
+    from gateway.nora_chat_router import POLES, job_page_anchor
+
+    for pole in POLES:
+        ancre = job_page_anchor(pole, "Page context — the user is on building job", "PROJ-0087", JOB)
+        if pole == "projet":
+            assert "chantier-gestes-nora" in ancre
+            assert "frappe_job_add_lines" in ancre
+        else:
+            assert "chantier-gestes-nora" not in ancre, (
+                f"{pole} is sent to a skill it does not have: {ancre}"
+            )
+            assert "frappe_job_" not in ancre, (
+                f"{pole} is handed a job tool it no longer holds: {ancre}"
+            )
+
+
+def test_the_anchor_names_no_tool_by_hand():
+    """A hand-kept list drifts; this one had, and lost the tool of the 16.09 incident.
+
+    The rule in its place — « wherever one of your tools takes a `project` argument » —
+    is read by the worker off its OWN schemas, so a tool added tomorrow is covered and
+    the ones keyed on an activity stay correctly out.
+    """
+    from gateway.nora_chat_router import job_page_anchor
+
+    ancre = job_page_anchor("projet", "The request names the building job", "PROJ-0087", JOB)
+    assert "`project` argument" in ancre
+    for jamais in ("frappe_job_status", "frappe_job_tasks", "frappe_job_book_visit",
+                   "frappe_job_quote", "frappe_job_customer_said_yes", "frappe_job_invoice",
+                   "frappe_job_take", "frappe_job_ask_expert"):
+        assert jamais not in ancre, f"{jamais} is enumerated again — the list will drift"
+
+
+def test_the_anchor_never_claims_a_page_the_user_was_not_on():
+    """A lie in the body is a lie the worker repeats: the source phrase is carried in."""
+    from gateway.nora_chat_router import job_page_anchor
+
+    depuis_message = job_page_anchor("projet", "The request names the building job", "PROJ-0087")
+    assert depuis_message.startswith("[The request names the building job PROJ-0087")
+    assert "Page context" not in depuis_message
+
+
+def test_a_job_without_title_or_customer_still_anchors():
+    """The desk does not always send a title; the job number alone must still carry."""
+    from gateway.nora_chat_router import job_page_anchor
+
+    for vide in (None, {}, {"title": "", "customer": ""}):
+        ancre = job_page_anchor("projet", "Page context — the user is on building job", "PROJ-0087", vide)
+        assert "PROJ-0087" in ancre and " «  » " not in ancre, ancre
