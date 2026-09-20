@@ -214,3 +214,31 @@ def test_a_kanban_task_is_a_demande_and_the_determiner_is_not_doubled():
         rendu = strip_internal_mechanics(phrase)
         assert rendu == attendu, f"{phrase} → {rendu}"
         assert " ta " not in f" {rendu} ", f"this product vouvoies: {rendu}"
+
+
+# //// Neoffice — added 20.09. kanban_watchers_notifier keeps a literal copy of the pole
+# //// labels because it imports POLE_LABELS lazily and best-effort — a label is never
+# //// worth failing a delivery for. A copy kept by hand drifts, and this one had: `rh`
+# //// read "RH" where the router says "Ressources Humaines", so on the day the import
+# //// failed a customer would have been given a different word for the same desk. A
+# //// fallback that disagrees with the thing it stands in for is a fallback that lies.
+def test_the_fallback_pole_labels_match_the_source_of_truth():
+    from gateway.kanban_watchers_notifier import _NEOFFICE_DOMAINS
+    from gateway.nora_chat_router import POLE_LABELS
+
+    assert _NEOFFICE_DOMAINS == POLE_LABELS["fr"], (
+        "the notifier fallback drifted from POLE_LABELS['fr']: "
+        + repr({p: (POLE_LABELS["fr"].get(p), _NEOFFICE_DOMAINS.get(p))
+                for p in set(POLE_LABELS["fr"]) | set(_NEOFFICE_DOMAINS)
+                if POLE_LABELS["fr"].get(p) != _NEOFFICE_DOMAINS.get(p)})
+    )
+
+
+def test_every_pole_has_a_customer_facing_label_in_every_language():
+    """A pole with no label is a pole the customer hears by its internal key."""
+    from gateway.nora_chat_router import POLES, POLE_LABELS
+
+    for langue, labels in POLE_LABELS.items():
+        for pole in POLES:
+            assert labels.get(pole), f"{pole} has no {langue} label"
+            assert labels[pole] != pole, f"{pole} leaks its internal key in {langue}"
