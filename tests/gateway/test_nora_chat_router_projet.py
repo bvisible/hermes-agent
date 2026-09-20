@@ -413,3 +413,51 @@ def test_a_job_without_title_or_customer_still_anchors():
     for vide in (None, {}, {"title": "", "customer": ""}):
         ancre = job_page_anchor("projet", "Page context — the user is on building job", "PROJ-0087", vide)
         assert "PROJ-0087" in ancre and " «  » " not in ancre, ancre
+
+
+# //// Neoffice — added 20.09. A capability question ("tu peux … ?") is settled in
+# //// _fast_path BEFORE the keyword rules, so every question about a chantier reaches
+# //// _CAPABILITY_SYSTEM and nothing else. That prompt listed the domain by hand and
+# //// stopped at "quotes, invoices, clients, articles, payment reminders, emails, HR
+# //// and charts" — the pole `projet` and its seventeen write tools had been live for
+# //// four days. Measured against the model that day: asked to open a chantier it
+# //// invented an intake (montant estimé, devis associé) that frappe_job_create does
+# //// not take, and asked for a métré it requested the quantities and unit prices that
+# //// frappe_measure exists to COMPUTE.
+def test_a_question_about_a_chantier_is_a_capability_question():
+    """Whatever the domain, "tu peux …" lands on this one prompt — so it must know it."""
+    from gateway.nora_chat_router import _CAPABILITY_RE
+
+    for q in (
+        "Tu peux ouvrir un chantier ?",
+        "Peux-tu me faire un métré ?",
+        "Tu peux planifier une visite chez un client ?",
+        "Est-ce que tu peux gérer un contrat d'entretien ?",
+    ):
+        assert _CAPABILITY_RE.match(q), f"no longer a capability question: {q}"
+
+
+def test_the_capability_prompt_names_the_job_domain():
+    """The pole exists; a prompt that has never heard of it makes the model improvise."""
+    from gateway.nora_chat_router import _CAPABILITY_SYSTEM
+
+    minuscule = _CAPABILITY_SYSTEM.lower()
+    for mot in ("building-job", "visits", "take-off", "costing", "maintenance contracts"):
+        assert mot in minuscule, f"the capability domain does not name {mot}"
+
+
+def test_the_capability_prompt_does_not_promise_out_of_domain():
+    """« say yes » alone is a promise; the domain has to gate it."""
+    from gateway.nora_chat_router import _CAPABILITY_SYSTEM
+
+    assert "If the request is in that domain, say yes" in _CAPABILITY_SYSTEM
+    assert "If it is NOT in that domain" in _CAPABILITY_SYSTEM
+    assert "never promise it" in _CAPABILITY_SYSTEM
+
+
+def test_the_capability_prompt_forbids_asking_for_what_is_computed():
+    """The métré answer asked the user for the quantity the tool returns."""
+    from gateway.nora_chat_router import _CAPABILITY_SYSTEM
+
+    assert "never for something the system works out by itself" in _CAPABILITY_SYSTEM
+    assert "do not invent data or fields" in _CAPABILITY_SYSTEM
