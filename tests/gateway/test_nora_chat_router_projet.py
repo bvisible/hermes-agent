@@ -308,3 +308,34 @@ def test_a_payment_reminder_about_a_job_is_still_a_collection():
     is the mistake the three lookaheads exist to prevent.
     """
     assert _fast_path("relance de paiement pour le chantier PROJ-0094", None) == "compta"
+
+
+# //// Neoffice — the guard that would have caught this on 16.09. `projet` was added to
+# //// POLES that day and the classifier prompt never named it, so for four days the model
+# //// was asked to pick a pole and could not answer this one: everything the deterministic
+# //// rules did not catch went to a pole holding no job tool. Found 20.09 by another
+# //// session reading the prompt, not by any test.
+def test_every_pole_can_be_named_by_the_classifier():
+    """Each pole in POLES is offered in the allowed tokens AND described.
+
+    Two separate things, and both are needed: a token the model may not emit is
+    unreachable, and a token with no domain line is a word the model has no
+    reason to choose.
+    """
+    from gateway.nora_chat_router import POLES, _CLASSIFIER_SYSTEM
+
+    premiere_ligne = _CLASSIFIER_SYSTEM.split("\n")[1] if "\n" in _CLASSIFIER_SYSTEM else _CLASSIFIER_SYSTEM
+    jetons = _CLASSIFIER_SYSTEM.split("Tu réponds par UN SEUL mot parmi :", 1)
+    assert len(jetons) == 2, "the allowed-token sentence moved; this guard must follow it"
+    liste = jetons[1].split(".", 1)[0]
+    for pole in POLES:
+        assert pole in liste, f"{pole} is in POLES but the model may not answer it"
+        assert f"- {pole} :" in _CLASSIFIER_SYSTEM, f"{pole} has no domain line in the prompt"
+
+
+def test_the_job_domain_names_its_boundary_with_ventes():
+    """The two compete on one word — « devis » — so the prompt says where it splits."""
+    from gateway.nora_chat_router import _CLASSIFIER_SYSTEM
+
+    assert "QUALIFIÉS PAR UN CHANTIER" in _CLASSIFIER_SYSTEM
+    assert "SANS chantier reste" in _CLASSIFIER_SYSTEM
