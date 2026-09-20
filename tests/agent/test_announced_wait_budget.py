@@ -3,9 +3,16 @@
 A provider that ANSWERS "retry after 5s" is telling us it is alive and busy. One that
 is simply broken tells us nothing. Upstream spends the same three-strike budget on
 both, and that is what kills turns: measured on osiris across every agent log since
-17.08, the express lane turned away 336 calls and 196 of them (58 %) died -- with the
-Retry-After honoured every single time. Three attempts are only TWO waits, so the real
-patience was 10 seconds.
+17.08, the express lane killed **84 real user turns** -- 23 on the desk, 61 across the
+poles (compta 31, projet 14, ventes 8, rh 5, support 3) -- with the Retry-After honoured
+every single time. Three attempts are only TWO waits, so the real patience was 10
+seconds.
+
+That 84 is a corrected figure. The first count said 196, until the dead sessions were
+crossed against state.db and 113 of them turned out to be our own cache-warmup timer
+rather than people. A count of sessions that never asks what the sessions were is not a
+measurement -- and the fix here is sized from the provider's own lane occupancy, not
+from that count.
 
 The lane's occupancy was then measured on the provider's own side, 14 days and 114 876
 chat calls: median 9s, p90 22, p95 31, max 97 -- so 30s of patience covers 95 % of
