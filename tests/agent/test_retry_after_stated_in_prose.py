@@ -1,20 +1,31 @@
-"""Neoffice — the wait a provider states in PROSE must be honoured.
+"""Neoffice — a wait stated only in PROSE is read as a last resort.
 
-Our inference server answers a saturated moment with, verbatim::
+Kept honest about what it is: a defensive fallback, NOT a fix for anything observed
+on our own provider. The first version of this file claimed the opposite and was
+wrong, so the correction lives here where the next reader will find it.
+
+Our inference server answers a saturated moment with::
 
     503 {"message": "llm busy with long-context jobs, retry after 5s",
          "type": "service_unavailable", "code": 503}
 
-No ``Retry-After`` header, no ``retry_after`` field: the wait lives only in the
-sentence. All three lookups in ``compute_error_backoff`` therefore returned None and
-the loop fell back to ``jittered_backoff(base_delay=2.0)`` — measured over 200 draws
-per attempt: 2.5s, 2.6s, 4.8s median, so attempts 1 and 2 landed INSIDE the five
-seconds the server asked for, 100 % of the time. Two of three retries were spent
-hammering a server that had just said « not yet », and the turn died on "API call
-failed after 3 retries", which is what the customer reads.
+It was believed to carry no ``Retry-After`` header. It does — proven by ``curl -i``
+at both hops while the express lane was genuinely saturated — and its body now
+carries ``retry_after`` in both structured places as well. The first lookup in
+``compute_error_backoff`` therefore already returned 5.0: the real waits were
+5.00/5.00/5.00 before this branch existed. The "2.5 / 2.6 / 4.8" first recorded here
+came from a stub whose ``response`` was ``None``, an instrument that differed from
+production in exactly the field under investigation.
 
-This 503 is not an outage. It is ordinary backpressure, on 15-28 % of the fleet's
-text calls in healthy operation.
+So the prose lookup earns its place only against a future provider that states the
+wait and nowhere puts it; while a header is present it is never consulted, and
+``test_a_header_still_wins_over_the_prose`` is the test that matters most here.
+
+The real defect this hunt uncovered is elsewhere: 3 retries × 5s = 15s, while two
+long prompts hold that lane 30-70s, so a perfectly honoured ``Retry-After`` still
+ends in "API call failed after 3 retries". Announced backpressure should not spend
+the same 3-strike budget as a real outage. Sizing that needs the lane's occupancy
+distribution, so nothing here attempts it.
 """
 import pytest
 
@@ -114,3 +125,42 @@ def test_a_header_still_wins_over_the_prose():
         base_url="https://example/v1", model="nora",
     )
     assert attente == 12.0
+
+
+# //// Neoffice — the case that actually describes our provider, added when the header
+# //// turned out to be present all along. It locks the ordering AND the value: a real
+# //// header is honoured without the prose ever being reached.
+def test_our_providers_real_503_is_honoured_from_its_header():
+    import httpx
+
+    corps = ('{"error": {"message": "llm busy with long-context jobs, retry after 5s", '
+             '"type": "service_unavailable", "code": 503}}')
+    requete = httpx.Request("POST", "https://example/v1/chat/completions")
+    reponse = httpx.Response(
+        503, headers={"content-type": "application/json", "retry-after": "5"},
+        content=corps.encode(), request=requete,
+    )
+    erreur = _ProviderError(reponse)
+    erreur.body = {"error": {"message": "llm busy with long-context jobs, retry after 5s",
+                             "type": "service_unavailable", "code": 503}}
+
+    attentes = [
+        compute_error_backoff(
+            _AgentStub(), erreur, retry_count=n, max_retries=3,
+            is_rate_limited=False, is_zai_coding_overload=False,
+            base_url="https://example/v1", model="nora",
+        )
+        for n in range(3)
+    ]
+    assert attentes == [5.0, 5.0, 5.0], attentes
+
+
+def test_the_503_is_classified_retryable_so_it_reaches_the_backoff():
+    """A branch that never reaches compute_error_backoff would make all of this moot."""
+    from agent.error_classifier import classify_api_error
+
+    erreur = _ProviderError(None)
+    erreur.body = {"error": {"message": "llm busy with long-context jobs, retry after 5s",
+                             "type": "service_unavailable", "code": 503}}
+    classe = classify_api_error(erreur, provider="custom", model="nora")
+    assert classe.should_fallback is False, classe
