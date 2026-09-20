@@ -278,8 +278,20 @@ class WebhookAdapter(BasePlatformAdapter):
         # Runs once, at the single delivery chokepoint. The SAME rules are applied to the
         # persisted transcript (agent/session_persistence.py) so the saved conversation and
         # the delivered one cannot disagree — hence one shared module, not two copies.
-        content = strip_internal_mechanics(content)
+        # //// Neoffice — the customer's language rides in the delivery info (20.09).
+        # //// The lookup moved ABOVE the filter for that reason only. Every replacement
+        # //// sentence this filter can produce ("le service est indisponible", "je n'ai
+        # //// pas reussi a aller au bout") used to be a French literal, while the pole
+        # //// labels and the canned small talk next to them have spoken fr/de/it/en for
+        # //// months: a German-speaking user whose turn failed read a French apology.
+        # //// Absent or expired (1h TTL) falls back to French, the product default and
+        # //// the behaviour before this change. The STRIPPING is language-independent,
+        # //// so the persisted transcript (agent/session_persistence.py), which has no
+        # //// language in scope, still removes exactly the same machinery — only the
+        # //// wording of a failure sentence can differ, and only on a failed turn.
         delivery = self._delivery_info.get(chat_id, {})
+        content = strip_internal_mechanics(content, delivery.get("language"))
+        # //// END Neoffice ////
         # NORA #41: an async kanban notifier delivery carries the desk conversation_id
         # in metadata. The volatile _delivery_info may have expired (1h TTL) or never
         # resolved the "{conversation_id}" placeholder; rebuild a delivery from the
@@ -867,6 +879,10 @@ class WebhookAdapter(BasePlatformAdapter):
         # //// cannot catch that; only running it does.
         deliver_config = {
             "deliver": route_config.get("deliver", "log"), "profile": profile,
+            # //// Neoffice — the customer's language, read back at the delivery
+            # //// chokepoint in send() so a failure sentence reaches them in their own
+            # //// language. Carried HERE because this is where the inbound payload is.
+            "language": str((payload or {}).get("language") or "").strip() or None,
             "deliver_extra": self._render_delivery_extra(route_config.get("deliver_extra", {}), payload)}
         self._delivery_info[session_chat_id] = deliver_config
         # //// END Neoffice ////

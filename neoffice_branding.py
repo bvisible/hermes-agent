@@ -100,17 +100,16 @@ GUARDRAIL_HALT_REPLY = (
 # minutes, iteration progress, the running tool) is machinery and goes. Anchored on
 # the fixed head of each template, at the START of the text, so a real answer that
 # happens to quote one of these is untouched.
+# //// Neoffice — the notices are keyed, not written inline, so REPLIES below can give
+# //// each one its four languages. See the note on REPLIES.
 _BUSY_NOTICES = (
-    (re.compile(r"^\s*⇩?⏩?\s*Steered into current run\b", re.IGNORECASE),
-     "J'ai pris votre message en compte dans la demande en cours."),
-    (re.compile(r"^\s*↪?\s*Redirected current run\b", re.IGNORECASE),
-     "J'ai pris votre correction en compte et j'ajuste la demande en cours."),
+    (re.compile(r"^\s*⇩?⏩?\s*Steered into current run\b", re.IGNORECASE), "steered"),
+    (re.compile(r"^\s*↪?\s*Redirected current run\b", re.IGNORECASE), "redirected"),
     (re.compile(r"^\s*⏳?\s*(Subagent working|Compressing context|Queued for the next turn)\b",
-                re.IGNORECASE),
-     "Je termine la demande en cours ; je réponds à votre message juste après."),
-    (re.compile(r"^\s*⚡?\s*Interrupting current task\b", re.IGNORECASE),
-     "J'arrête la demande en cours pour répondre à votre message."),
+                re.IGNORECASE), "queued"),
+    (re.compile(r"^\s*⚡?\s*Interrupting current task\b", re.IGNORECASE), "interrupting"),
 )
+
 
 _NO_REPLY_RE = re.compile(r"^\s*⚠️?\s*No reply\s*:", re.IGNORECASE)
 NO_REPLY_REPLY = (
@@ -119,21 +118,99 @@ NO_REPLY_REPLY = (
 )
 
 
+# //// Neoffice — the customer's language, not always French (20.09). Every sentence this
+# //// module hands a customer was a French literal, while POLE_LABELS and the canned
+# //// small talk right next door have carried fr/de/it/en for months. A German-speaking
+# //// user whose turn failed read a French apology. The module keeps the French constants
+# //// as the canonical text (they are imported elsewhere and by the tests) and the table
+# //// resolves the other three off them. Unknown or absent language falls back to French,
+# //// which is the product default and the behaviour before this change.
+REPLIES = {
+    "provider_unavailable": {
+        "fr": PROVIDER_UNAVAILABLE_REPLY,
+        "de": "Der KI-Dienst ist momentan nicht verfügbar. Versuchen Sie es bitte in ein "
+              "paar Minuten erneut; falls dies andauert, informieren Sie Ihren Administrator.",
+        "it": "Il servizio di intelligenza artificiale non è al momento disponibile. "
+              "Riprovi tra qualche minuto; se il problema persiste, avvisi il suo amministratore.",
+        "en": "The AI service is temporarily unavailable. Please try again in a few minutes; "
+              "if this continues, notify your administrator.",
+    },
+    "guardrail_halt": {
+        "fr": GUARDRAIL_HALT_REPLY,
+        "de": "Ich konnte Ihre Anfrage nicht vollständig bearbeiten. Formulieren Sie sie "
+              "bitte um oder präzisieren Sie sie; falls dies erneut vorkommt, informieren "
+              "Sie Ihren Administrator.",
+        "it": "Non ho potuto elaborare completamente la sua richiesta. La riformuli o la "
+              "precisi; se il problema si ripete, avvisi il suo amministratore.",
+        "en": "I was not able to fully process your request. Please rephrase or clarify it; "
+              "if this happens again, notify your administrator.",
+    },
+    "no_reply": {
+        "fr": NO_REPLY_REPLY,
+        "de": "Ich konnte diese Nachricht nicht vollständig bearbeiten. Formulieren Sie sie "
+              "bitte um oder präzisieren Sie sie; falls dies erneut vorkommt, informieren "
+              "Sie Ihren Administrator.",
+        "it": "Non ho potuto elaborare completamente questo messaggio. Lo riformuli o lo "
+              "precisi; se il problema si ripete, avvisi il suo amministratore.",
+        "en": "I was not able to fully process this message. Please rephrase or clarify it; "
+              "if this happens again, notify your administrator.",
+    },
+    "steered": {
+        "fr": "J'ai pris votre message en compte dans la demande en cours.",
+        "de": "Ich habe Ihre Nachricht bei der laufenden Anfrage berücksichtigt.",
+        "it": "Ho tenuto conto del suo messaggio nella richiesta in corso.",
+        "en": "I have taken your message into account in the current request.",
+    },
+    "redirected": {
+        "fr": "J'ai pris votre correction en compte et j'ajuste la demande en cours.",
+        "de": "Ich habe Ihre Korrektur berücksichtigt und passe die laufende Anfrage an.",
+        "it": "Ho tenuto conto della sua correzione e sto adattando la richiesta in corso.",
+        "en": "I have taken your correction into account and I am adjusting the current request.",
+    },
+    "queued": {
+        "fr": "Je termine la demande en cours ; je réponds à votre message juste après.",
+        "de": "Ich schliesse die laufende Anfrage ab; danach antworte ich auf Ihre Nachricht.",
+        "it": "Sto terminando la richiesta in corso; rispondo al suo messaggio subito dopo.",
+        "en": "I am finishing the current request; I will reply to your message right after.",
+    },
+    "interrupting": {
+        "fr": "J'arrête la demande en cours pour répondre à votre message.",
+        "de": "Ich unterbreche die laufende Anfrage, um auf Ihre Nachricht zu antworten.",
+        "it": "Interrompo la richiesta in corso per rispondere al suo messaggio.",
+        "en": "I am interrupting the current request to reply to your message.",
+    },
+}
+
+
+def reply(key: str, lang=None) -> str:
+    """The customer sentence for ``key``, in ``lang``; French when it is unknown."""
+    par_langue = REPLIES[key]
+    code = str(lang or "").strip().lower().replace("_", "-").split("-")[0]
+    return par_langue.get(code) or par_langue["fr"]
+# //// END Neoffice ////
+
+
 # //// Neoffice — a kanban task id is opaque to the customer and useful to nobody
 # outside the machinery ("La tâche `t_51f94c26` est déjà en statut…"). Stripped
 # rather than rewritten: see the note in strip_internal_mechanics below (#476).
 _TASK_ID_RE = re.compile(r"`?\bt_[0-9a-f]{6,}\b`?", re.IGNORECASE)
 
 
-def strip_internal_mechanics(text: str) -> str:
-    """Return ``text`` with NORA's internal vocabulary removed; non-strings pass through."""
+def strip_internal_mechanics(text: str, lang=None) -> str:
+    """Return ``text`` with NORA's internal vocabulary removed; non-strings pass through.
+
+    ``lang`` is the CUSTOMER's language (fr/de/it/en). It only selects which
+    wording the whole-text replacements below use; every stripping rule is
+    language-independent, so the delivered chat and the persisted transcript
+    strip exactly the same machinery whatever is passed here.
+    """
     if not text or not isinstance(text, str):
         return text
     # //// Neoffice — see _PROVIDER_FAILURE_RE above (#450).
     if _PROVIDER_FAILURE_RE.search(text[:400]):
         logger.warning("neoffice_branding: provider failure hidden from the customer: %s",
                        text[:200].replace("\n", " "))
-        return PROVIDER_UNAVAILABLE_REPLY
+        return reply("provider_unavailable", lang)
     # //// END Neoffice ////
     # //// Neoffice — see _GUARDRAIL_HALT_RE above (#476). Replaced WHOLE, like a
     # //// provider failure: the sentence is machinery end to end, so stripping words
@@ -141,20 +218,20 @@ def strip_internal_mechanics(text: str) -> str:
     if _GUARDRAIL_HALT_RE.search(text[:400]):
         logger.warning("neoffice_branding: tool-call guardrail hidden from the customer: %s",
                        text[:200].replace("\n", " "))
-        return GUARDRAIL_HALT_REPLY
+        return reply("guardrail_halt", lang)
     # //// END Neoffice ////
     # //// Neoffice — upstream turn notices, see _BUSY_NOTICES above (#491 thread).
     # //// Replaced WHOLE: head, status detail and tail are machinery end to end, so
     # //// stripping words would leave a mangled half-sentence in the customer's chat.
-    for _pattern, _french in _BUSY_NOTICES:
+    for _pattern, _key in _BUSY_NOTICES:
         if _pattern.search(text[:120]):
             logger.info("neoffice_branding: turn notice rewritten for the customer: %s",
                         text[:200].replace("\n", " "))
-            return _french
+            return reply(_key, lang)
     if _NO_REPLY_RE.search(text[:120]):
         logger.warning("neoffice_branding: unanswered turn hidden from the customer: %s",
                        text[:200].replace("\n", " "))
-        return NO_REPLY_REPLY
+        return reply("no_reply", lang)
     # //// END Neoffice ////
     # //// Neoffice — capitalised when it opens a sentence (20.09). The replacement
     # //// was the bare « l'équipe », so « Le spécialiste compta va… » came out

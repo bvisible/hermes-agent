@@ -242,3 +242,74 @@ def test_every_pole_has_a_customer_facing_label_in_every_language():
         for pole in POLES:
             assert labels.get(pole), f"{pole} has no {langue} label"
             assert labels[pole] != pole, f"{pole} leaks its internal key in {langue}"
+
+
+# //// Neoffice — added 20.09. Every sentence this module hands a customer was a French
+# //// literal, while POLE_LABELS and the canned small talk in the router next door have
+# //// carried fr/de/it/en for months. A German-speaking user whose turn failed read a
+# //// French apology at the worst possible moment.
+def test_a_failed_turn_speaks_the_customers_language():
+    from neoffice_branding import strip_internal_mechanics
+
+    brut = "API call failed after 3 retries: HTTP 502 \u2014 502 Bad Gateway"
+    rendus = {lang: strip_internal_mechanics(brut, lang) for lang in ("fr", "de", "it", "en")}
+    assert len(set(rendus.values())) == 4, "some languages share a sentence: " + repr(rendus)
+    assert "KI-Dienst" in rendus["de"]
+    assert "intelligenza artificiale" in rendus["it"]
+    assert "AI service" in rendus["en"]
+
+
+def test_an_unknown_or_absent_language_falls_back_to_french():
+    """French is the product default; that was the behaviour before this existed."""
+    from neoffice_branding import PROVIDER_UNAVAILABLE_REPLY, strip_internal_mechanics
+
+    brut = "API call failed after 3 retries: HTTP 502"
+    for lang in (None, "", "   ", "pt", "zz-ZZ"):
+        assert strip_internal_mechanics(brut, lang) == PROVIDER_UNAVAILABLE_REPLY, lang
+
+
+def test_a_regional_code_resolves_to_its_language():
+    """The desk may send de-CH or fr_CH; the region is not a different language."""
+    from neoffice_branding import strip_internal_mechanics
+
+    brut = "API call failed after 3 retries: HTTP 502"
+    assert strip_internal_mechanics(brut, "de-CH") == strip_internal_mechanics(brut, "de")
+    assert strip_internal_mechanics(brut, "fr_CH") == strip_internal_mechanics(brut, "fr")
+    assert strip_internal_mechanics(brut, "IT") == strip_internal_mechanics(brut, "it")
+
+
+def test_the_stripping_itself_is_language_independent():
+    """The persisted transcript has no language in scope, and must still agree.
+
+    The delivered chat and the saved transcript are allowed to differ on the WORDING of
+    a failure sentence; they are not allowed to differ on which machinery was removed.
+    That is what the persistence note means by "a transcript that disagrees with the
+    chat confuses support".
+    """
+    from neoffice_branding import strip_internal_mechanics
+
+    for phrase in (
+        "Le sp\u00e9cialiste compta va traiter votre t\u00e2che kanban.",
+        "Notre expert projet regarde le board.",
+        "La t\u00e2che kanban `t_abc123def` est termin\u00e9e.",
+    ):
+        rendus = {lang: strip_internal_mechanics(phrase, lang) for lang in (None, "fr", "de", "it", "en")}
+        assert len(set(rendus.values())) == 1, "stripping drifted by language: " + repr(rendus)
+
+
+def test_every_reply_exists_in_every_language():
+    """A key with a missing language silently falls back — the guard says so instead."""
+    from neoffice_branding import REPLIES
+
+    for cle, par_langue in REPLIES.items():
+        for lang in ("fr", "de", "it", "en"):
+            assert par_langue.get(lang), f"{cle} has no {lang}"
+        assert len(set(par_langue.values())) == 4, f"{cle} repeats a sentence across languages"
+
+
+def test_every_busy_notice_is_keyed_to_a_reply():
+    """A notice keyed to nothing would raise at the worst moment — on a busy turn."""
+    from neoffice_branding import REPLIES, _BUSY_NOTICES
+
+    for _pattern, cle in _BUSY_NOTICES:
+        assert cle in REPLIES, f"busy notice keyed to unknown reply {cle!r}"
