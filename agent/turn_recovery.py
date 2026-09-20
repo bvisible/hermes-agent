@@ -21,6 +21,7 @@ from agent.model_metadata import is_output_cap_error, parse_available_output_tok
 from agent.retry_utils import (  # //// Neoffice — announced_wait_* added ////
     announced_wait_kind,
     announced_wait_retry_ceiling,
+    announced_wait_spend,
     is_zai_coding_overload_error,
     parse_retry_after_seconds,
     zai_coding_overload_retry_ceiling,
@@ -1382,15 +1383,27 @@ def _is_genuine_nous_rate_limit(agent: Any, api_error: Exception, error_context:
 # //// the reasoning live on announced_wait_retry_ceiling in agent/retry_utils.py; this
 # //// is only the wiring: find the announced wait wherever the provider put it, and
 # //// widen the loop for THAT error alone.
-def announced_wait_ceiling_for(agent: Any, api_error: Exception, max_retries: int) -> int:
-    """``max_retries``, widened when the provider announced a wait and a budget is set.
+_ANNOUNCED_BUDGET_ATTR = {
+    "service_unavailable": "_announced_wait_budget_seconds",
+    "upstream_unavailable": "_announced_restart_budget_seconds",
+}
 
-    Returns ``max_retries`` unchanged when no budget is configured (the default), when
-    the error announces nothing, or when no wait can be read — so the blind three-strike
-    path is exactly what it was.
+
+def announced_wait_ceiling_for(agent: Any, api_error: Exception, max_retries: int,
+                               retry_count: int = 0) -> int:
+    """``max_retries``, widened while the announced waits still fit inside the budget.
+
+    Returns ``max_retries`` unchanged when no budget is configured for this kind (the
+    default for both), when the error announces nothing, or when no wait can be read —
+    so the blind three-strike path is exactly what it was.
+
+    The budget is spent in SECONDS, accumulated across the turn, because the provider
+    now computes each ``Retry-After`` from the shortest remaining long job (bounded to
+    [2, 30]s — observed 10, then 4, then 6 in one episode). Counting attempts instead
+    would be right only while every wait is identical, which it no longer is.
     """
     kind = announced_wait_kind(api_error)
-    budget = float(getattr(agent, "_announced_wait_budget_seconds", 0.0) or 0.0)
+    budget = float(getattr(agent, _ANNOUNCED_BUDGET_ATTR.get(kind, ""), 0.0) or 0.0) if kind else 0.0
     if not kind or budget <= 0:
         return max_retries
     # Same order the backoff itself uses: header first, then the structured body.
@@ -1404,11 +1417,32 @@ def announced_wait_ceiling_for(agent: Any, api_error: Exception, max_retries: in
                 (nested if isinstance(nested, dict) else body).get("retry_after"))
     if not wait:
         return max_retries
-    widened = max(max_retries, announced_wait_retry_ceiling(budget, wait, floor=max_retries))
-    if widened != max_retries:
-        logger.info("announced %s: %.0fs wait, %.0fs budget -> retry ceiling %d",
-                    kind, wait, budget, widened)
-    return widened
+    # retry_count 0 is this turn's FIRST error: start the tally over. Without this the
+    # budget would be consumed once per session instead of once per turn.
+    # retry_count 0 is this turn's FIRST error: start the tally over. Without this the
+    # budget would be consumed once per session instead of once per turn.
+    if retry_count == 0:
+        agent._announced_wait_spent = 0.0
+    spent = float(getattr(agent, "_announced_wait_spent", 0.0) or 0.0)
+    # The tally advances BEFORE the ceiling is decided, and counts every announced
+    # second of the turn — including the waits the default ceiling already allowed. The
+    # budget is total patience, measured the way the provider measures it (from the
+    # first refusal), not an allowance stacked on an untracked prefix: counting only
+    # the widened attempts let a 30s budget sleep 40, which the turn simulation caught.
+    tally = announced_wait_spend(spent, wait, budget)
+    if tally == spent:
+        return max_retries  # this wait would overrun the budget: grant nothing more
+    agent._announced_wait_spent = tally
+    widened = announced_wait_retry_ceiling(
+        budget, wait, floor=max_retries, retry_count=retry_count, already_spent=spent)
+    # The asymmetry is deliberate: this only ever ADDS patience. It cannot take away the
+    # default attempts, so a budget smaller than what the default already sleeps does
+    # nothing rather than shortening the loop. Never making things worse is worth more
+    # here than being an exact cap.
+    if widened > max_retries:
+        logger.info("announced %s: %.0fs wait, %.0f/%.0fs spent -> retry ceiling %d",
+                    kind, wait, tally, budget, widened)
+    return max(max_retries, widened)
 # //// END Neoffice ////
 
 
@@ -1543,7 +1577,7 @@ def route_classified_error(
     # //// Neoffice — same shape, one line below, for a provider that ANSWERS with a
     # //// wait. Extracted so it can be tested: route_classified_error takes eighteen
     # //// parameters, which is why nothing would have exercised this inline.
-    max_retries = announced_wait_ceiling_for(agent, api_error, max_retries)
+    max_retries = announced_wait_ceiling_for(agent, api_error, max_retries, retry_count)
     # //// END Neoffice ////
     _should_fallback = (
         (is_rate_limited and _wrapped_output_cap_budget is None)
