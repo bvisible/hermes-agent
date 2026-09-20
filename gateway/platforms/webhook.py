@@ -165,10 +165,28 @@ _NEOFFICE_MONTHS_FR = (
 _NEOFFICE_DAYS_FR = (
     "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
 )
+# Not strftime("%A"): that follows the process locale, which is C on a server — it
+# would read "Monday" here and something else on a host with a locale configured.
+_NEOFFICE_DAYS_EN = (
+    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+)
 
 
 def _neoffice_inject_datetime_tokens(payload: dict, now=None) -> dict:
-    """Fill ``{date}``, ``{time}``, ``{year}``, ``{today_fr}`` unless the payload has them.
+    """Fill ``{date}``, ``{time}``, ``{year}``, ``{weekday}``, ``{today_fr}`` unless set.
+
+    WHO THIS FEEDS, because it is easy to mistake for dead code: the desk route is fed
+    by nora, which sends its own tokens from send_chat at the SITE's clock — a better
+    source, and ``setdefault`` means it wins. This exists for the WhatsApp route, whose
+    payload comes from the central router and carries no clock at all.
+
+    That route deliberately cites no date token TODAY: the fleet runs version-15, where
+    this function does not exist, so a ``{date}`` written into the template now would
+    reach every instance as a raw brace. It becomes live the day this branch ships —
+    one line in the template, and this is already waiting for it.
+
+    ``weekday`` is English (``Monday``) so the desk and WhatsApp templates can cite the
+    same sentence; ``today_fr`` stays French for a template that speaks to the customer.
 
     Europe/Zurich, because the server clock is UTC and the date is what the customer
     reads: two hours behind also means the WRONG DAY between midnight and 02:00.
@@ -188,6 +206,7 @@ def _neoffice_inject_datetime_tokens(payload: dict, now=None) -> dict:
     payload.setdefault("date", now.strftime("%Y-%m-%d"))
     payload.setdefault("time", now.strftime("%H:%M"))
     payload.setdefault("year", str(now.year))
+    payload.setdefault("weekday", _NEOFFICE_DAYS_EN[now.weekday()])
     payload.setdefault(
         "today_fr",
         f"{_NEOFFICE_DAYS_FR[now.weekday()]} {now.day} "
