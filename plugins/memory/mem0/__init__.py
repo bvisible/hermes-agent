@@ -206,13 +206,45 @@ _RECALL_QUESTION_RE = re.compile(
 )
 
 
+# //// Neoffice — a health probe is not a memory (20.09). Per-turn capture runs with
+# //// infer=False, so NOTHING judges what lands in the store, and the fleet's liveness
+# //// check is a real chat turn: it asks « Réponds uniquement par le mot NORAOK » and
+# //// NORA answers « NORAOK ». Measured on osiris that day: 18 of the 400 stored points
+# //// (4,5 %) were that exchange, both halves of it, sitting in a named person's bucket.
+# ////
+# //// The ownerless guard in sync_turn does not catch this one: the probe signs in as a
+# //// REAL account, so it has an owner — it is simply not a human saying anything. The
+# //// cost is not only clutter: recalled memories are injected into the system prompt,
+# //// so a store that grows on every health check changes the prompt prefix and throws
+# //// away the prefix cache the warmup exists to keep.
+# ////
+# //// Both halves are matched. « Réponds uniquement par <un mot> » is an instruction to
+# //// a machine — no human writes it to an assistant — and the bare token on its own is
+# //// the answer. Accent-insensitive: the probe is sent unaccented.
+_HEALTH_PROBE_RE = re.compile(
+    r"^\s*(?:"
+    r"r[ée]ponds?\s+uniquement\s+(?:par|avec)\b"
+    r"|(?:answer|reply)\s+(?:only|with\s+only)\b"
+    r"|(?:NORAOK[\s.!]*)+$"
+    r")",
+    re.IGNORECASE,
+)
+
+
 def _is_low_value_for_memory(text: Optional[str]) -> bool:
-    """True for short digit-free politeness, and for pure recall questions."""
+    """True for short digit-free politeness, pure recall questions, and health probes."""
     if not text:
         return True
     stripped = text.strip()
     if not stripped:
         return True
+    # //// Neoffice — the probe is checked BEFORE the digit rule on purpose. A liveness
+    # //// check stays a liveness check whether or not its token carries a figure; the
+    # //// digit short-circuit below exists to protect a code, amount or date a PERSON
+    # //// stated, not a sentence a monitoring job generated.
+    if _HEALTH_PROBE_RE.match(stripped):
+        return True
+    # //// END Neoffice ////
     # A digit means a code / amount / date may be stated: always worth keeping.
     if any(ch.isdigit() for ch in stripped):
         return False
