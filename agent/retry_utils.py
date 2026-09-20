@@ -171,10 +171,15 @@ def adaptive_rate_limit_backoff(
 # //// "come back in 5s" is telling us it is alive and busy. A provider that is simply
 # //// broken tells us nothing. Upstream spends the same three-strike budget on both,
 # //// and that is what kills our turns: measured on osiris over every agent log since
-# //// 17.08, 336 calls were turned away by the express lane and 196 of them — 58 % —
-# //// died, with the Retry-After honoured every single time (537 sleeps of exactly
-# //// 5.0s out of 545). Three attempts are only TWO waits, so the real patience was
-# //// 10 seconds against a lane that two long prompts hold for 30 to 70.
+# //// 17.08, the express lane turned calls away often enough to kill **84 real user
+# //// turns** — 23 on the desk, 61 across the poles (compta 31, projet 14, ventes 8,
+# //// rh 5, support 3) — with the Retry-After honoured every single time. Three
+# //// attempts are only TWO waits, so the real patience was 10 seconds.
+# ////
+# //// That 84 is a CORRECTED figure and the correction is worth carrying: the first
+# //// count said 196, until the dead sessions were crossed against state.db and 113 of
+# //// them turned out to be our own cache-warmup timer, not people. A number that
+# //// counts sessions without asking what they were is not a measurement.
 # ////
 # //// The shape is upstream's own, one function below: detect the announced condition,
 # //// raise the loop ceiling for THAT error only. What differs is the unit — a budget
@@ -183,12 +188,17 @@ def adaptive_rate_limit_backoff(
 # //// is the right behaviour in both cases and needs no second knob.
 # ////
 # //// Deliberately OFF by default (budget 0.0 = today's behaviour, unchanged). The
-# //// recovery hazard measured per 5s wait is 25.0 % then 22.2 % — flat, not decaying —
-# //// which fits 336 x 0.765^2 = 196.6 against the 196 observed, and projects ~12 %
-# //// dead at 40s and ~7 % at 50s. But a flat hazard fitted on TWO points is an
-# //// assumption: a real queue's hazard usually DECAYS for long jobs, so that tail is
-# //// optimistic. Turning this on is a one-value decision that belongs with the lane's
-# //// occupancy distribution in hand, not with a projection.
+# //// number to set comes from the lane's own occupancy, measured on the provider's
+# //// side over 14 days and 114 876 chat calls: median 9s, p90 22, p95 31, max 97 —
+# //// so 30s of patience covers 95 % of episodes and 45s covers 99 %.
+# ////
+# //// An earlier hazard fit derived from OUR logs is deliberately not quoted here. It
+# //// was computed on turn counts that included the cache-warmup timer, which loops on
+# //// a 120s expiry and has nothing like a user turn's law; and the lane itself is
+# //// moving under it — the provider raised its concurrent-long-job limit from 2 to 5,
+# //// and that timer is being retired. A projection built on two contaminated points,
+# //// against a distribution that is about to shift, is worth less than the direct
+# //// measurement above. Set the budget from that, or from a fresh one.
 _ANNOUNCED_WAIT_TYPES = ("service_unavailable", "upstream_unavailable")
 
 
