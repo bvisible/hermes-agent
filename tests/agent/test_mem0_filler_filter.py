@@ -149,3 +149,50 @@ def test_bare_acknowledgements_are_not_memorised(text):
 )
 def test_acknowledgement_introducing_a_fact_is_kept(text):
     assert is_low_value(text) is False, f"a fact would be lost: {text!r}"
+
+
+# //// Neoffice — added 20.09. The fleet's liveness check is a REAL chat turn: it asks
+# //// « Réponds uniquement par le mot NORAOK » and NORA answers « NORAOK ». Measured on
+# //// osiris that day, 18 of the 400 stored points (4,5 %) were that exchange, both
+# //// halves, in a named person's bucket. The ownerless guard in sync_turn does not
+# //// catch it — the probe signs in as a real account, so it HAS an owner; it is simply
+# //// not a human saying anything. Every string below was read out of the live store.
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Reponds uniquement par le mot NORAOK.",   # the probe, unaccented as sent
+        "Réponds uniquement par le mot NORAOK",    # and accented
+        "NORAOK",                                  # the answer
+        "NORAOK.",
+        "NORAOK. NORAOK.",
+        "NORAOK NORAOK",
+        "Answer only with OK",                     # the English shape
+    ],
+)
+def test_a_health_probe_is_not_a_memory(text):
+    assert is_low_value(text), f"the probe would be stored: {text!r}"
+
+
+# //// Neoffice — the probe check runs BEFORE the digit rule, deliberately. This locks
+# //// that ordering: a liveness check stays one whether or not its token carries a
+# //// figure, while the digit rule keeps protecting what a PERSON stated.
+def test_a_probe_carrying_a_figure_is_still_a_probe():
+    assert is_low_value("Réponds uniquement par le mot NORAOK2")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # Read out of the same store — these must survive the new rule.
+        "The garage code is GZ550011.",
+        "Le code d'accès au local est ZK293331.",
+        "On en est où sur ce chantier ?",
+        "The user's name is Jeremy.",
+        # A human sentence that merely opens on the same verb.
+        "Réponds au client de Genève avant demain.",
+        # The token inside a real sentence is not the bare answer.
+        "NORAOK est le nom de code de notre sonde de supervision.",
+    ],
+)
+def test_the_probe_rule_takes_nothing_else(text):
+    assert not is_low_value(text), f"real content would be dropped: {text!r}"
