@@ -208,18 +208,40 @@ def announced_wait_kind(error: Any) -> Optional[str]:
 
 
 def announced_wait_retry_ceiling(budget_seconds: float, announced_wait: float,
-                                 floor: int = 3) -> int:
-    """Loop ceiling that spends ``budget_seconds`` at ``announced_wait`` per attempt.
+                                 floor: int = 3, *, retry_count: int = 0,
+                                 already_spent: float = 0.0) -> int:
+    """Loop ceiling granting ONE more attempt while the budget still covers the wait.
 
-    ``floor`` keeps it from ever REDUCING the normal ceiling. Mirrors
-    ``zai_coding_overload_retry_ceiling``'s off-by-one: the loop gives up when
-    ``retry_count >= ceiling`` BEFORE computing that attempt's backoff, so N waits need
-    a ceiling of N + 1.
+    Rewritten the day the provider started computing its own ``Retry-After`` from the
+    shortest remaining long job, bounded to [2, 30]s — observed 10s, then 4, then 6 in
+    one saturated episode. The first version divided the budget by the FIRST announced
+    wait and returned a fixed ceiling, which is wrong the moment the second differs.
+    Seconds are what the budget is denominated in, so seconds are what must be counted.
+
+    ``already_spent`` is the announced time this turn has consumed so far; the caller
+    accumulates it. ``floor`` keeps this from ever REDUCING a ceiling another rule set.
+    Grants ``retry_count + 2`` because the loop gives up when ``retry_count >= ceiling``
+    BEFORE computing that attempt's backoff — one past the attempt being decided.
     """
     if budget_seconds <= 0 or announced_wait <= 0:
         return floor
-    waits = int(budget_seconds // announced_wait)
-    return max(floor, waits + 1)
+    if already_spent + announced_wait > budget_seconds:
+        return floor
+    return max(floor, retry_count + 2)
+
+
+def announced_wait_spend(already_spent: float, announced_wait: float,
+                         budget_seconds: float) -> float:
+    """The running tally after this wait, or ``already_spent`` when it would overrun.
+
+    Separate from the ceiling so the CALLER cannot forget to advance it: counting only
+    the attempts that were widened left the first waits free, and a 30s budget slept 40.
+    """
+    if budget_seconds <= 0 or announced_wait <= 0:
+        return already_spent
+    if already_spent + announced_wait > budget_seconds:
+        return already_spent
+    return already_spent + announced_wait
 
 
 def zai_coding_overload_retry_ceiling(short_attempts: int = _ZAI_CODING_OVERLOAD_SHORT_ATTEMPTS) -> int:
