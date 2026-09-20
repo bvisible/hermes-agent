@@ -1074,26 +1074,37 @@ def compute_error_backoff(
             _nested = _error_body.get("error")
             _payload = _nested if isinstance(_nested, dict) else _error_body
             _retry_after = parse_retry_after_seconds(_payload.get("retry_after"))
-            # //// Neoffice — and some state it in PROSE and nowhere else (20.09). Our
-            # //// inference server answers a saturated moment with, verbatim:
+            # //// Neoffice — some providers state the wait in PROSE and nowhere else.
+            # //// A defensive last resort, NOT a fix for anything observed here — the
+            # //// record is corrected on purpose, because the first version of this
+            # //// comment claimed a production defect it never demonstrated.
+            # ////
+            # //// What is true: our inference server answers a saturated moment with
             # ////   503 {"message": "llm busy with long-context jobs, retry after 5s",
             # ////        "type": "service_unavailable", "code": 503}
-            # //// No Retry-After header, no `retry_after` field — the wait lives only in
-            # //// the sentence. So all three lookups above return None and the loop falls
-            # //// back to jittered_backoff(base_delay=2.0). Measured on 200 draws per
-            # //// attempt: 2.5s, 2.6s, 4.8s median — attempts 1 and 2 land INSIDE the
-            # //// five seconds the server asked for, 100 % of the time. Two of the three
-            # //// retries are therefore spent hammering a server that just said « not
-            # //// yet », and the turn dies on "API call failed after 3 retries", which is
-            # //// what the customer reads. This 503 is not an outage: it is ordinary
-            # //// backpressure on 15-28 % of the fleet's text calls in HEALTHY operation.
+            # //// What was WRONG: that it carried no Retry-After header. It does, proven
+            # //// by curl -i at both hops while the express lane was genuinely saturated,
+            # //// and the body now carries `retry_after` in both structured places too.
+            # //// The first lookup above therefore already returned 5.0, and the real
+            # //// waits were 5.00/5.00/5.00 before this branch existed. The "2.5 / 2.6 /
+            # //// 4.8" first written here came from a STUB whose `response` was None —
+            # //// an instrument that differed from production in exactly the field under
+            # //// investigation.
             # ////
-            # //// Reading a number out of prose is not something to do lightly, hence the
-            # //// tight anchor: the literal words "retry after", a number, an optional
-            # //// unit. Anything else leaves _retry_after as None and the upstream
-            # //// fallback stands. The cap and the <=0 rejection below still apply, so a
-            # //// pathological value cannot stall a turn. Drop this when the provider
-            # //// emits a Retry-After header.
+            # //// So this branch changes nothing while a header is present (the header
+            # //// wins, by construction) and only earns its place against some future
+            # //// provider that states the wait and nowhere puts it. The tight anchor —
+            # //// the literal words "retry after", a number, an optional unit — is what
+            # //// keeps reading prose defensible: anything else leaves _retry_after as
+            # //// None and the upstream fallback stands, and the cap and the <=0
+            # //// rejection below still apply.
+            # ////
+            # //// The REAL defect this hunt uncovered is not here: 3 retries x 5s = 15s,
+            # //// while two long prompts hold that lane 30-70s. A perfectly honoured
+            # //// Retry-After still ends in "API call failed after 3 retries". Announced
+            # //// backpressure should not spend the same 3-strike budget as a real
+            # //// outage — sizing that needs the lane's occupancy distribution, so it is
+            # //// deliberately NOT changed here.
             if _retry_after is None:
                 _retry_after = _parse_retry_after_from_prose(_payload.get("message"))
             # //// END Neoffice ////
