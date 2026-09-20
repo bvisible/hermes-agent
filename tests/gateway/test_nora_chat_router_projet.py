@@ -461,3 +461,53 @@ def test_the_capability_prompt_forbids_asking_for_what_is_computed():
 
     assert "never for something the system works out by itself" in _CAPABILITY_SYSTEM
     assert "do not invent data or fields" in _CAPABILITY_SYSTEM
+
+
+# //// Neoffice — added 20.09. _BUSINESS_RE is the ANTI-gate of the small-talk light
+# //// path: a message carrying a greeting AND no business word is answered with one
+# //// warm sentence and never reaches the agent. The list was written before `projet`
+# //// existed, so it protected « Bonjour, ou en est ma facture ? » and not « Bonjour,
+# //// on en est ou sur le chantier ? ». Measured that day: five job sentences out of six
+# //// passed straight through. The keyword rules catch most of them first, but this gate
+# //// exists for when they do not and the classifier falls back to DIRECT — which is
+# //// what an outage does, all day (14.09).
+JOB_SENTENCES_WITH_A_GREETING = (
+    "Bonjour, on en est où sur le chantier ?",
+    "Salut, la visite de mardi tient toujours ?",
+    "Bonjour, il me faut un métré pour le séjour.",
+    "Merci, et l'atelier a fini la réparation ?",
+    "Bonsoir, j'ai posé deux heures sur le chantier.",
+    "Bonjour, le contrat d'entretien arrive à échéance ?",
+    "Bonjour, l'intervention de jeudi est planifiée ?",
+)
+
+
+def test_a_greeting_in_front_of_a_job_question_is_not_small_talk():
+    """The failure is asymmetric: a false positive costs latency, a false negative answers
+    a real question with « Bonjour ! Comment puis-je vous aider ? »."""
+    from gateway.nora_chat_router import _BUSINESS_RE
+
+    for phrase in JOB_SENTENCES_WITH_A_GREETING:
+        assert _BUSINESS_RE.search(phrase), (
+            "would take the small-talk light path: " + phrase
+        )
+
+
+def test_the_job_gate_is_as_strong_as_the_invoice_gate():
+    """The control: the same sentence about an invoice was always protected."""
+    from gateway.nora_chat_router import _BUSINESS_RE
+
+    assert _BUSINESS_RE.search("Bonjour, où en est ma facture ?")
+    assert _BUSINESS_RE.search("Bonjour, où en est mon chantier ?")
+
+
+def test_plain_small_talk_still_takes_the_light_path():
+    """Widening the anti-gate must not cost a greeting its one-sentence answer."""
+    from gateway.nora_chat_router import _BUSINESS_RE, _SMALLTALK_RE
+
+    for phrase in ("Bonjour", "Bonjour Nora", "Merci !", "Bonne journée", "Salut, ça va ?",
+                   "Bonsoir", "Au revoir", "Comment vas-tu ?"):
+        assert _SMALLTALK_RE.search(phrase), phrase
+        assert not _BUSINESS_RE.search(phrase), (
+            "a plain greeting now pays the full agent: " + phrase
+        )
