@@ -192,7 +192,12 @@ def _consume_pending_offer(phone: Optional[str]) -> None:
 # the owning pole). The model must answer with EXACTLY one lowercase token.
 _CLASSIFIER_SYSTEM = (
     "Tu es le routeur de Neoffice. On te donne le message d'un utilisateur. "
-    "Tu réponds par UN SEUL mot parmi : recurrent, compta, ventes, support, rh, analyse, direct. "
+    # //// Neoffice — `projet` added to the allowed tokens (20.09). POLES has held it
+    # //// since 16.09, but this prompt never named it: the model was asked to pick a
+    # //// pole and could not answer this one. Everything the deterministic rules did
+    # //// not catch went somewhere else — to a pole that no longer holds a single job
+    # //// tool. A pole that cannot be named is a pole that cannot be chosen.
+    "Tu réponds par UN SEUL mot parmi : recurrent, compta, projet, ventes, support, rh, analyse, direct. "
     "Aucune ponctuation, aucune explication, juste le mot.\n\n"
     "PRIORITÉ ABSOLUE — 'recurrent' : si la demande doit se RÉPÉTER dans le temps "
     "(« tous les matins / chaque jour / toutes les heures / chaque lundi / chaque semaine / "
@@ -214,6 +219,19 @@ _CLASSIFIER_SYSTEM = (
     # curated wiki, even when they do not mention an ERP accounting object.
     "  Cela inclut le droit comptable suisse, la perte de capital, le surendettement "
     "et les art. 725a/725b CO.\n"
+    # //// END Neoffice ////
+    # //// Neoffice — the job domain, in the classifier's own words (20.09). Placed
+    # //// BEFORE ventes because that is where the two compete: both say « devis ».
+    # //// The boundary is the JOB, exactly as in the deterministic rules below, where
+    # //// a quotation qualified by a chantier is tested before the plain one.
+    "- projet : les CHANTIERS et les INTERVENTIONS — ouvrir un chantier, ses visites et "
+    "ses rendez-vous, ses lignes de travail, son métré (surfaces, cotes, m²), son "
+    "chiffrage, l'atelier, les contrats d'entretien, « ma journée » / « ma tournée », "
+    "et les heures ou le matériel posés sur un chantier.\n"
+    "  Un devis, une commande ou une facture QUALIFIÉS PAR UN CHANTIER (« le devis de ce "
+    "chantier », « facture l'intervention de mardi ») vont à projet et non à ventes : "
+    "lui seul tient les outils du chantier. Un devis pour un client SANS chantier reste "
+    "à ventes.\n"
     # //// END Neoffice ////
     "- ventes : devis, commandes clients, factures de vente, articles, stock, clients "
     "(création/recherche), prix, réapprovisionnement — commandes FOURNISSEURS "
