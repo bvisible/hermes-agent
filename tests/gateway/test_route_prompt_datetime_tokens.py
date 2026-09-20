@@ -34,7 +34,7 @@ from gateway.platforms.webhook import (
 GABARIT = ('Date du jour : {today_fr} (heure : {time}).\n\n'
            'Message WhatsApp entrant de l\'utilisateur {phone} : "{message}".')
 
-DATE_TOKENS = ("today_fr", "date", "time", "year")
+DATE_TOKENS = ("today_fr", "date", "time", "year", "weekday")
 
 
 def _render(template, payload):
@@ -96,6 +96,17 @@ def test_the_default_clock_is_zurich():
     # Same minute unless the test straddles one; the date is the load-bearing part.
     assert sorti["date"] == attendu.strftime("%Y-%m-%d")
     assert abs(int(sorti["time"][:2]) - attendu.hour) <= 1
+
+
+def test_the_weekday_is_english_and_locale_independent():
+    """English so the desk and WhatsApp templates can cite the same sentence — and from
+    a table, not strftime("%A"), which follows the process locale."""
+    from zoneinfo import ZoneInfo
+
+    sorti = _neoffice_inject_datetime_tokens(
+        {}, now=datetime(2026, 8, 5, 14, 0, tzinfo=ZoneInfo("Europe/Zurich")))
+    assert sorti["weekday"] == "Wednesday"
+    assert sorti["today_fr"].startswith("mercredi"), "the two live side by side"
 
 
 def test_the_french_names_are_french():
