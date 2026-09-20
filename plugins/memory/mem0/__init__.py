@@ -231,6 +231,16 @@ _HEALTH_PROBE_RE = re.compile(
 )
 
 
+# //// Neoffice — see the call site: the same recall question, reached after a short
+# //// courtesy opening. `_RECALL_QUESTION_RE` is reused whole rather than restated, so
+# //// the two can never disagree about what counts as a recall question.
+_RECALL_AFTER_LEAD_IN_RE = re.compile(
+    r"^[^\d?]{1,24}?[,:\u2014-]\s+(?=\S)" + _RECALL_QUESTION_RE.pattern.lstrip("^\\s*"),
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
 def _is_low_value_for_memory(text: Optional[str]) -> bool:
     """True for short digit-free politeness, pure recall questions, and health probes."""
     if not text:
@@ -248,7 +258,22 @@ def _is_low_value_for_memory(text: Optional[str]) -> bool:
     # A digit means a code / amount / date may be stated: always worth keeping.
     if any(ch.isdigit() for ch in stripped):
         return False
-    if stripped.endswith("?") and _RECALL_QUESTION_RE.match(stripped):
+    # //// Neoffice — a short lead-in must not save a recall question (20.09). The rule
+    # //// is anchored at position 0, so « Au fait, tu te souviens de mon identifiant du
+    # //// jour ? » was stored as a memory while the identical sentence without « Au
+    # //// fait, » was dropped. Found by running the rule over a real store: of the 21
+    # //// stored questions, that one is the only miss of a phrase the rule ALREADY
+    # //// knows — the others would need a new class of rule, which this file's contract
+    # //// deliberately refuses ("when in doubt, remember").
+    # ////
+    # //// The window is 24 characters and the lead-in may not contain a digit: a code or
+    # //// an amount before the question means the turn states something, and the digit
+    # //// rule below is exactly what protects it. Kept narrow on purpose — widening the
+    # //// anchor is the cheap half of this problem; widening the VOCABULARY is where a
+    # //// real fact starts getting dropped.
+    if stripped.endswith("?") and (
+        _RECALL_QUESTION_RE.match(stripped) or _RECALL_AFTER_LEAD_IN_RE.match(stripped)
+    ):
         return True
     # //// Neoffice — a bare "Oui." carries nothing; "Oui, c'est Romande Énergie"
     # carries everything. Only the anchored form is dropped.
