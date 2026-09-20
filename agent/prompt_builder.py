@@ -359,10 +359,23 @@ KANBAN_GUIDANCE = (
     # //// prompt, plus the explicit block instruction, ends the loop at the first turn.
     # //// Was carried UNMARKED through the v0.21.0 rebase; marked here. Drop when
     # //// workers get a real execution surface.
+    # //// Neoffice — "your domain tools", not "your `frappe_*` tools" (20.09). The
+    # //// prefix was true when every pole write came from the frappe MCP server; it
+    # //// is not true now, and the sentence below tells a worker to STOP when those
+    # //// tools cannot answer. Counted on the live catalogue: support holds SIXTEEN
+    # //// write tools and NOT ONE is named frappe_* (the mailbox, the six
+    # //// helpdesk_ticket_* gestures, the attachment reader); analyse holds four,
+    # //// all dashboards, none frappe_*; rh holds two, one; compta four of twelve
+    # //// sit outside. Read literally, support and analyse were told their own
+    # //// tools do not count as a way to act, and then told to kanban_block as soon
+    # //// as the frappe_* ones do not answer — which for them is always. Naming the
+    # //// ROLE (domain tools) instead of a PREFIX also cannot rot the next time a
+    # //// server is added.
     "- You have NO terminal, NO `execute_code`, NO filesystem, and NO Python/SQL runtime — those do not exist in "
     "your schema. NEVER write, save, or 'execute a script' to obtain or compute data; your ONLY ways to act are "
-    "your `frappe_*` domain tools and the `kanban_*` tools. If your `frappe_*` tools cannot answer (no tool fits, "
-    "or the data is out of scope), call `kanban_block(reason=...)` IMMEDIATELY and stop — do NOT re-call "
+    "the domain (MCP) tools declared in your schema — whatever they are named — and the `kanban_*` tools. If your "
+    "domain tools cannot answer (no tool fits, or the data is out of scope), call `kanban_block(reason=...)` "
+    "IMMEDIATELY and stop — do NOT re-call "
     "`kanban_show` or re-plan in a loop until the iteration budget runs out (that wastes minutes and times the "
     "user out).\n"
     # //// END Neoffice ////

@@ -997,3 +997,31 @@ class TestContextFileReadTimeout:
 
         with pytest.raises(FileNotFoundError):
             _read_text_with_timeout(tmp_path / "missing.md", timeout=1.0)
+
+
+# //// Neoffice — added 20.09. KANBAN_GUIDANCE told every pole worker that "your ONLY
+# //// ways to act are your `frappe_*` domain tools", and, in the same bullet, to
+# //// kanban_block and stop as soon as those tools cannot answer. Counted on the live
+# //// catalogue that day: support holds SIXTEEN write tools and not one is named
+# //// frappe_* (the mailbox, six helpdesk_ticket_* gestures, the attachment reader);
+# //// analyse holds four, all dashboards, none frappe_*. Read literally, those two
+# //// poles were told their own tools were not a way to act.
+def test_the_only_ways_to_act_name_no_tool_prefix():
+    """A prefix rots the day a second MCP server appears; the ROLE does not."""
+    from agent.prompt_builder import KANBAN_GUIDANCE
+
+    phrase = "your ONLY ways to act are"
+    assert phrase in KANBAN_GUIDANCE, "the sentence moved; this guard must follow it"
+    suite = KANBAN_GUIDANCE.split(phrase, 1)[1].split("\n", 1)[0]
+    assert "frappe_" not in suite, (
+        "the instruction names a prefix support and analyse do not carry: " + suite
+    )
+    assert "domain" in suite and "kanban_*" in suite
+
+
+def test_the_block_instruction_is_not_keyed_on_a_prefix_either():
+    """« If your frappe_* tools cannot answer » is always true for support and analyse."""
+    from agent.prompt_builder import KANBAN_GUIDANCE
+
+    assert "If your `frappe_*` tools cannot answer" not in KANBAN_GUIDANCE
+    assert "If your domain tools cannot answer" in KANBAN_GUIDANCE
