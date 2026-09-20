@@ -41,6 +41,50 @@ logger = logging.getLogger(__name__)
 # the orchestrator would have chosen on its good days.
 POLES = ("compta", "ventes", "support", "rh", "analyse", "projet")
 
+
+# //// Neoffice — added function (no upstream equivalent), extracted 20.09. It was
+# //// fifteen lines built inline inside route_chat, which is why nothing tested it and
+# //// why it could carry two defects for four days. Pure: pole in, anchor out.
+def job_page_anchor(pole: str, source: str, project: str, job: dict | None = None) -> str:
+    """The anchor that tells a worker WHICH building job the user is looking at.
+
+    Two halves, and they do not have the same audience:
+
+    * the job's IDENTITY — every pole needs it. A user on a job page who asks compta
+      « facture ce chantier » means THIS one, and compta is right to know which.
+    * the job's GESTURES — the `chantier-gestes-nora` skill and the item-search rule —
+      belong to `projet` and to nothing else. That skill lives under
+      skills-poles/projet; telling any other pole to `skill_view` it sends the worker
+      after something that is not there, and it spends a turn finding out.
+
+    The tool list that used to sit here is gone on purpose. It named seven tools and
+    had drifted: the fourteen job writes moved to `projet` on 16.09, so on any other
+    pole those names were tools the worker no longer held — and `frappe_job_record_work`,
+    the tool of the 16.09 incident, was never in the list at all, nor were nine others.
+    A list kept by hand drifts again at the next tool. The RULE does not: a worker reads
+    which of ITS OWN tools take a `project` off the schemas it already has, and the ones
+    keyed on an activity (frappe_job_take, frappe_job_ask_expert) stay correctly out.
+    """
+    job = job if isinstance(job, dict) else {}
+    ancre = f"[{source} {project}"
+    if job.get("title"):
+        ancre += f" « {str(job.get('title'))[:120]} »"
+    if job.get("customer"):
+        ancre += f" (customer: {job.get('customer')})"
+    ancre += (
+        ". « Ce chantier » / « ce projet » means THIS job: wherever one of your tools "
+        f'takes a `project` argument, pass project="{project}". Never guess another job.'
+    )
+    if pole == "projet":
+        ancre += (
+            " FIRST read your skill chantier-gestes-nora (skill_view); do not search "
+            "items yourself — hand the names to frappe_job_add_lines and, on `problems`, "
+            "ask the user one question."
+        )
+    return ancre + "]"
+# //// END Neoffice ////
+
+
 # Pole → user-facing label, PER LANGUAGE. NORA names the business "desk" to the user;
 # the internal key (compta/…) is never leaked. French is canonical (Swiss-FR audience)
 # and the default; the other languages mirror it for the multilingual chat path.
@@ -1509,21 +1553,7 @@ def route_chat_message(
                     _pc_src = "The request names the building job"
             # //// END Neoffice ////
             if _pc_project:
-                _pc_line = f"[{_pc_src} {_pc_project}"
-                if _pc_job.get("title"):
-                    _pc_line += f" « {str(_pc_job.get('title'))[:120]} »"
-                if _pc_job.get("customer"):
-                    _pc_line += f" (customer: {_pc_job.get('customer')})"
-                _pc_line += (
-                    ". « Ce chantier » / « ce projet » means THIS job: pass project=\""
-                    + str(_pc_project)
-                    + "\" to the job tools (frappe_job_status, frappe_job_add_lines, frappe_job_tasks, "
-                    "frappe_job_book_visit, frappe_job_quote, frappe_job_customer_said_yes, "
-                    "frappe_job_invoice). Never guess another job. FIRST read your skill "
-                    "chantier-gestes-nora (skill_view); do not search items yourself — hand the names "
-                    "to frappe_job_add_lines and, on `problems`, ask the user one question.]"
-                )
-                _body = _pc_line + "\n\n" + _body
+                _body = job_page_anchor(category, _pc_src, _pc_project, _pc_job) + "\n\n" + _body
             # //// END Neoffice ////
             # //// Neoffice — tell the specialist worker which language to answer in (the
             # user's). ALWAYS carry it, FRENCH INCLUDED: the worker SOUL only "leans" FR, and a
