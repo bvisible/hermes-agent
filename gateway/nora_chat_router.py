@@ -792,12 +792,28 @@ _SMALLTALK_RE = re.compile(
     r"au revoir|bonne (journée|soirée|nuit)|comment vas)\b",
     re.IGNORECASE,
 )
+# //// Neoffice — the job vocabulary added (20.09). This is the ANTI-gate: a message
+# //// that carries a greeting AND no business word takes the small-talk light path and
+# //// is answered with one warm sentence. The list was written before `projet` existed,
+# //// so it protected « Bonjour, ou en est ma facture ? » and not « Bonjour, on en est
+# //// ou sur le chantier ? ». Measured that day, five job sentences out of six carrying
+# //// a greeting passed straight through, while the same sentence about an invoice was
+# //// correctly held back. The keyword rules catch most of them BEFORE this point, but
+# //// this gate exists precisely for when they do not and the classifier falls back to
+# //// DIRECT — which is exactly what an outage does (14.09, a whole day of fallbacks).
+# //// Erring generous is right here: the failure is ASYMMETRIC. A false positive sends
+# //// a greeting to the normal agent and costs latency; a false negative answers a real
+# //// question with « Bonjour ! Comment puis-je vous aider ? ».
 _BUSINESS_RE = re.compile(
     r"\d|\b(factur\w*|devis|client\w*|rappel\w*|relanc\w*|e-?mail\w*|command\w*|"
     r"article\w*|abonnement\w*|paiement\w*|stock\w*|rapport\w*|dunn\w*|briefing\w*|"
-    r"fournisseur\w*|salaire\w*|employé\w*|ticket\w*|tâche\w*|tache\w*)\b",
+    r"fournisseur\w*|salaire\w*|employé\w*|ticket\w*|tâche\w*|tache\w*|"
+    r"chantier\w*|visites?|m[ée]tr[ée]\w*|m[²³]|intervention\w*|atelier\w*|"
+    r"entretien\w*|r[ée]paration\w*|planning\w*|tourn[ée]es?|heures?|mat[ée]riel\w*|"
+    r"projets?)\b",
     re.IGNORECASE,
 )
+# //// END Neoffice ////
 # //// Neoffice — answer "can you do X?" in one sentence, and say what you need to
 # actually do it. This replaces a full worker round-trip (measured 21s) whose entire
 # output was "give me the name, the e-mail and the address".
