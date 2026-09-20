@@ -410,11 +410,19 @@ _EVENT_FORMATTERS: dict[str, Callable[[Any, "_KanbanNotification"], tuple]] = {
 # //// it is customer-facing, and nothing fails when somebody adds a pole and
 # //// forgets this line. So the labels are DERIVED from the router's own table,
 # //// and the literal below is a complete fallback rather than the source.
+# //// Neoffice — this table must MATCH POLE_LABELS["fr"] in gateway/nora_chat_router.py,
+# //// which is the source of truth for what a customer is allowed to hear a pole called.
+# //// It is duplicated here on purpose: _neoffice_head() imports POLE_LABELS lazily and
+# //// best-effort, because a label is never worth failing a delivery for — so a literal
+# //// has to survive a failed import. A duplicate kept by hand drifts, and this one had:
+# //// `rh` read "RH" where the router says "Ressources Humaines" (found 20.09), so the
+# //// day the import failed a customer got a different word for the same desk. The
+# //// guard test asserts the two are equal; keep them in step or it goes red.
 _NEOFFICE_DOMAINS = {
     "ventes": "Ventes",
     "compta": "Comptabilité",
     "support": "Support",
-    "rh": "RH",
+    "rh": "Ressources Humaines",
     "analyse": "Analyse",
     "projet": "Projets",
 }
