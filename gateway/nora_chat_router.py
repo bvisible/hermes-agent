@@ -282,7 +282,13 @@ _CLASSIFIER_SYSTEM = (
     "incluses (« commander 15 unités », « passer commande au fournisseur »).\n"
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
-    "- rh : congés, paie, employés, contrats, absences.\n"
+    # //// Neoffice — the rh pole's real scope since 2026-09-23 (hr_* tools): what
+    # waits for someone's approval, expense claims, where the payroll stands.
+    "- rh : congés, notes de frais (déposer, lister, valider), ce qui attend une "
+    "validation (congés, notes de frais), paie (état du mois, charges sociales, "
+    "fiches de paie), certificats de salaire, fin d'année, employés, contrats, "
+    "absences, fins de période d'essai, permis de travail.\n"
+    # //// END Neoffice ////
     # //// Neoffice — Swiss HR/payroll doctrine questions need the rh worker's
     # curated wiki (RAG-rh-suisse, wired 2026-08-21): rates and obligations are
     # knowledge questions, not chit-chat, and must not fall to 'direct'.
@@ -617,7 +623,19 @@ _FAST_PATH_RULES = (
     ),
     # //// END Neoffice ////
     (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
-    (re.compile(r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des))", re.IGNORECASE), "rh"),
+    # //// Neoffice — expense claims, salary certificates and source tax go to rh
+    # (2026-09-23): the pole now holds the tools to file, list and decide an expense
+    # claim and the payroll recaps. « note de frais » used to fall to the classifier,
+    # which sent it to compta; compta keeps the same expense tools as a fallback.
+    (
+        re.compile(
+            r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des)"
+            r"|notes? de frais|certificats? de salaire|imp[ôo]ts? [àa] la source)",
+            re.IGNORECASE,
+        ),
+        "rh",
+    ),
+    # //// END Neoffice ////
 )
 # DIRECT only when the WHOLE message is a greeting/thanks/meta (so "Bonjour, quel est mon
 # CA ?" is NOT caught here — the domain rules above match "chiffre d'affaires" first).
