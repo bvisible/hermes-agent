@@ -82,6 +82,49 @@ def _record_kanban_budget_exhausted(
         )
 
 
+# //// Neoffice — a CHAT task out of budget answers with what it found instead of
+# //// retrying. Upstream records a `timed_out` failure and releases the claim: the
+# //// dispatcher runs the task again, and the summary the model has just written is
+# //// dropped. For a task somebody waits on in a chat (it carries a notify
+# //// subscription) that was silence: on osiris, 2026-09-24, a compta worker spent its
+# //// 25 iterations on a misspelled customer name, the retry started over, and the
+# //// person heard « je réessaie », then nothing for five minutes. Such a task is
+# //// completed with the summary: the notifier delivers it like any other answer, and
+# //// the person can correct the name. A task nobody subscribed to keeps the retry,
+# //// and so does a chat task whose summary call failed (upstream's English fallback
+# //// text is not an answer).
+_NEOFFICE_NO_SUMMARY = ("I reached the iteration limit", "I reached the maximum iterations")
+
+
+def _neoffice_answer_exhausted_chat_task(task_id: str, final_response, logger: logging.Logger) -> bool:
+    """Complete a subscribed task with its budget summary; True when done."""
+    text = final_response.strip() if isinstance(final_response, str) else ""
+    if not text or text.startswith(_NEOFFICE_NO_SUMMARY):
+        return False
+    try:
+        from hermes_cli import kanban_db as _kb
+        from hermes_cli import kanban_db_connect as _kbc
+        from hermes_cli import kanban_db_notify as _kbn
+        _conn = _kbc.connect()
+        try:
+            if not _kbn.list_notify_subs(_conn, task_id):
+                return False
+            done = _kb.complete_task(
+                _conn, task_id, result=text, summary=text,
+                metadata={"neoffice_budget_exhausted": True},
+            )
+        finally:
+            with suppress(Exception):
+                _conn.close()
+    except Exception:
+        logger.warning("Could not answer budget-exhausted chat task %s", task_id, exc_info=True)
+        return False
+    if done:
+        logger.info("Budget exhausted on chat task %s: answered with the summary, no retry", task_id)
+    return bool(done)
+# //// END Neoffice ////
+
+
 def _drop_verification_continuation_scaffolding(messages) -> None:
     """Remove verification-continuation nudges in place; only the synthetic nudges carry
     these flags, so the real attempted final answer persisted to state.db survives."""
@@ -176,7 +219,11 @@ def _resolve_budget_fallback(
     # terminal outcome so the task does not remain in an ambiguous lifecycle state. The worker's run is
     # closed via ``_record_task_failure`` (compare-and-swap receipt path) which is a no-op if another path
     # closed it — the CAS invariant in ``_end_run`` (``WHERE ended_at IS NULL``) guarantees idempotence.
-    if _kanban_task:
+    # //// Neoffice — a subscribed (chat) task answers with its summary instead of a retry.
+    _neoffice_answered = bool(_kanban_task) and _neoffice_answer_exhausted_chat_task(
+        _kanban_task, final_response, logger)
+    if _kanban_task and not _neoffice_answered:  # //// Neoffice — was `if _kanban_task:`
+        # //// END Neoffice ////
         _record_kanban_budget_exhausted(_kanban_task, api_call_count, agent.max_iterations, logger)
     return final_response, _turn_exit_reason, preserved_verification_fallback
 
