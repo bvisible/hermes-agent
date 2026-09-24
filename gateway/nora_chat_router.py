@@ -31,6 +31,8 @@ User-facing strings are French (Swiss business audience); code/comments are Engl
 from __future__ import annotations
 
 import logging
+
+from gateway.neoffice_scope import with_launch_profile_secrets  # //// Neoffice — see route_chat_message
 import re
 from typing import Any, Callable, Optional
 
@@ -1305,6 +1307,9 @@ def _page_project(page_context: Optional[dict]) -> Optional[str]:
 # //// END Neoffice ////
 
 
+# //// Neoffice — the classifier and the light-path completion are LLM calls made from the
+# //// webhook handler, outside any turn: they need the launch profile's secrets (v2026.9.24).
+@with_launch_profile_secrets
 def route_chat_message(
     *,
     message: str,

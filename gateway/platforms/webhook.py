@@ -40,6 +40,7 @@ from gateway.platforms.base import BasePlatformAdapter, SendResult
 from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.tcp_site import start_tcp_site
 from gateway.platforms.webhook_coalesce import WebhookCoalescer, validate_coalesce_config
+from gateway.neoffice_scope import with_launch_profile_secrets  # //// Neoffice — memory webhooks, outside any turn
 from gateway.platforms.webhook_filters import DEFAULT_SCRIPT_TIMEOUT_SECONDS, WebhookRouteProcessor
 from gateway.response_filters import is_autonomous_silence_response
 
@@ -584,6 +585,7 @@ class WebhookAdapter(BasePlatformAdapter):
                 {"status": "stored", "user": user, "stored": 0}, status=200
             )
 
+        @with_launch_profile_secrets  # //// Neoffice — see gateway/neoffice_scope.py
         def _store() -> int:
             from plugins.memory.mem0 import Mem0MemoryProvider
 
@@ -622,6 +624,7 @@ class WebhookAdapter(BasePlatformAdapter):
         page = max(1, int(payload.get("page") or 1))
         page_size = min(max(1, int(payload.get("page_size") or 100)), 200)
 
+        @with_launch_profile_secrets  # //// Neoffice — see gateway/neoffice_scope.py
         def _read() -> dict:
             from plugins.memory.mem0 import Mem0MemoryProvider
 
@@ -667,6 +670,7 @@ class WebhookAdapter(BasePlatformAdapter):
                 status=400,
             )
 
+        @with_launch_profile_secrets  # //// Neoffice — see gateway/neoffice_scope.py
         def _forget() -> dict:
             from plugins.memory.mem0 import Mem0MemoryProvider
 
