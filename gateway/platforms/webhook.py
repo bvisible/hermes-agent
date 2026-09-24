@@ -1068,6 +1068,10 @@ class WebhookAdapter(BasePlatformAdapter):
                         # caller answers the POST itself: the router has created the task,
                         # so there is no agent run to hand back.
                         return None
+                    # //// Neoffice — an instruction the router attaches for the agent
+                    # //// (a one-off reminder, nora_chat_router._ONE_OFF_REMINDER_HINT).
+                    if _decision.get("agent_hint"):
+                        prompt = _decision["agent_hint"] + "\n\n" + str(prompt or "")
             except Exception:
                 logger.exception(
                     "[webhook] nora-router errored; agent fallback route=%s", route_name

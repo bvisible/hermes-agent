@@ -41,3 +41,26 @@ def test_not_a_one_off_reminder(message):
 
 def test_a_short_go_ahead_after_a_compta_proposal_stays_compta():
     assert _fast_path("ok crée le rappel", prior={"pole": "compta"}) == "compta"
+
+
+def _route(message):
+    from gateway.nora_chat_router import route_chat_message
+
+    def no_llm(**_kw):
+        raise AssertionError("a one-off reminder is decided without the classifier")
+
+    return route_chat_message(
+        message=message, session_chat_id="webhook:nora_chat:test", conversation_id=None, thread_id=None,
+        user_id="u", notifier_profile="default", idempotency_key="k", call_llm_fn=no_llm, main_runtime=None)
+
+
+def test_the_orchestrator_is_told_to_set_the_reminder_itself():
+    decision = _route("Rappelle-moi demain à 10h d'appeler Dupont")
+    assert decision["routed"] is False and decision["category"] == "DIRECT"
+    hint = decision["agent_hint"]
+    assert "nora_reminder_create" in hint and "do NOT call kanban_create" in hint
+
+
+def test_no_instruction_rides_with_an_ordinary_direct_message():
+    decision = _route("Merci beaucoup !")
+    assert not decision.get("agent_hint")

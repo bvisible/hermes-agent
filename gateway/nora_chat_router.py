@@ -729,6 +729,29 @@ _REMINDER_MOMENT_RE = re.compile(
     re.IGNORECASE,
 )
 _PAYMENT_REMINDER_RE = re.compile(r"rappel[s]?\s+de\s+(?:paiement|facture)", re.IGNORECASE)
+
+
+def _is_one_off_reminder(msg: str) -> bool:
+    """A reminder verb AND a moment, not a payment reminder, not a repeated one."""
+    msg = msg or ""
+    return bool(
+        _ONE_OFF_REMINDER_RE.search(msg)
+        and _REMINDER_MOMENT_RE.search(msg)
+        and not _PAYMENT_REMINDER_RE.search(msg)
+        and not _RECUR_RE.search(msg)
+    )
+
+
+# Handed to the orchestrator with the message. Routing it to NORA was not enough: on the dev
+# instance NORA held the tool and still delegated the reminder to the support pole with
+# kanban_create, then answered « C'est noté » with nothing written (2026-09-24). The code
+# decided it is a reminder; the instruction says so at the decision point.
+_ONE_OFF_REMINDER_HINT = (
+    "[Route: a ONE-OFF reminder for the person asking. Call nora_reminder_create yourself, now "
+    "(when=\"YYYY-MM-DD HH:MM\" from the date and time given below, what=their words, user and "
+    "conversation_id as given); do NOT call kanban_create. Then say its at_spelled back. If the "
+    "call fails, say so: never answer that it is noted when nothing was written.]"
+)
 # //// END Neoffice ////
 
 
@@ -817,12 +840,7 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         return "DIRECT"
     # //// END Neoffice ////
     # //// Neoffice — a one-off reminder, see _ONE_OFF_REMINDER_RE above.
-    if (
-        _ONE_OFF_REMINDER_RE.search(msg)
-        and _REMINDER_MOMENT_RE.search(msg)
-        and not _PAYMENT_REMINDER_RE.search(msg)
-        and not _RECUR_RE.search(msg)
-    ):
+    if _is_one_off_reminder(msg):
         logger.info("nora_chat_router: one-off reminder → DIRECT (nora_reminder_create)")
         return "DIRECT"
     # //// END Neoffice ////
@@ -1523,7 +1541,9 @@ def route_chat_message(
             except Exception as _lp_exc:  # noqa: BLE001 — degrade to the agent path
                 logger.warning("nora_chat_router: smalltalk light path failed → agent: %s", _lp_exc)
         # //// END Neoffice ////
-        return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
+        # //// Neoffice — the orchestrator gets the reminder instruction, see _ONE_OFF_REMINDER_HINT.
+        return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
+                "agent_hint": _ONE_OFF_REMINDER_HINT if _is_one_off_reminder(message) else None}
 
     # RECURRENT — a recurring "do this every X" request. Not a one-shot pole task: create
     # a scheduled task in code (deterministic, user-scoped) via the nora task_router and
