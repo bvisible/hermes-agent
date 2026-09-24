@@ -1241,6 +1241,12 @@ def _route_recurrent(
     except Exception as exc:  # noqa: BLE001
         logger.warning("nora_chat_router: recurrent POST failed → agent fallback: %s", exc)
         return {"routed": False, "category": "recurrent", "ack": None, "task_id": None}
+    # //// Neoffice — a whitelisted Frappe method answers {"message": {...}}. This read "ok"
+    # //// on the envelope, so every recurring request was declined and fell to the agent
+    # //// (dev-instance gateway log: « recurrent declined (None) », never a task).
+    if isinstance(data, dict) and isinstance(data.get("message"), dict):
+        data = data["message"]
+    # //// END Neoffice ////
     if not isinstance(data, dict) or not data.get("ok"):
         logger.info(
             "nora_chat_router: recurrent declined (%s) → agent fallback", (data or {}).get("error")
@@ -1255,6 +1261,48 @@ def _route_recurrent(
         "routed": True, "category": "recurrent", "ack": ack,
         "task_id": data.get("task_id"), "ack_delivered": ack_delivered,
     }
+
+
+# //// Neoffice — a one-off reminder is SET IN CODE by nora (task_router.route_reminder),
+# //// over the same desk callback and token as _route_recurrent. Routing it to the agent
+# //// was not enough: the model delegated it, then repeated its own earlier « C'est noté »
+# //// found in memory, with no reminder written (dev instance, 2026-09-24). Declined or
+# //// failed → routed=False and the agent path keeps the instruction (zero regression).
+def _route_reminder(message: str, chat_user: Optional[str], deliver_extra: Optional[dict]) -> dict:
+    extra = deliver_extra or {}
+    cb = (extra.get("callback_url") or "").strip()
+    token = (extra.get("callback_token") or "").strip()
+    user = (chat_user or "").strip()
+    _DELIVER = "nora.api.v2.hermes_callback.deliver"
+    _ROUTE = "nora.api.v2.task_router.route_reminder"
+    declined = {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
+    if not (cb and token and user) or _DELIVER not in cb:
+        return declined
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(
+        cb.replace(_DELIVER, _ROUTE),
+        data=_json.dumps({"user": user, "message": message,
+                          "conversation_id": (extra.get("conversation_id") or "").strip()}).encode(),
+        method="POST", headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = _json.loads(resp.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("nora_chat_router: reminder POST failed → agent fallback: %s", exc)
+        return declined
+    if isinstance(data, dict) and isinstance(data.get("message"), dict):
+        data = data["message"]  # a whitelisted Frappe method answers {"message": {...}}
+    if not isinstance(data, dict) or not data.get("ok") or not data.get("ack"):
+        logger.info("nora_chat_router: reminder declined (%s) → agent fallback", (data or {}).get("error"))
+        return declined
+    delivered = _post_ack_to_callback(data["ack"], deliver_extra)
+    logger.info("nora_chat_router: one-off reminder %s set in code, ack_delivered=%s", data.get("reminder"), delivered)
+    return {"routed": True, "category": "DIRECT", "ack": data["ack"], "task_id": None,
+            "reminder": data.get("reminder"), "ack_delivered": delivered}
+# //// END Neoffice ////
 
 
 # //// Neoffice — DETERMINISTIC FAST-PATH engine call. Ask the nora fast_answer engine
@@ -1387,7 +1435,10 @@ def route_chat_message(
     # fast-answer pre-gate fails in ~0 ms without an LLM call, so the extra
     # thread costs nothing there.
     _fa_future = None
-    if _norm_lang(language) == "fr" and not _canned_text:
+    # //// Neoffice — a one-off reminder is an action nora sets in code (_route_reminder):
+    # //// the read-only fast-answer engine has nothing to answer, so it is not asked.
+    _one_off_reminder = _is_one_off_reminder(message)
+    if _norm_lang(language) == "fr" and not _canned_text and not _one_off_reminder:
         import concurrent.futures as _cf
 
         _fa_pool = _cf.ThreadPoolExecutor(max_workers=1)
@@ -1456,6 +1507,17 @@ def route_chat_message(
         del _conv_film[:-_CONV_HISTORY_TURNS]
         # //// END Neoffice ////
     if category == "DIRECT":
+        # //// Neoffice — a one-off reminder is set in code first, see _route_reminder.
+        # //// Declined or failed: straight to the orchestrator with the instruction,
+        # //// which can ask for the moment or call nora_reminder_create itself.
+        if _one_off_reminder:
+            _rem = _route_reminder(message, chat_user, deliver_extra)
+            if _rem.get("routed"):
+                note_nora_reply(conversation_id, _rem["ack"])
+                return _rem
+            return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
+                    "agent_hint": _ONE_OFF_REMINDER_HINT}
+        # //// END Neoffice ////
         # //// Neoffice — a deterministic fast hit beats the light path (05.09). A job
         # status question (« on en est où sur ce chantier ? ») classifies as DIRECT, and
         # the join that delivers fast hits sits AFTER this branch's returns: the hit was
@@ -1543,7 +1605,7 @@ def route_chat_message(
         # //// END Neoffice ////
         # //// Neoffice — the orchestrator gets the reminder instruction, see _ONE_OFF_REMINDER_HINT.
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
-                "agent_hint": _ONE_OFF_REMINDER_HINT if _is_one_off_reminder(message) else None}
+                "agent_hint": _ONE_OFF_REMINDER_HINT if _one_off_reminder else None}
 
     # RECURRENT — a recurring "do this every X" request. Not a one-shot pole task: create
     # a scheduled task in code (deterministic, user-scoped) via the nora task_router and
