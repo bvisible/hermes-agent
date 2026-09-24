@@ -876,6 +876,11 @@ class WebhookAdapter(BasePlatformAdapter):
         # Rate limiting (after auth)
         if not self._record_rate_limit_hit(  # //// Neoffice — the memory bucket has its own limit
                 _rate_bucket, time.time(), self._memory_rate_limit if _rate_bucket != route_name else None):
+            # //// Neoffice — a refusal is logged: the nightly 429s that refused people's chat
+            # //// messages (2026-09-24) left no line in the gateway log, only « service saturé ».
+            logger.warning("[webhook] rate limit: %s refused a request (limit %s/min)", _rate_bucket,
+                           self._memory_rate_limit if _rate_bucket != route_name else self._rate_limit)
+            # //// END Neoffice ////
             return _json_error("Rate limit exceeded", 429)
         if payload is _UNPARSEABLE:
             return _json_error("Cannot parse body", 400)

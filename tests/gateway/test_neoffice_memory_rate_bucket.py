@@ -37,7 +37,7 @@ def _signed(payload: dict, delivery: str, event: str = "") -> tuple[bytes, dict]
 
 
 @pytest.mark.asyncio
-async def test_a_memory_burst_does_not_refuse_a_chat_message():
+async def test_a_memory_burst_does_not_refuse_a_chat_message(caplog):
     adapter = _adapter()
     reads = []
 
@@ -58,8 +58,10 @@ async def test_a_memory_burst_does_not_refuse_a_chat_message():
             body, headers = _signed({"event_type": "memory_read", "user": "u@example.test"}, f"mem-{i}")
             assert (await cli.post(f"/webhooks/{ROUTE}", data=body, headers=headers)).status == 200
         body, headers = _signed({"event_type": "memory_read", "user": "u@example.test"}, "mem-over")
-        assert (await cli.post(f"/webhooks/{ROUTE}", data=body, headers=headers)).status == 429, (
-            "memory keeps its own pacing: the consolidation backs off on 429")
+        with caplog.at_level("WARNING"):
+            assert (await cli.post(f"/webhooks/{ROUTE}", data=body, headers=headers)).status == 429, (
+                "memory keeps its own pacing: the consolidation backs off on 429")
+        assert f"{ROUTE}::memory refused" in caplog.text, "a refusal leaves a line in the gateway log"
 
         body, headers = _signed({"event": "push", "data": "a person's message"}, "chat-1", event="push")
         resp = await cli.post(f"/webhooks/{ROUTE}", data=body, headers=headers)
