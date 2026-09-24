@@ -1202,6 +1202,23 @@ def classify(
             main_runtime=main_runtime,
         )
         raw = (resp.choices[0].message.content or "").strip().lower()
+        # //// Neoffice — an EMPTY verdict is a failure, not « direct »: asked once more,
+        # //// then the same fallback as an exception. On 24.09 at 21:17 raw='' sent a request
+        # //// made on a quotation page to the orchestrator, which ran its own card and
+        # //// answered « je n'ai pas réussi » after 76 s (capability bench, 1 in 35 calls).
+        if not raw:
+            resp = call_llm_fn(
+                task="nora_chat_routing",
+                messages=messages,
+                max_tokens=8,
+                temperature=0.0,
+                timeout=timeout,
+                main_runtime=main_runtime,
+            )
+            raw = (resp.choices[0].message.content or "").strip().lower()
+            if not raw:
+                raise RuntimeError("the classifier answered nothing, twice")
+        # //// END Neoffice ////
     except Exception as exc:  # noqa: BLE001 — any failure must degrade, never raise
         # //// Neoffice — degrade to the PRIOR pole, not to DIRECT (17.09). The classifier
         # //// gets eight seconds; when the model is busy it does not answer in time, and

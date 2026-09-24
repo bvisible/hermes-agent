@@ -78,3 +78,33 @@ def test_an_unknown_page_pole_is_ignored():
 
     assert classify("Et pour Martin ?", call_llm_fn=llm, main_runtime=None, hint="marketing") == "DIRECT"
     assert calls, "without a valid hint the classifier decides, as before"
+
+
+# //// Neoffice — an empty classifier verdict is a failure, not « direct » (24.09, 21:17).
+def _llm_answers(*contents):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def llm(**_kw):
+        calls.append(1)
+        text = contents[min(len(calls), len(contents)) - 1]
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
+
+    return llm, calls
+
+
+def test_an_empty_verdict_is_asked_once_more():
+    llm, calls = _llm_answers("", "ventes")
+    assert classify("Rajoute trois flexibles sanitaires", call_llm_fn=llm, main_runtime=None) == "ventes"
+    assert len(calls) == 2
+
+
+def test_two_empty_verdicts_keep_the_prior_pole():
+    llm, _calls = _llm_answers("", "")
+    assert classify("Et celui-là ?", call_llm_fn=llm, main_runtime=None, prior={"pole": "compta", "msg": "x"}) == "compta"
+
+
+def test_two_empty_verdicts_without_prior_go_direct():
+    llm, _calls = _llm_answers("", "")
+    assert classify("Et celui-là ?", call_llm_fn=llm, main_runtime=None) == "DIRECT"
