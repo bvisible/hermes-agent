@@ -1344,7 +1344,14 @@ def _resolve_notify_target() -> Optional[dict[str, Any]]:
         user_id=env("HERMES_SESSION_USER_ID", "") or None,
         user_id_alt=env("HERMES_SESSION_USER_ID_ALT", "") or None,
         notifier_profile=notifier_profile,
-        delivery_mode="notify+wake" if platform != "tui" else None,
+        # //// Neoffice — a desk or WhatsApp chat (platform webhook) is served notify-only, as the
+        # //// subscriptions our pre-router writes are: the worker's answer IS the reply. With wake,
+        # //// the notifier also woke the orchestrator in the person's session after delivering —
+        # //// a second message, a busy session, and the person's next message taken as a
+        # //// « correction » of that wake turn, each answer then arriving one request late (dev
+        # //// instance, 2026-09-24, capability bench). Other platforms keep upstream's wake.
+        delivery_mode=("notify" if platform == "webhook" else "notify+wake") if platform != "tui" else None,
+        # //// END Neoffice ////
         delivery_metadata=delivery_metadata or None)
 
 
