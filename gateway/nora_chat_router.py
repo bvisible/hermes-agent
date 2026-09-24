@@ -706,6 +706,30 @@ def _keyword_pole(msg: str) -> Optional[str]:
 # "tu sais gérer les devis ?" is the subject, not a task. Guards keep real work out:
 # a figure or an @ means data was supplied ("crée le client Jean, jean@x.ch"), and the
 # message must be a short question. grep "//// Neoffice".
+# //// Neoffice — a ONE-OFF reminder for the person asking goes to NORA herself (24.09).
+# //// « Rappelle-moi demain à 10 h d'appeler Dupont » had no tool and no route: the
+# //// classifier reads « rappel » as a payment reminder (compta), and the keyword rule
+# //// `relanc` sends « rappelle-moi lundi de relancer X » to the dunning pole. NORA now
+# //// holds nora_reminder_create (Frappe's own Reminder). Two conditions, both needed: a
+# //// reminder verb AND a moment (« demain », « à 10 h », « lundi », « dans 2 heures »…),
+# //// so « rappelle-moi combien on a facturé » (tell me again) is not taken for one; a
+# //// payment reminder keeps compta, and a repeated one stays with the classifier.
+_ONE_OFF_REMINDER_RE = re.compile(
+    r"\b(?:rappelle[rz]?[- ]moi|fais[- ]moi\s+penser|(?:mets|mettre|mettez|cr[ée]e[rz]?|programme[rz]?|"
+    r"ajoute[rz]?)[- ](?:moi\s+|nous\s+)?un\s+rappel|erinnere?\s+mich|ricordami|remind\s+me)\b",
+    re.IGNORECASE,
+)
+_REMINDER_MOMENT_RE = re.compile(
+    r"\b(?:demain|apr[èe]s-demain|ce\s+soir|cet\s+apr[èe]s-midi|ce\s+matin|tout\s+[àa]\s+l'heure|"
+    r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|la\s+semaine\s+prochaine|"
+    r"dans\s+\d+\s*(?:min|minutes?|h|heures?|jours?|semaines?)|[àa]\s+\d{1,2}\s*(?:h|:)|"
+    r"\d{1,2}\s*h\s*\d{0,2}\b|\d{1,2}:\d{2}|le\s+\d{1,2}(?:er)?[\s./]|morgen|domani|tomorrow|tonight)",
+    re.IGNORECASE,
+)
+_PAYMENT_REMINDER_RE = re.compile(r"rappel[s]?\s+de\s+(?:paiement|facture)", re.IGNORECASE)
+# //// END Neoffice ////
+
+
 _CAPABILITY_RE = re.compile(
     r"^\s*(?:est[-\s]ce\s+que\s+)?"
     r"(?:tu\s+(?:peux|sais|pourrais)|peux[-\s]tu|sais[-\s]tu|pourrais[-\s]tu|"
@@ -788,6 +812,16 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     # data request ("peux-tu me dire le montant…") is not a capability question either.
     if _CAPABILITY_RE.match(msg) and not _RECUR_RE.search(msg):
         logger.info("nora_chat_router: capability question → DIRECT (no pole, no worker)")
+        return "DIRECT"
+    # //// END Neoffice ////
+    # //// Neoffice — a one-off reminder, see _ONE_OFF_REMINDER_RE above.
+    if (
+        _ONE_OFF_REMINDER_RE.search(msg)
+        and _REMINDER_MOMENT_RE.search(msg)
+        and not _PAYMENT_REMINDER_RE.search(msg)
+        and not _RECUR_RE.search(msg)
+    ):
+        logger.info("nora_chat_router: one-off reminder → DIRECT (nora_reminder_create)")
         return "DIRECT"
     # //// END Neoffice ////
     # //// Neoffice — a follow-up still obeys an EXPLICIT rule. Until now ANY turn
