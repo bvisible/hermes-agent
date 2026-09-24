@@ -92,7 +92,8 @@ def neoffice_kanban_no_progress_breaker(
         status = None
         try:
             from hermes_cli import kanban_db as _kb
-            conn = _kb.connect()
+            from hermes_cli import kanban_db_connect as _kbc  # kanban_db.connect: compat pointer only
+            conn = _kbc.connect()
             try:
                 status = getattr(_kb.get_task(conn, kanban_task), "status", None)
             finally:

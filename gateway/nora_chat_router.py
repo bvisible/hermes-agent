@@ -1106,7 +1106,7 @@ def build_ack(pole: str, language: Optional[str] = None) -> str:
     # //// END Neoffice ////
 
 
-def _add_notify_sub(kanban_db, conn, *, conversation_id: Optional[str] = None, **kw) -> None:
+def _add_notify_sub(notify_db, conn, *, conversation_id: Optional[str] = None, **kw) -> None:
     """Subscribe the notifier so the worker's terminal result comes back to THIS chat.
 
     The desk conversation id rides in upstream's ``delivery_metadata`` (a JSON blob the
@@ -1118,7 +1118,7 @@ def _add_notify_sub(kanban_db, conn, *, conversation_id: Optional[str] = None, *
         metadata = dict(kw.pop("delivery_metadata", None) or {})
         metadata.setdefault("conversation_id", conversation_id)
         kw["delivery_metadata"] = metadata
-    kanban_db.add_notify_sub(conn, **kw)
+    notify_db.add_notify_sub(conn, **kw)
 
 
 def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
@@ -1579,9 +1579,11 @@ def route_chat_message(
     # the dispatcher spawns the specialist worker). idempotency_key (the webhook
     # delivery id) makes a retried POST reuse the same task instead of double-routing.
     try:
-        from hermes_cli import kanban_db
+        from hermes_cli import kanban_db, kanban_db_connect, kanban_db_notify
 
-        conn = kanban_db.connect(board=board)
+        # kanban_db.connect / add_notify_sub are compat pointers upstream schedules for
+        # removal: reach the modules that own them.
+        conn = kanban_db_connect.connect(board=board)
         try:
             # Give the WORKER the conversation context too, so a follow-up is executed
             # as a refinement of the prior turn — "Ceux de ce client" after "Combien de
@@ -1719,7 +1721,7 @@ def route_chat_message(
                 **_ws_kwargs,  # //// Neoffice — stable worker cwd ////
             )
             _add_notify_sub(
-                kanban_db,
+                kanban_db_notify,
                 conn,
                 task_id=task_id,
                 platform="webhook",
