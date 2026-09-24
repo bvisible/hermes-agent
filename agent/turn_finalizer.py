@@ -790,7 +790,8 @@ def finalize_turn(
     _kb_answer = final_response.strip() if isinstance(final_response, str) else ""
     if _kb_task_id and _kb_answer and _kb_answer != "(empty)":
         try:
-            from hermes_cli import kanban_db as _kb_net
+            # //// Neoffice — kanban_db.connect is a compat pointer upstream schedules for removal.
+            from hermes_cli import kanban_db_connect as _kb_net
             _kb_conn = _kb_net.connect(board=os.environ.get("HERMES_KANBAN_BOARD") or None)
             try:
                 _kb_row = _kb_conn.execute(

@@ -828,7 +828,9 @@ class AIAgent(
         )
         try:
             from hermes_cli import kanban_db as _kb
-            conn = _kb.connect()
+            # //// Neoffice — kanban_db.connect is a compat pointer upstream schedules for removal.
+            from hermes_cli import kanban_db_connect as _kbc
+            conn = _kbc.connect()
             try:
                 _kb.block_task(
                     conn, task_id,

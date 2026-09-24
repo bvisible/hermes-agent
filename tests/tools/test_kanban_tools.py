@@ -136,7 +136,8 @@ def test_show_defaults_to_env_task_id(worker_env):
 def test_show_explicit_task_id(worker_env):
     """Peek at a different task than the one in env."""
     from hermes_cli import kanban_db as kb
-    conn = kb.connect()
+    from hermes_cli import kanban_db_connect as kbc
+    conn = kbc.connect()
     try:
         other = kb.create_task(conn, title="other task", assignee="peer")
     finally:
@@ -160,7 +161,8 @@ def test_compta_allocation_completion_requires_live_chart(monkeypatch, tmp_path)
     from hermes_cli import kanban_db as kb
     kb._INITIALIZED_PATHS.clear()
     kb.init_db()
-    conn = kb.connect()
+    from hermes_cli import kanban_db_connect as kbc
+    conn = kbc.connect()
     try:
         tid = kb.create_task(
             conn,
@@ -212,7 +214,8 @@ def test_compta_guard_accepts_a_chart_read_through_tool_call(monkeypatch, tmp_pa
     from hermes_cli import kanban_db as kb
     kb._INITIALIZED_PATHS.clear()
     kb.init_db()
-    conn = kb.connect()
+    from hermes_cli import kanban_db_connect as kbc
+    conn = kbc.connect()
     try:
         tid = kb.create_task(
             conn,
@@ -258,7 +261,8 @@ def test_compta_guard_accepts_a_chart_read_through_tool_call(monkeypatch, tmp_pa
 def test_account_lookup_gate_is_scoped_to_compta_profile(monkeypatch, worker_env):
     monkeypatch.setenv("HERMES_PROFILE", "support")
     from hermes_cli import kanban_db as kb
-    conn = kb.connect()
+    from hermes_cli import kanban_db_connect as kbc
+    conn = kbc.connect()
     try:
         conn.execute(
             "UPDATE tasks SET title = ?, body = ? WHERE id = ?",
