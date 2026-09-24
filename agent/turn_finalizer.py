@@ -129,6 +129,31 @@ def _neoffice_answer_exhausted_chat_task(task_id: str, final_response, logger: l
 # //// The thread name is the one run_agent._spawn_background_review_now gives the review.
 _NEOFFICE_REVIEW_THREAD_NAME = "bg-review"
 _NEOFFICE_WORKER_REVIEW_WAIT_S = 120.0
+# One lingering reviewer per machine and user: each keeps its worker's 200-280 MB alive for
+# up to the wait budget, on instances of 4 GB, and each review is one more long prompt for
+# the shared inference engine. The lock is held until the process exits.
+_NEOFFICE_REVIEW_SLOT = None
+
+
+def _neoffice_claim_review_slot() -> bool:
+    """True when no other worker of this machine is reviewing; the slot is this process's until it exits."""
+    global _NEOFFICE_REVIEW_SLOT
+    if _NEOFFICE_REVIEW_SLOT is not None:
+        return True
+    import fcntl
+    import tempfile
+
+    path = os.path.join(tempfile.gettempdir(), f"hermes-neoffice-skill-review-{os.getuid()}.lock")
+    slot = None
+    try:
+        slot = open(path, "a")
+        fcntl.flock(slot, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        if slot is not None:
+            slot.close()
+        return False
+    _NEOFFICE_REVIEW_SLOT = slot
+    return True
 
 
 def _neoffice_worker_task_done(task_id: str, turn_exit_reason, agent) -> bool:
@@ -839,6 +864,9 @@ def finalize_turn(
     _neoffice_worker_task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
     if _neoffice_worker_task and (_should_review_memory or _should_review_skills):
         if not _neoffice_worker_task_done(_neoffice_worker_task, _turn_exit_reason, agent):
+            _should_review_memory = _should_review_skills = False
+        elif not _neoffice_claim_review_slot():
+            logger.info("kanban worker %s: skill review skipped, another worker is reviewing", _neoffice_worker_task)
             _should_review_memory = _should_review_skills = False
     # //// END Neoffice ////
 

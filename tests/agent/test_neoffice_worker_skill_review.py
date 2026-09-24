@@ -22,6 +22,21 @@ from agent.turn_finalizer import finalize_turn
 from run_agent import AIAgent
 
 
+@pytest.fixture(autouse=True)
+def review_slot(monkeypatch, tmp_path):
+    """Each test starts without the machine-wide review slot, its lock file in the test's own dir."""
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    held = turn_finalizer._NEOFFICE_REVIEW_SLOT
+    if held is not None:
+        held.close()
+    monkeypatch.setattr(turn_finalizer, "_NEOFFICE_REVIEW_SLOT", None)
+    yield tmp_path
+    if turn_finalizer._NEOFFICE_REVIEW_SLOT is not None:
+        turn_finalizer._NEOFFICE_REVIEW_SLOT.close()
+
+
 @pytest.fixture
 def worker_card(monkeypatch, tmp_path):
     """An isolated board holding one claimed card; the process is that card's worker."""
@@ -165,6 +180,27 @@ def test_outside_a_worker_the_review_stays_in_the_background(worker_card, monkey
         assert took < 5 and not finished.is_set(), "an interactive turn must not wait for its review"
     finally:
         stop.set()
+
+
+def test_one_worker_reviews_at_a_time_on_a_machine(worker_card, review_slot):
+    import fcntl
+    import os
+
+    _finish_card(worker_card, "done")
+    # Another worker of this machine is reviewing: it holds the slot.
+    other = open(os.path.join(str(review_slot), f"hermes-neoffice-skill-review-{os.getuid()}.lock"), "a")
+    fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        agent = _agent_with_review(0.1, threading.Event())
+        _finalize(agent, "kanban_terminal_tool(status=done)")
+        agent._spawn_background_review.assert_not_called()
+    finally:
+        other.close()
+
+    # Its review over, the next worker gets the slot.
+    agent = _agent_with_review(0.1, threading.Event())
+    _finalize(agent, "kanban_terminal_tool(status=done)")
+    agent._spawn_background_review.assert_called_once()
 
 
 def test_the_thread_name_is_the_one_run_agent_gives_the_review():
