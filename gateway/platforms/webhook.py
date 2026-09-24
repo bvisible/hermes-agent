@@ -1060,16 +1060,10 @@ class WebhookAdapter(BasePlatformAdapter):
                             route_name, _decision.get("category"),
                             _decision.get("task_id"),
                         )
-                        return web.json_response(
-                            {
-                                "status": "routed",
-                                "route": route_name,
-                                "category": _decision.get("category"),
-                                "task_id": _decision.get("task_id"),
-                                "delivery_id": delivery_id,
-                            },
-                            status=202,
-                        )
+                        # Since v2026.9.24 this block runs inside _spawn_agent_run, whose
+                        # caller answers the POST itself: the router has created the task,
+                        # so there is no agent run to hand back.
+                        return None
             except Exception:
                 logger.exception(
                     "[webhook] nora-router errored; agent fallback route=%s", route_name
