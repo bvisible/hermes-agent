@@ -622,6 +622,27 @@ _FAST_PATH_RULES = (
         "projet",
     ),
     # //// END Neoffice ////
+    # //// Neoffice — a line ADDED, CHANGED or REMOVED on an invoice, a quotation or an
+    # //// order is ventes' (#681, 2026-09-24). « Ok, est-ce que tu peux rajouter un EAP
+    # //// huit cent trente à cette facture ? » matched no rule, so the GO-AHEAD guard read
+    # //// its « Ok » as a confirmation and kept it on the previous pole, compta, whose
+    # //// worker swapped the article. Jérémy's call: editing a sales document's lines is
+    # //// a sales gesture. A rule here also releases that guard, which yields to any
+    # //// other pole's rule. Needs the verb AND a preposition before the document, so
+    # //// « mets la facture en brouillon » stays with the classifier; a payment on an
+    # //// invoice (compta) and a job's quotation (projet) are matched above, first.
+    (
+        re.compile(
+            r"\b(?:r?ajout\w*|mets|mettez|mettre|enl[èe]v\w*|retir\w*|supprim\w*|modifi\w*|"
+            r"chang\w*|remplac\w*|corrig\w*)\b"
+            r"[^.!?]{0,80}?\b(?:[àa]|au|aux|sur|dans|de|du|des)\s+"
+            r"(?:la\s+|le\s+|les\s+|cette\s+|ce\s+|cet\s+|l['’]\s*|ma\s+|mon\s+|notre\s+)?"
+            r"(?:factur\w*|devis|commandes?|offres?)\b",
+            re.IGNORECASE,
+        ),
+        "ventes",
+    ),
+    # //// END Neoffice ////
     (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
     # //// Neoffice — expense claims, salary certificates and source tax go to rh
     # (2026-09-23): the pole now holds the tools to file, list and decide an expense
@@ -982,6 +1003,7 @@ def classify(
     main_runtime: Optional[dict],
     prior: Optional[dict] = None,
     timeout: float = 8.0,
+    hint: Optional[str] = None,
 ) -> str:
     """Return a pole in :data:`POLES`, or ``"DIRECT"``.
 
@@ -1002,6 +1024,15 @@ def classify(
     if fast:
         logger.info("nora_chat_router: keyword fast-path → %s (no LLM call)", fast)
         return fast
+    # //// Neoffice — the pole the calling page already chose (#681, 2026-09-24). The NORA
+    # //// Live page escalates with the pole its voice server named, and that server has
+    # //// ALREADY said it aloud (« je transmets aux ventes… »). Without the hint the
+    # //// classifier decided again, and the ack could name one pole while another worked.
+    # //// After the deterministic rules, which stay the only thing above the page's word.
+    if hint in POLES:
+        logger.info("nora_chat_router: page pole hint → %s (no LLM call)", hint)
+        return hint
+    # //// END Neoffice ////
     user_content = msg[:2000]
     if prior and prior.get("pole"):
         user_content = (
@@ -1313,6 +1344,7 @@ def route_chat_message(
             main_runtime=main_runtime,
             prior=prior,
             timeout=classify_timeout,
+            hint=(page_context or {}).get("pole_hint") if isinstance(page_context, dict) else None,  # //// Neoffice — see classify ////
         )
     # //// Neoffice — on a job page, a business request is the job's (05.09). « Ajoute 2
     # heures de pose sur ce chantier » classified as RH (« heures ») and the RH worker,
