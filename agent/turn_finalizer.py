@@ -122,6 +122,58 @@ def _neoffice_answer_exhausted_chat_task(task_id: str, final_response, logger: l
 # //// END Neoffice ////
 
 
+# //// Neoffice — a pole worker's skill review has to outlive its turn (see finalize_turn).
+# //// The thread name is the one run_agent._spawn_background_review_now gives the review.
+_NEOFFICE_REVIEW_THREAD_NAME = "bg-review"
+_NEOFFICE_WORKER_REVIEW_WAIT_S = 120.0
+
+
+def _neoffice_worker_task_done(task_id: str, turn_exit_reason, agent) -> bool:
+    """True when this worker's run ended well: no guardrail halted it, the turn stopped on its
+    own (kanban_complete, or a plain answer the auto-complete net turned into one) and the
+    card reads 'done' on the board."""
+    if getattr(agent, "_tool_guardrail_halt_decision", None) is not None:
+        return False
+    reason = str(turn_exit_reason or "")
+    if reason != "kanban_terminal_tool(status=done)" and not reason.startswith("text_response("):
+        return False
+    try:
+        from hermes_cli import kanban_db_connect as _kbc
+        _conn = _kbc.connect(board=os.environ.get("HERMES_KANBAN_BOARD") or None)
+        try:
+            row = _conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        finally:
+            with suppress(Exception):
+                _conn.close()
+    except Exception:
+        return False
+    return bool(row) and row[0] == "done"
+
+
+def _neoffice_wait_for_worker_review(task_id: str, logger: logging.Logger) -> None:
+    """Hold the one-shot worker until its review threads end, never past the wait budget
+    (``HERMES_NEOFFICE_REVIEW_WAIT_SECONDS`` overrides it)."""
+    import threading
+    import time
+
+    try:
+        budget = float(os.environ.get("HERMES_NEOFFICE_REVIEW_WAIT_SECONDS") or _NEOFFICE_WORKER_REVIEW_WAIT_S)
+    except ValueError:
+        budget = _NEOFFICE_WORKER_REVIEW_WAIT_S
+    reviews = [t for t in threading.enumerate() if t.name == _NEOFFICE_REVIEW_THREAD_NAME and t.is_alive()]
+    if not reviews:
+        return
+    started = time.monotonic()
+    for thread in reviews:
+        thread.join(max(0.0, started + budget - time.monotonic()))
+    unfinished = sum(thread.is_alive() for thread in reviews)
+    logger.info(
+        "kanban worker %s: skill review %s after %.1fs", task_id,
+        "cut at the wait budget" if unfinished else "finished", time.monotonic() - started,
+    )
+# //// END Neoffice ////
+
+
 def _drop_verification_continuation_scaffolding(messages) -> None:
     """Remove verification-continuation nudges in place; only the synthetic nudges carry
     these flags, so the real attempted final answer persisted to state.db survives."""
@@ -688,6 +740,20 @@ def finalize_turn(
         interrupted=interrupted, messages=messages,
     )
 
+    # //// Neoffice — a kanban worker is a one-shot process that exits right after its turn,
+    # //// and the review below runs on a daemon thread, so upstream's skill review died with
+    # //// the worker. Measured on the dev instance (2026-09-24): 251 reviews started by pole
+    # //// workers since May, not one reached skill_manage; the process closed about 3 s after
+    # //// the review's first model call. A worker whose card ended well now waits for its
+    # //// review, bounded; a halted, blocked or failed run is not reviewed at all (a procedure
+    # //// that did not work is not one to keep). The skill lands in the pole's own profile, and
+    # //// the hub shares it only once a person has validated it (neoffice_devops shared_skills).
+    _neoffice_worker_task = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    if _neoffice_worker_task and (_should_review_memory or _should_review_skills):
+        if not _neoffice_worker_task_done(_neoffice_worker_task, _turn_exit_reason, agent):
+            _should_review_memory = _should_review_skills = False
+    # //// END Neoffice ////
+
     # Background memory/skill review runs AFTER delivery so it never competes with the
     # user's task. Suppressed by skip_background_review (e.g. cron): the fork costs
     # ~30K tokens / event with no human-in-the-loop benefit. Best-effort; the review
@@ -703,6 +769,11 @@ def finalize_turn(
                 messages_snapshot=list(messages), review_memory=_should_review_memory,
                 review_skills=_should_review_skills,
             )
+        # //// Neoffice — the worker holds its exit for the review it just started (above).
+        if _neoffice_worker_task:
+            with suppress(Exception):
+                _neoffice_wait_for_worker_review(_neoffice_worker_task, logger)
+        # //// END Neoffice ////
 
     # Memory provider on_session_end()/shutdown_all() are NOT called here:
     # run_conversation() runs once per message; CLI/gateway own session-end cleanup.
