@@ -622,12 +622,50 @@ def _neoffice_session_ran_tool(session_id: Optional[str], tool: str) -> bool:
         if row.get("role") != "tool":
             continue
         name = str(row.get("tool_name") or row.get("name") or "")
+        # //// Neoffice — a batch of MCP tools (#710) is recorded as ONE row under the
+        # //// tool_call wrapper; its results name each tool that ran. Without reading
+        # //// them, a chart read inside a batch would not count and the guard below would
+        # //// refuse kanban_complete again, the #422 loop.
+        if name == "tool_call":
+            if _neoffice_batch_ran_tool(row.get("content"), tool):
+                return True
+            continue
+        # //// END Neoffice ////
         if name != tool and not name.endswith(f"__{tool}"):
             continue
         if '"error"' in str(row.get("content") or "")[:400]:
             continue  # the call ran but returned an error, not the data
         return True
     return False
+
+
+# //// Neoffice — #710: the evidence a tool_call batch leaves in the session store.
+def _neoffice_batch_ran_tool(content: Any, tool: str) -> bool:
+    """True if a batch result holds a successful entry for ``tool`` (MCP-prefixed or not).
+
+    The row's content is the batch's {"results": [{"index", "name", "response"|"error"}]},
+    possibly inside the untrusted-result envelope: the JSON object is read from its first
+    "{" to its last "}". An entry with an error is an attempt, not a read.
+    """
+    import json as _json
+
+    text = str(content or "")
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return False
+    try:
+        payload = _json.loads(text[start:end + 1])
+    except ValueError:
+        return False
+    results = payload.get("results") if isinstance(payload, dict) else None
+    for entry in results if isinstance(results, list) else []:
+        if not isinstance(entry, dict) or "error" in entry or "response" not in entry:
+            continue
+        name = str(entry.get("name") or "")
+        if name == tool or name.endswith(f"__{tool}"):
+            return True
+    return False
+# //// END Neoffice ////
 
 
 def _neoffice_has_tenant_account_lookup(
