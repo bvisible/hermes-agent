@@ -96,6 +96,20 @@ _NORA_ROUTE_PROMPT_RE = re.compile(
     r"(?:\n{2,}|Tu\s+es\s+Nora|R[eé]ponds)",       # orchestrator postamble boundary
     re.DOTALL,
 )
+# //// Neoffice — the route prompts were rewritten in English on 2026-09-20 (neoffice-devops
+# //// scripts/hermes-poc/configs/route_prompts.py): « Chat message from <user> (…),
+# //// conversation_id <cid>:\n"<message>"\n\nApply the rules … » and « Incoming WhatsApp
+# //// message from <phone>:\n"<message>" ». The French pattern above no longer matched,
+# //// so the whole envelope reached mem0 for four days: 372 of Administrator's lines on
+# //// osiris on 24.09. Both shapes are recognised; det/51 renders route_prompts.py and
+# //// fails the day they drift apart again.
+_NORA_ROUTE_PROMPT_EN_RE = re.compile(
+    r"(?:Chat message from|Incoming WhatsApp message from)\b[^\n]*:[ \t]*\n"
+    r"[\"“«](?P<msg>.*?)[\"”»][ \t]*"
+    r"(?:\n{2,}|\n?Apply the rules|\Z)",
+    re.DOTALL,
+)
+# //// END Neoffice ////
 
 
 def _unwrap_nora_route_prompt(text: Optional[str]) -> Optional[str]:
@@ -112,7 +126,7 @@ def _unwrap_nora_route_prompt(text: Optional[str]) -> Optional[str]:
     """
     if not text:
         return text
-    match = _NORA_ROUTE_PROMPT_RE.search(text)
+    match = _NORA_ROUTE_PROMPT_RE.search(text) or _NORA_ROUTE_PROMPT_EN_RE.search(text)  # //// Neoffice — see above ////
     if not match:
         return text
     message = match.group("msg").strip()

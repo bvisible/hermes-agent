@@ -202,6 +202,36 @@ class TestUnwrapNoraRoutePrompt:
             == 'Mets le titre "Rapport Q3" sur la facture'
         )
 
+    # //// Neoffice — the English route prompts since 2026-09-20 (configs/route_prompts.py).
+    def test_english_desk_wrapper_extracts_clean_message(self):
+        wrapped = (
+            "(System: reply to the user in French. Do not reply in any other language.)\n\n"
+            "Today is Tuesday 2026-09-22, 11:56 (the company's local time).\n\n"
+            "Chat message from Administrator (desk / mobile / team chat), conversation_id nora-b2d92264a1374301:\n"
+            '"Retiens bien ceci pour moi : le code de mon projet Genève est ZK708722."\n\n'
+            "Apply the rules of your system prompt to this message. When a tool asks who the request "
+            'is for, pass user="Administrator" and conversation_id="nora-b2d92264a1374301" exactly as written here.\n'
+            "Reply in plain text: no Markdown, no HTML."
+        )
+        assert _unwrap_nora_route_prompt(wrapped) == "Retiens bien ceci pour moi : le code de mon projet Genève est ZK708722."
+
+    def test_english_whatsapp_wrapper_extracts_clean_message(self):
+        wrapped = (
+            "Incoming WhatsApp message from +41791234567:\n"
+            '"Quel est le chiffre d\'affaires du mois ?"\n\n'
+            "Apply the rules of your system prompt to this message.\n"
+            "Reply in plain text, short enough for a phone screen: no Markdown, no HTML."
+        )
+        assert _unwrap_nora_route_prompt(wrapped) == "Quel est le chiffre d'affaires du mois ?"
+
+    def test_english_wrapper_keeps_embedded_quotes(self):
+        wrapped = (
+            "Chat message from Administrator (desk / mobile / team chat), conversation_id nora-1:\n"
+            '"Mets le titre "Rapport Q3" sur la facture"\n\nApply the rules of your system prompt to this message.'
+        )
+        assert _unwrap_nora_route_prompt(wrapped) == 'Mets le titre "Rapport Q3" sur la facture'
+    # //// END Neoffice ////
+
     def test_plain_message_unchanged(self):
         assert _unwrap_nora_route_prompt("quel est le solde du compte ?") == "quel est le solde du compte ?"
 
