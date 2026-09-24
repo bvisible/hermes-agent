@@ -739,7 +739,7 @@ def _prepare_gateway_status_message(platform: Any, event_type: str, message: str
     #//// compression chatter) were delivered to the desk as if they were NORA's
     #//// reply — and the Quick Chat, taking that bubble for the final answer,
     #//// stopped polling: the worker's real answer arrived 70 s later and was never
-    #//// shown (dmis, 2026-09-01, Olares 503). The desk has its own "thinking"
+    #//// shown (a client instance, 2026-09-01, inference engine 503). The desk has its own "thinking"
     #//// indicator; the final reply or the failure notice is all it must receive.
     if _gateway_platform_value(platform) == "webhook":
         return None

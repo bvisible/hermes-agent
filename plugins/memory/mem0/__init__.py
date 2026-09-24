@@ -655,7 +655,7 @@ class Mem0MemoryProvider(MemoryProvider):
         # //// Neoffice — a turn with no real owner is not a memory. self._user_id
         # falls back to _DEFAULT_USER_ID for ownerless runs: the 8-minute
         # chat-warmup ping and every kanban worker turn landed there — 4 325 of
-        # dmis's 4 361 stored "memories" were literally « Reponds uniquement: ok »
+        # a client instance's 4 361 stored "memories" were literally « Reponds uniquement: ok »
         # and srv02 (a template with zero users) held 11 236 of them (measured
         # 2026-09-01). Nobody recalls that bucket on purpose (user recall scopes
         # the canonical id + company), and the warmup's own recall block changed
