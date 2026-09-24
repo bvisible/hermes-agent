@@ -540,6 +540,13 @@ def scoped_deferrable_names(tool_defs: List[Dict[str, Any]]) -> frozenset[str]:
                      if n and is_deferrable_tool_name(n, defer_tools))
 
 
+# //// Neoffice — MCP tool names, the one kind of local tool a batch may hold (#710).
+def is_mcp_tool_name(name: Any) -> bool:
+    """True for a tool served by an MCP server (``mcp__<server>__<tool>``)."""
+    return isinstance(name, str) and name.startswith("mcp__") and name.count("__") >= 2
+# //// END Neoffice ////
+
+
 def resolve_underlying_call(args: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any], Optional[str]]:
     """Parse a ``tool_call`` invocation into (underlying_name, args, error_msg).
 
@@ -561,6 +568,17 @@ def resolve_underlying_call(args: Dict[str, Any]) -> Tuple[Optional[str], Dict[s
         return None, {}, err
 
     if len(entries) > 1 and any(not is_connector_name(e["name"]) for e in entries):
+        # //// Neoffice — a batch of MCP tools is a dispatch unit too (#710). The model
+        # //// asked for two pole tools at once in 56 % of our compta sessions (the chart
+        # //// and the doctrine), was refused, and lost a whole turn repeating them one by
+        # //// one. MCP tools hold no agent-bound state (no todo store, no session DB, no
+        # //// setup callback), the reason upstream keeps local tools on the live agent
+        # //// path; each entry still runs through the single-call path (session scope,
+        # //// schema probe, hooks) in tools.connectors.dispatch.dispatch_connector_batch.
+        # //// Any other local tool in the batch keeps upstream's refusal.
+        if all(is_connector_name(e["name"]) or is_mcp_tool_name(e["name"]) for e in entries):
+            return CONNECTOR_BATCH_SENTINEL, {"calls": entries}, None
+        # //// END Neoffice ////
         return None, {}, local_batch_error(entries)
     if is_connector_name(entries[0]["name"]):
         return CONNECTOR_BATCH_SENTINEL, {"calls": entries}, None
@@ -580,7 +598,8 @@ __all__ = [
     "bridge_tool_schemas", "assemble_tool_defs", "is_bridge_tool", "dispatch_tool_search",
     "dispatch_tool_describe", "resolve_underlying_call", "scoped_deferrable_names",
     "validate_deferred_call_args", "normalize_tool_call_entries",
-    "CONNECTOR_BATCH_SENTINEL", "is_connector_name"]
+    "CONNECTOR_BATCH_SENTINEL", "is_connector_name",
+    "is_mcp_tool_name"]  # //// Neoffice — #710
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----

@@ -733,8 +733,13 @@ def _dispatch_bridge_tool(function_name: str, function_args: Dict[str, Any],
     if err or not underlying_name:
         return tool_error(err or "tool_call could not be resolved"), None
     if underlying_name == ts.CONNECTOR_BATCH_SENTINEL:
-        if not ts.connections_in_scope(current_defs):
+        # //// Neoffice — a batch may hold MCP tools only (#710): the connectors toolset is
+        # //// required by its connector entries, not by the batch itself.
+        _has_connector = any(ts.is_connector_name((c or {}).get("name"))
+                             for c in underlying_args.get("calls") or [])
+        if _has_connector and not ts.connections_in_scope(current_defs):
             return tool_error("Connectors are not available in this session."), None
+        # //// END Neoffice ////
         return None, (underlying_name, underlying_args)
     # Defense in depth: resolve_underlying_call only checks the global
     # registry; also require membership in the session-scoped catalog.
