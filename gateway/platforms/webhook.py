@@ -433,6 +433,8 @@ class WebhookAdapter(BasePlatformAdapter):
             self._seen_deliveries.pop(k, None)
         self._seen_deliveries_next_prune_at = now + min(60.0, max(1.0, self._idempotency_ttl / 10))
 
+    # //// Neoffice — `limit` added: NORA's memory events count in a bucket with its own limit
+    # //// (see _handle_webhook, memory_rate_limit). Without it, upstream's per-route limit applies.
     def _record_rate_limit_hit(self, route_name: str, now: float, limit: Optional[int] = None) -> bool:
         """Return True if route is still within limit after recording this hit."""
         if not isinstance(window := self._rate_counts.get(route_name), deque):
