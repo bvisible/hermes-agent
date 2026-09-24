@@ -132,3 +132,34 @@ def test_a_reply_delivered_to_the_desk_enters_the_film(monkeypatch):
     result = asyncio.run(adapter._deliver_nora(question, "webhook:nora_chat:conv-desk:1", delivery))
     assert result.success
     assert router._CONV_HISTORY["conv-desk"][-1] == "NORA: " + question
+
+
+# ── « ce produit » that nothing names ────────────────────────────────────────────────
+# A ventes worker tried invented numbers (FA-2026-01062, CMD-0031, DEV-0042) five times
+# each until the loop guard instead of asking which one (dev instance, 2026-09-24 22:32).
+
+@pytest.mark.parametrize("message", (
+    "Mets du 10 % sur ce produit",
+    "Envoie cette facture au client",
+    "Add this item to the quote",
+    "Storniere diese Rechnung",
+))
+def test_an_unnamed_this_asks_which_one(message):
+    assert router.unnamed_document_hint(message, None, []) == router.UNNAMED_DOCUMENT_HINT
+
+
+@pytest.mark.parametrize("message, page, film", (
+    ("Mets du 10 % sur ce produit", {"doctype": "Quotation", "name": "DEVIS-2026-01187"}, []),  # the page names it
+    ("Mets du 10 % sur ce produit", None, ["User: le devis DEVIS-2026-01187", "NORA: voici le devis"]),
+    ("Mets du 10 % sur ce devis DEVIS-2026-00042", None, []),                                    # a number
+    ("Relance ce client Dupont", None, []),                                                        # a name
+    ("Qu'est-ce que je dois faire ce soir ?", None, []),                                           # not a document
+))
+def test_no_hint_when_something_names_it(message, page, film):
+    assert router.unnamed_document_hint(message, page, film) is None
+
+
+def test_the_hint_reaches_the_worker(monkeypatch):
+    created = _fake_kanban(monkeypatch)
+    _route("Mets du 10 % sur ce produit", "conv-unnamed-1")
+    assert created and created[-1]["body"].startswith(router.UNNAMED_DOCUMENT_HINT)

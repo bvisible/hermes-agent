@@ -1473,6 +1473,41 @@ def document_page_anchor(page_context: Optional[dict]) -> Optional[str]:
 # //// END Neoffice ////
 
 
+# //// Neoffice — « ce produit » that nothing names. With no page, no earlier turn and no
+# //// number, a ventes worker asked « Mets du 10 % sur ce produit » tried invented document
+# //// numbers (FA-2026-01062, CMD-0031, DEV-0042) five times each until the loop guard, instead
+# //// of asking which one (dev instance, 2026-09-24 22:32; nothing was written).
+_DEICTIC_NOUNS = (
+    r"produit|article|client|cliente|fournisseur|devis|offre|facture|commande|bon|document|ligne|"
+    r"contact|adresse|chantier|projet|ticket|employ[ée]e?|collaborat\w+|dossier|paiement|"
+    r"product|item|customer|supplier|quote|quotation|invoice|order|line|address|job|project|employee|"
+    r"produkt|artikel|kunde|kundin|lieferant|angebot|offerte|rechnung|bestellung|auftrag|dokument|"
+    r"prodotto|articolo|fornitore|preventivo|offerta|fattura|ordine|documento"
+)
+# Case-insensitive for the words only: the look-ahead's capital means « a name follows ».
+_DEICTIC_UNNAMED_RE = re.compile(
+    rf"\b(?i:(?:ce|cet|cette|this|dies(?:e[rsmn]?)?|quest[oa])\s+(?:{_DEICTIC_NOUNS}))\b"
+    r"(?!\s*(?:[A-ZÀ-Ý]|\d|«|\"|'))",
+)
+_DOC_ID_RE = re.compile(r"\b[A-Z][A-Z0-9]*-[A-Z0-9-]*\d")
+UNNAMED_DOCUMENT_HINT = (
+    "[The request says « this … » (ce / cette …), but no page is open, no earlier turn names it and "
+    "no number is given. Do NOT guess document names or numbers and do NOT try candidates: ask the "
+    "user which one (kanban_block kind=needs_input) and STOP.]"
+)
+
+
+def unnamed_document_hint(message: str, page_context: Optional[dict], film: list) -> Optional[str]:
+    """UNNAMED_DOCUMENT_HINT when « ce produit » refers to nothing the worker can know."""
+    if film or document_page_anchor(page_context) or _page_project(page_context):
+        return None
+    text = str(message or "")
+    if _DOC_ID_RE.search(text) or not _DEICTIC_UNNAMED_RE.search(text):
+        return None
+    return UNNAMED_DOCUMENT_HINT
+# //// END Neoffice ////
+
+
 def _page_project(page_context: Optional[dict]) -> Optional[str]:
     pc = page_context if isinstance(page_context, dict) else {}
     job = pc.get("job") if isinstance(pc.get("job"), dict) else {}
@@ -1907,6 +1942,9 @@ def route_chat_message(
             # //// Neoffice — any other document page, see document_page_anchor.
             elif _doc_anchor := document_page_anchor(page_context):
                 _body = _doc_anchor + "\n\n" + _body
+            # //// Neoffice — « ce produit » that nothing names, see unnamed_document_hint.
+            elif _unnamed := unnamed_document_hint(message, page_context, _film_prev):
+                _body = _unnamed + "\n\n" + _body
             # //// END Neoffice ////
             # //// Neoffice — tell the specialist worker which language to answer in (the
             # user's). ALWAYS carry it, FRENCH INCLUDED: the worker SOUL only "leans" FR, and a
