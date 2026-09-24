@@ -1,3 +1,5 @@
+# //// Neoffice — added file (no upstream equivalent): a wait stated only in prose is read
+# //// as a last resort when a provider puts it nowhere else.
 """Neoffice — a wait stated only in PROSE is read as a last resort.
 
 Kept honest about what it is: a defensive fallback, NOT a fix for anything observed
@@ -87,7 +89,7 @@ def test_nothing_else_is_read_as_a_wait(message):
 
 def test_the_real_503_makes_every_retry_wait_what_the_server_asked():
     agent = _AgentStub()
-    attentes = [
+    waits = [
         compute_error_backoff(
             agent, _ProviderError(OLARES_503), retry_count=n, max_retries=3,
             is_rate_limited=False, is_zai_coding_overload=False,
@@ -95,22 +97,23 @@ def test_the_real_503_makes_every_retry_wait_what_the_server_asked():
         )
         for n in range(3)
     ]
-    assert attentes == [5.0, 5.0, 5.0], attentes
+    assert waits == [5.0, 5.0, 5.0], waits
 
 
+@pytest.mark.real_retry_backoff  # tests/agent/conftest.py zeroes jittered_backoff otherwise
 def test_an_error_without_a_stated_wait_keeps_the_upstream_backoff():
     """The fallback must stay exactly as upstream wrote it when nothing is stated."""
     agent = _AgentStub()
-    muet = {"message": "Internal server error", "type": "internal", "code": 500}
+    silent = {"message": "Internal server error", "type": "internal", "code": 500}
     for n in range(3):
-        attente = compute_error_backoff(
-            agent, _ProviderError(muet), retry_count=n, max_retries=3,
+        wait = compute_error_backoff(
+            agent, _ProviderError(silent), retry_count=n, max_retries=3,
             is_rate_limited=False, is_zai_coding_overload=False,
             base_url="https://example/v1", model="nora",
         )
         # jittered_backoff(base_delay=2.0, max_delay=60.0) — never the flat 5.0 above.
-        assert 1.0 <= attente <= 60.0
-        assert attente != 5.0
+        assert 1.0 <= wait <= 60.0
+        assert wait != 5.0
 
 
 def test_a_header_still_wins_over_the_prose():
@@ -119,12 +122,12 @@ def test_a_header_still_wins_over_the_prose():
     class _Resp:
         headers = {"Retry-After": "12"}
 
-    attente = compute_error_backoff(
+    wait = compute_error_backoff(
         _AgentStub(), _ProviderError(OLARES_503, response=_Resp()), retry_count=0,
         max_retries=3, is_rate_limited=False, is_zai_coding_overload=False,
         base_url="https://example/v1", model="nora",
     )
-    assert attente == 12.0
+    assert wait == 12.0
 
 
 # //// Neoffice — the case that actually describes our provider, added when the header
@@ -144,7 +147,7 @@ def test_our_providers_real_503_is_honoured_from_its_header():
     erreur.body = {"error": {"message": "llm busy with long-context jobs, retry after 5s",
                              "type": "service_unavailable", "code": 503}}
 
-    attentes = [
+    waits = [
         compute_error_backoff(
             _AgentStub(), erreur, retry_count=n, max_retries=3,
             is_rate_limited=False, is_zai_coding_overload=False,
@@ -152,7 +155,7 @@ def test_our_providers_real_503_is_honoured_from_its_header():
         )
         for n in range(3)
     ]
-    assert attentes == [5.0, 5.0, 5.0], attentes
+    assert waits == [5.0, 5.0, 5.0], waits
 
 
 def test_the_503_is_classified_retryable_so_it_reaches_the_backoff():
