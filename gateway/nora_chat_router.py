@@ -294,7 +294,8 @@ _CLASSIFIER_SYSTEM = (
     # knowledge questions, not chit-chat, and must not fall to 'direct'.
     "  Cela inclut les taux et obligations RH suisses : AVS/AI/APG, AC, LPP, LAA, "
     "impôt à la source, certificat de salaire, allocations familiales, délais de "
-    "congé, vacances et heures supplémentaires (« quel taux AVS ? », « quelle "
+    "congé, vacances et heures supplémentaires, jours fériés, congé paternité, "
+    "certificat de travail, attestation de l'employeur (« quel taux AVS ? », « quelle "
     "retenue à la source ? »).\n"
     # //// END Neoffice ////
     "- analyse : graphiques, visuels, dataviz, cartes d'indicateurs, tableaux de bord "
@@ -651,7 +652,14 @@ _FAST_PATH_RULES = (
     (
         re.compile(
             r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des)"
-            r"|notes? de frais|certificats? de salaire|imp[ôo]ts? [àa] la source)",
+            r"|notes? de frais|certificats? de salaire|imp[ôo]ts? [àa] la source"
+            # //// Neoffice — Swiss HR doctrine the rh worker holds in its wiki (24.09): a
+            # //// public-holiday question was answered by the orchestrator itself, citing the
+            # //// wrong article. « 1er août » only next to a holiday word, so « facture la
+            # //// livraison du 1er août » stays where it was.
+            r"|jours? f[ée]ri[ée]s?|f[êe]te nationale|\b1(?:er)?\s+ao[ûu]t\s+(?:est|f[ée]ri|pay|ch[ôo]m)"
+            r"|certificats? de travail|attestations? de travail"
+            r"|attestations? (?:de l['’]\s*employeur|(?:pour (?:le|la caisse de) )?ch[ôo]mage))",
             re.IGNORECASE,
         ),
         "rh",

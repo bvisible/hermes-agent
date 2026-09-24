@@ -43,3 +43,23 @@ def test_the_classifier_knows_what_rh_now_covers():
     rh_line = next(line for line in _CLASSIFIER_SYSTEM.splitlines() if line.startswith("- rh :"))
     for term in ("notes de frais", "validation", "paie", "certificats de salaire"):
         assert term in rh_line, term
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Le 1er août est-il un jour férié payé ?",
+        "combien de jours fériés dans le canton de Vaud ?",
+        "le 1er août est payé pour un employé à l'heure ?",
+        "Heidi me demande un certificat de travail",
+        "un ancien employé veut l'attestation de l'employeur pour le chômage",
+        "rédige une attestation de travail pour Marc",
+    ),
+)
+def test_swiss_hr_doctrine_goes_to_rh(message):
+    """24.09: a public-holiday question was answered by the orchestrator itself, citing the wrong article."""
+    assert _fast_path(message, None) == "rh"
+
+
+def test_a_date_on_the_first_of_august_is_not_an_hr_matter():
+    assert _fast_path("fais une facture pour la livraison du 1er août", None) != "rh"
