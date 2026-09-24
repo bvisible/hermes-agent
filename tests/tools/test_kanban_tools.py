@@ -171,9 +171,12 @@ def test_compta_allocation_completion_requires_live_chart(monkeypatch, tmp_path)
             assignee="compta",
         )
         kb.claim_task(conn, tid)
+        run_id = kb.get_task(conn, tid).current_run_id
     finally:
         conn.close()
     monkeypatch.setenv("HERMES_KANBAN_TASK", tid)
+    # The dispatcher pins the run at spawn; kanban_complete refuses a worker without it.
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
 
     from tools import kanban_tools as kt
     rejected = json.loads(kt._handle_complete({"summary": "6600 Publicité"}))
@@ -224,9 +227,12 @@ def test_compta_guard_accepts_a_chart_read_through_tool_call(monkeypatch, tmp_pa
             assignee="compta",
         )
         kb.claim_task(conn, tid)
+        run_id = kb.get_task(conn, tid).current_run_id
     finally:
         conn.close()
     monkeypatch.setenv("HERMES_KANBAN_TASK", tid)
+    # The dispatcher pins the run at spawn; kanban_complete refuses a worker without it.
+    monkeypatch.setenv("HERMES_KANBAN_RUN_ID", str(run_id))
 
     worker_log = kb.worker_log_path(tid)
     worker_log.parent.mkdir(parents=True, exist_ok=True)
@@ -380,6 +386,8 @@ def test_complete_on_a_task_closed_by_another_run_still_errors(worker_env, monke
     A worker whose run was superseded is a real conflict — it must keep its error
     rather than be told its lost handoff was recorded.
     """
+    import os
+
     from tools import kanban_tools as kt
 
     _pin_worker_run(monkeypatch, worker_env)

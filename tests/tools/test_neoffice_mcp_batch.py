@@ -33,7 +33,8 @@ def test_an_agent_bound_local_tool_still_cannot_share_a_call():
 
     name, _args, err = resolve_underlying_call({"calls": [
         {"name": CHART, "arguments": {}}, {"name": "todo_list", "arguments": {}}]})
-    assert name is None and "one entry per tool_call" in err
+    # Upstream's refusal wording changes across releases; what matters is that it refuses.
+    assert name is None and err and "local tools" in err
 
 
 def test_each_mcp_entry_goes_through_the_single_call_path_in_order(monkeypatch):
