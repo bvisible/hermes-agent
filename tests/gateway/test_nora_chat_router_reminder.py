@@ -14,6 +14,10 @@ from gateway.nora_chat_router import _fast_path
     "Crée un rappel le 3 octobre : renouveler l'assurance",
     "Erinnere mich morgen um 9 Uhr an die Sitzung",
     "Remind me tomorrow at 10:00 to call the bank",
+    "Erinnere mich übermorgen an den Zahnarzt",
+    "Ricordami domani alle 15 di chiamare il notaio",
+    "Remind me in 2 hours to call back the supplier",
+    "Remind me on Friday at 5pm to send the report",
 ))
 def test_a_one_off_reminder_goes_to_nora(message):
     assert _fast_path(message, prior=None) == "DIRECT"
@@ -34,6 +38,12 @@ def test_a_payment_reminder_stays_compta(message, expected):
 @pytest.mark.parametrize("message", (
     "Rappelle-moi tous les lundis à 8h de faire la TVA",   # repeated → the classifier's 'recurrent'
     "Rappelle-moi combien on a facturé en août",           # « tell me again », no moment
+    # A habit in another language was a one-off « next Monday » while _RECUR_RE was French.
+    "Remind me every Monday at 10:00 to call the bank",
+    "Erinnere mich jeden Freitag um 16 Uhr an den Wochenbericht",
+    "Ricordami ogni giorno alle 9 di controllare la cassa",
+    "Remind me daily at 9 to back up the laptop",
+    "Erinnere mich montags an die Kassenabrechnung",
 ))
 def test_not_a_one_off_reminder(message):
     assert _fast_path(message, prior=None) != "DIRECT"

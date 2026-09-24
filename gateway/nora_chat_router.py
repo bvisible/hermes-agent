@@ -336,9 +336,21 @@ _TOKEN_RE = re.compile(r"[a-zàâçéèêëîïôûùüÿñæœ]+", re.IGNORECAS
 #     ("Ceux de ce client" must stay on the prior pole), and
 #   - the message carries recurrence markers → the 'recurrent' decision belongs to the LLM.
 _RECUR_RE = re.compile(
-    r"(tous les|chaque (jour|matin|soir|semaine|lundi|mardi|mercredi|jeudi|vendredi|mois)|"
+    r"(tous les|chaque (jour|matin|soir|semaine|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|mois)|"
     r"toutes les heures|r[ée]guli[èe]rement|automatiquement|planifie|programme[ -]?(moi|une|une t)|"
-    r"fais[ -]?le tous|chaque fois)",
+    r"fais[ -]?le tous|chaque fois|"
+    # //// Neoffice — the habit markers of the three other languages of the fleet. French
+    # //// only, « Remind me every Monday at 10:00 » was a ONE-OFF reminder next Monday.
+    r"\b(?:every|each)\s+(?:day|morning|evening|night|week|month|hour|weekday|monday|tuesday|wednesday|"
+    r"thursday|friday|saturday|sunday)s?\b|\bon\s+(?:mon|tues|wednes|thurs|fri|satur|sun)days\b|"
+    r"\b(?:daily|weekly|monthly|hourly)\b(?=\s*(?:$|[,.;:!?]|at\b|on\b|to\b|from\b))|"
+    r"\bjede[nrs]?\s+(?:tag|morgen|abend|woche|monat|stunde|montag|dienstag|mittwoch|donnerstag|freitag|"
+    r"samstag|sonntag)\b|\b(?:t[äa]glich|w[öo]chentlich|monatlich|st[üu]ndlich|werktags|montags|dienstags|"
+    r"mittwochs|donnerstags|freitags|samstags|sonntags)\b|"
+    r"\bogni\s+(?:giorno|mattina|sera|settimana|mese|ora|luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|"
+    r"venerd[iì]|sabato|domenica)\b|\btutti\s+i\s+giorni\b|"
+    r"\b(?:quotidiennement|hebdomadairement|mensuellement|en semaine|du lundi au vendredi)\b)",
+    # //// END Neoffice ////
     re.IGNORECASE,
 )
 # (regex, pole) — first match wins. ANALYSE is checked FIRST: a chart/visual request goes
@@ -725,7 +737,16 @@ _REMINDER_MOMENT_RE = re.compile(
     r"\b(?:demain|apr[èe]s-demain|ce\s+soir|cet\s+apr[èe]s-midi|ce\s+matin|tout\s+[àa]\s+l'heure|"
     r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|la\s+semaine\s+prochaine|"
     r"dans\s+\d+\s*(?:min|minutes?|h|heures?|jours?|semaines?)|[àa]\s+\d{1,2}\s*(?:h|:)|"
-    r"\d{1,2}\s*h\s*\d{0,2}\b|\d{1,2}:\d{2}|le\s+\d{1,2}(?:er)?[\s./]|morgen|domani|tomorrow|tonight)",
+    r"\d{1,2}\s*h\s*\d{0,2}\b|\d{1,2}:\d{2}|le\s+\d{1,2}(?:er)?[\s./]|morgen|domani|tomorrow|tonight|"
+    # //// Neoffice — the moments of the three other languages: nora's route_reminder
+    # //// reads them all (task_router._reminder_moment).
+    r"(?:[üu]ber|ueber)morgen|dopodomani|day\s+after\s+tomorrow|heute|oggi|today|stasera|stamattina|"
+    r"in\s+\d+\s*(?:min\w*|hours?|days?|weeks?|stunden?|tagen?|wochen?)|(?:tra|fra)\s+\d+\s*(?:minuti|ore|"
+    r"giorni|settimane)|\d{1,2}(?:[.:]\d{2})?\s*uhr|(?:um|alle|at)\s+\d{1,2}\b|\d{1,2}(?::\d{2})?\s*[ap]\.?m\b|"
+    r"montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|luned[iì]|marted[iì]|mercoled[iì]|"
+    r"gioved[iì]|venerd[iì]|sabato|domenica|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"n[äa]chste[n]?\s+woche|next\s+week|prossima\s+settimana|settimana\s+prossima)",
+    # //// END Neoffice ////
     re.IGNORECASE,
 )
 _PAYMENT_REMINDER_RE = re.compile(r"rappel[s]?\s+de\s+(?:paiement|facture)", re.IGNORECASE)
