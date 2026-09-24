@@ -97,10 +97,16 @@ def test_compaction_completion_notice_respects_progress_notices_gate(
 def test_enabled_gate_does_not_leak_to_raw_platforms(progress_notices_enabled):
     """Programmatic surfaces keep raw text regardless of the gate."""
     message = ROUTINE_COMPRESSION_STATUS_SAMPLES[0]
-    for platform in ("local", "api_server", "webhook", "msgraph_webhook"):
+    # //// Neoffice — "webhook" left out: for us it IS the customer chat, where every
+    # //// intermediate status is dropped (_prepare_gateway_status_message → None, a62b725e9e:
+    # //// a status bubble was taken for NORA's final answer). Drop when upstream tells a
+    # //// programmatic webhook from a chat webhook.
+    for platform in ("local", "api_server", "msgraph_webhook"):
         assert (
             _prepare_gateway_status_message(platform, "lifecycle", message) == message
         )
+    assert _prepare_gateway_status_message("webhook", "lifecycle", message) is None
+    # //// END Neoffice ////
 
 
 def test_progress_regex_covers_every_routine_sample():
