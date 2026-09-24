@@ -857,10 +857,20 @@ class WebhookAdapter(BasePlatformAdapter):
             raw_body, error_response = await self._read_authenticated_body(request, route_name, route_config)
         if error_response is not None:
             return error_response
-        # Rate limiting (after auth)
-        if not self._record_rate_limit_hit(route_name, time.time()):
-            return _json_error("Rate limit exceeded", 429)
         payload = self._parse_body(raw_body)
+        # //// Neoffice — NORA's own memory events (the nightly consolidation, NORA Live's
+        # //// reads) are counted in a bucket of their own. They shared the chat route's
+        # //// 30/min: every night at 22:30 the consolidation's burst made the gateway refuse
+        # //// people's chat messages with 429, shown as « service saturé » (dev instance,
+        # //// 2026-09-24 22:33). Their own bucket keeps their pacing and their 429 back-off.
+        _rate_bucket = route_name
+        if isinstance(payload, dict) and payload.get("event_type") in (
+                "memory_retain", "memory_read", "memory_forget"):
+            _rate_bucket = f"{route_name}::memory"
+        # //// END Neoffice ////
+        # Rate limiting (after auth)
+        if not self._record_rate_limit_hit(_rate_bucket, time.time()):
+            return _json_error("Rate limit exceeded", 429)
         if payload is _UNPARSEABLE:
             return _json_error("Cannot parse body", 400)
         headers = request.headers
