@@ -18,6 +18,7 @@ from gateway.nora_chat_router import _fast_path
     "Ricordami domani alle 15 di chiamare il notaio",
     "Remind me in 2 hours to call back the supplier",
     "Remind me on Friday at 5pm to send the report",
+    "Note-moi de relancer le devis DEVIS-2026-00042 vendredi prochain",  # bench: reached compta
 ))
 def test_a_one_off_reminder_goes_to_nora(message):
     assert _fast_path(message, prior=None) == "DIRECT"

@@ -63,3 +63,31 @@ def test_swiss_hr_doctrine_goes_to_rh(message):
 
 def test_a_date_on_the_first_of_august_is_not_an_hr_matter():
     assert _fast_path("fais une facture pour la livraison du 1er août", None) != "rh"
+
+
+# //// Neoffice — MY pay is rh's (capability bench, 2026-09-24): « Combien ai-je touché en
+# //// août ? » from an employee reached compta and its company revenue summary.
+@pytest.mark.parametrize("message", (
+    "Combien ai-je touché en août 2026 ?",
+    "Combien j'ai gagné le mois passé ?",
+    "Montre-moi ma fiche de paie de septembre",
+    "Quel est mon salaire net ?",
+    "Show me my payslip for August",
+    "Zeig mir meine Lohnabrechnung",
+    "Quanto è la mia busta paga?",
+))
+def test_my_pay_goes_to_rh(message):
+    from gateway.nora_chat_router import _fast_path
+
+    assert _fast_path(message, prior=None) == "rh"
+
+
+@pytest.mark.parametrize("message", (
+    "Combien ai-je encaissé en août ?",          # the company's money
+    "Combien j'ai reçu de paiements ce mois ?",
+    "Quel est le chiffre d'affaires d'août ?",
+))
+def test_the_companys_money_is_not_my_pay(message):
+    from gateway.nora_chat_router import _fast_path
+
+    assert _fast_path(message, prior=None) != "rh"

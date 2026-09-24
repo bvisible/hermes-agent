@@ -1536,6 +1536,16 @@ class WebhookAdapter(BasePlatformAdapter):
                             conversation_id,
                             len(content),
                         )
+                        # //// Neoffice — EVERY reply the desk shows enters the conversation
+                        # //// film, questions included: only completed worker results did,
+                        # //// so « Oui, vas-y » reached the next worker without the question
+                        # //// it answered (capability bench, 2026-09-24). Best-effort.
+                        try:
+                            from gateway.nora_chat_router import note_nora_reply
+                            note_nora_reply(conversation_id, content)
+                        except Exception:  # noqa: BLE001 — the film never blocks a delivery
+                            pass
+                        # //// END Neoffice ////
                         return SendResult(success=True)
                     body = await resp.text()
                     logger.error(

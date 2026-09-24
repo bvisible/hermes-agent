@@ -144,6 +144,19 @@ _CONV_HISTORY: dict = {}
 _CONV_HISTORY_TURNS = 10  # recent film entries carried to the worker (user + NORA lines)
 
 
+# //// Neoffice — a bare yes answers a PROPOSAL, never a question. With NORA's question
+# //// missing from the film, « Oui, vas-y » after « Pourriez-vous me donner le nom exact
+# //// du client ? » had the worker pick a customer and change its address, and after « sur
+# //// quel document ? » submit a quotation (capability bench, 2026-09-24).
+_BARE_YES_RULE = (
+    "A bare « oui / vas-y / ok / d'accord » CONFIRMS only a change NORA PROPOSED in its last "
+    "line (shown to the user before being made). If NORA's last line was a QUESTION — which "
+    "customer, which document, which article, a missing figure — « oui » does not answer it: "
+    "ask that question again and change NOTHING."
+)
+# //// END Neoffice ////
+
+
 def note_nora_reply(conversation_id: Optional[str], text: Optional[str]) -> None:
     """Record NORA's own delivered reply into the conversation film.
 
@@ -158,7 +171,13 @@ def note_nora_reply(conversation_id: Optional[str], text: Optional[str]) -> None
     if len(_CONV_HISTORY) > _LAST_ROUTE_MAX:
         _CONV_HISTORY.clear()
     film = _CONV_HISTORY.setdefault(conversation_id, [])
-    film.append("NORA: " + clean[:400])
+    entry = "NORA: " + clean[:400]
+    # //// Neoffice — the same reply can be recorded twice (the desk delivery, then the
+    # //// notifier after it); one line in the film.
+    if film and film[-1] == entry:
+        return
+    # //// END Neoffice ////
+    film.append(entry)
     del film[:-_CONV_HISTORY_TURNS]
 # //// END Neoffice ////
 
@@ -454,6 +473,22 @@ _MEASUREMENT_RE = re.compile(
 
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
+    # //// Neoffice — MY pay is rh's, never a revenue question (capability bench, 24.09):
+    # //// « Combien ai-je touché en août ? » from an employee reached compta, which called
+    # //// the company's revenue summary five times. First person with touché/gagné/perçu
+    # //// only — « combien ai-je encaissé / reçu » is the company's money — or a possessive
+    # //// pay noun.
+    (
+        re.compile(
+            r"\bcombien\s+(?:ai[- ]je|j['’]ai)\s+(?:touch[ée]|gagn[ée]|per[çc]u)\b"
+            r"|\b(?:mon|mes)\s+(?:salaires?|net|brut)\b|\b(?:ma|mes)\s+(?:paies?|fiches?\s+de\s+(?:paie|salaire))\b"
+            r"|\bmy\s+(?:salary|pay|payslips?|wages?)\b|\bhow\s+much\s+(?:did|have)\s+i\s+(?:earn|been\s+paid|got\s+paid)"
+            r"|\bmein(?:e|en)?\s+(?:lohn|gehalt|lohnabrechnung(?:en)?)\b|\b(?:il\s+mio\s+stipendio|la\s+mia\s+busta\s+paga)\b",
+            re.IGNORECASE,
+        ),
+        "rh",
+    ),
+    # //// END Neoffice ////
     # //// Neoffice — chasing a JOB's quotation is projet's, not a collection (17.09).
     # //// Same cause as the prospect rule below: the dunning rule matches \brelanc\w*
     # //// and sits above the quotation rules, so « relance le devis du chantier PROJ-… »
@@ -742,7 +777,10 @@ def _keyword_pole(msg: str) -> Optional[str]:
 # //// so « rappelle-moi combien on a facturé » (tell me again) is not taken for one; a
 # //// payment reminder keeps compta, and a repeated one stays with the classifier.
 _ONE_OFF_REMINDER_RE = re.compile(
-    r"\b(?:rappelle[rz]?[- ]moi|fais[- ]moi\s+penser|(?:mets|mettre|mettez|cr[ée]e[rz]?|programme[rz]?|"
+    # //// Neoffice — « note-moi de … vendredi » is a reminder too (capability bench, 24.09: it
+    # //// reached compta, which has no reminder tool, and looped on tool_search).
+    r"\b(?:rappelle[rz]?[- ]moi|fais[- ]moi\s+penser|note[sz]?[- ]moi\s+(?:de|d['’]|que)|"
+    r"(?:mets|mettre|mettez|cr[ée]e[rz]?|programme[rz]?|"
     r"ajoute[rz]?)[- ](?:moi\s+|nous\s+)?un\s+rappel|erinnere?\s+mich|ricordami|remind\s+me)\b",
     re.IGNORECASE,
 )
@@ -1413,6 +1451,28 @@ def _fast_answer(
 
 
 # //// Neoffice — the job the desk page names (docked job panel, 05.09).
+# //// Neoffice — the DOCUMENT the user is looking at, for every pole. Only a job page was
+# //// anchored: on a customer's form « Modifie l'adresse de ce client » reached ventes with
+# //// no customer, the worker asked for the name, and the « Oui, vas-y » that followed had
+# //// it pick a customer itself and change its address; on a quotation, « Mets 10 % sur ce
+# //// produit » ended with the quotation SUBMITTED and its acceptance link sent (capability
+# //// bench, 2026-09-24). compta coped only because its SOUL calls get_page_context.
+def document_page_anchor(page_context: Optional[dict]) -> Optional[str]:
+    """« [Page context — the user is looking at the Customer « Boulangerie X » (CUST-0001)…] »,
+    or None on a list, on no page, or on a job (job_page_anchor has its own)."""
+    pc = page_context if isinstance(page_context, dict) else {}
+    doctype = " ".join(str(pc.get("doctype") or "").split())[:60]
+    name = " ".join(str(pc.get("name") or "").split())[:140]
+    if not (doctype and name) or doctype == "Project":
+        return None
+    title = " ".join(str(pc.get("title") or "").split())[:140]
+    label = f"« {title} » ({name})" if title and title != name else name
+    return (f"[Page context — the user is looking at the {doctype} {label}. « ce / cette / cet … » "
+            "(this customer, this quotation, this article…) means THIS document unless the message "
+            "names another one. Never pick another document yourself.]")
+# //// END Neoffice ////
+
+
 def _page_project(page_context: Optional[dict]) -> Optional[str]:
     pc = page_context if isinstance(page_context, dict) else {}
     job = pc.get("job") if isinstance(pc.get("job"), dict) else {}
@@ -1804,8 +1864,9 @@ def route_chat_message(
                     "the NORA lines above, and CONTINUE until the request is COMPLETE (not just "
                     "one isolated step). COMPLETE means exactly what the user asked and NOTHING "
                     "more: NEVER create an additional document (invoice, order, payment, delivery "
-                    "note…) the user did not explicitly ask for in this thread. Current message "
-                    "below.]"
+                    "note…) the user did not explicitly ask for in this thread. "
+                    + _BARE_YES_RULE +  # //// Neoffice — see _BARE_YES_RULE
+                    " Current message below.]"
                     f"\n\n{message}"
                 )
             elif prior and prior.get("pole") and prior.get("msg"):
@@ -1843,6 +1904,9 @@ def route_chat_message(
             # //// END Neoffice ////
             if _pc_project:
                 _body = job_page_anchor(category, _pc_src, _pc_project, _pc_job) + "\n\n" + _body
+            # //// Neoffice — any other document page, see document_page_anchor.
+            elif _doc_anchor := document_page_anchor(page_context):
+                _body = _doc_anchor + "\n\n" + _body
             # //// END Neoffice ////
             # //// Neoffice — tell the specialist worker which language to answer in (the
             # user's). ALWAYS carry it, FRENCH INCLUDED: the worker SOUL only "leans" FR, and a
