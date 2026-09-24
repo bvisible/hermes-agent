@@ -76,7 +76,14 @@ PROVIDER_UNAVAILABLE_REPLY = (
 #
 # Anchored on the fixed half of the template, so it holds whatever the tool name,
 # the code or the count. The technical text stays in the logs, where it is read.
-_GUARDRAIL_HALT_RE = re.compile(r"\bhit the tool-call guardrail\b", re.IGNORECASE)
+# v2026.9.24 REWORDED the template ("I stopped retrying because I kept running <tool>
+# N times without making progress… send `continue`…"): the old anchor stopped matching
+# and that sentence reached a customer on the dev instance the evening of the rebase.
+# Both wordings are anchored; the test builds the text with upstream's own method, so
+# the next rewording fails a test instead of reaching a chat.
+_GUARDRAIL_HALT_RE = re.compile(
+    r"\bhit the tool-call guardrail\b|\bI stopped retrying because I kept running\b", re.IGNORECASE
+)
 GUARDRAIL_HALT_REPLY = (
     "Je n'ai pas réussi à traiter votre demande jusqu'au bout. "
     "Reformulez-la ou précisez-la ; si cela se reproduit, prévenez votre administrateur."
@@ -112,6 +119,33 @@ _BUSY_NOTICES = (
 
 
 _NO_REPLY_RE = re.compile(r"^\s*⚠️?\s*No reply\s*:", re.IGNORECASE)
+
+# //// Neoffice — upstream's FAILURE COPY (agent/turn_failure_copy.py, new in v2026.9.24).
+# //// Every failed turn now ends on a paragraph written for a developer at a terminal:
+# //// "send /retry, or switch models with /model", "run `hermes doctor`", "add a backup
+# //// provider with `hermes fallback add`", "Hermes hit repeated errors…". It REPLACED the
+# //// "API call failed after N retries" sentence #450 anchored on, so an engine outage
+# //// would have reached the customer in English again. Anchored on that command
+# //// vocabulary, which no business answer carries (a path such as …/sales-invoice/new
+# //// is not a slash command: the slash must follow a space, a bracket or a backtick),
+# //// plus "Hermes" as the subject of a sentence — the customer talks to NORA. The test
+# //// renders EVERY template of the module, so a copy added upstream is checked too.
+_UPSTREAM_FAILURE_COPY_RE = re.compile(
+    r"(?:^|[\s(`])/(?:retry|model|new|compress|reasoning)\b"
+    r"|`hermes (?:doctor|setup|model|fallback add|auth)\b"
+    r"|\bSend `continue`"
+    r"|\bHermes (?:was shutting down|hit|couldn't|could not|didn't|did not)\b",
+    re.IGNORECASE,
+)
+# Which of our sentences answers it: the engine could not be reached or refused, or the
+# turn itself could not finish.
+_PROVIDER_FAILURE_COPY_RE = re.compile(
+    r"\bProvider said:|\b\d+ attempts\b|sent back an empty or broken reply|isn't available on"
+    r"|rejected (?:the|this) request|refused this request|rejected your (?:sign-in|API key)"
+    r"|security certificate|firewall/CDN|usage limit resets",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
 NO_REPLY_REPLY = (
     "Je n'ai pas réussi à aller au bout de ce message. "
     "Reformulez-le ou précisez-le ; si cela se reproduit, prévenez votre administrateur."
@@ -232,6 +266,13 @@ def strip_internal_mechanics(text: str, lang=None) -> str:
         logger.warning("neoffice_branding: unanswered turn hidden from the customer: %s",
                        text[:200].replace("\n", " "))
         return reply("no_reply", lang)
+    # //// END Neoffice ////
+    # //// Neoffice — upstream's failure copy, see _UPSTREAM_FAILURE_COPY_RE above.
+    if _UPSTREAM_FAILURE_COPY_RE.search(text):
+        _key = "provider_unavailable" if _PROVIDER_FAILURE_COPY_RE.search(text) else "no_reply"
+        logger.warning("neoffice_branding: upstream failure copy hidden from the customer (%s): %s",
+                       _key, text[:200].replace("\n", " "))
+        return reply(_key, lang)
     # //// END Neoffice ////
     # //// Neoffice — capitalised when it opens a sentence (20.09). The replacement
     # //// was the bare « l'équipe », so « Le spécialiste compta va… » came out

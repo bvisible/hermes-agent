@@ -65,6 +65,19 @@ def test_a_guardrail_halt_is_replaced_whole():
     assert strip_internal_mechanics(RAW_GUARDRAIL) == GUARDRAIL_HALT_REPLY
 
 
+def test_the_guardrail_halt_upstream_writes_today_is_replaced_whole():
+    """Built with upstream's own method: a rewording of the template fails HERE."""
+    from types import SimpleNamespace
+
+    from neoffice_branding import GUARDRAIL_HALT_REPLY, strip_internal_mechanics
+    from run_agent import AIAgent
+
+    decision = SimpleNamespace(tool_name="mcp__neoffice_compta__get_chart_of_accounts", count=5,
+                               code="identical_call_streak_halt")
+    raw = AIAgent._toolguard_controlled_halt_response(None, decision)
+    assert strip_internal_mechanics(raw) == GUARDRAIL_HALT_REPLY, raw
+
+
 def test_the_guardrail_reply_names_no_machinery_and_is_french():
     from neoffice_branding import GUARDRAIL_HALT_REPLY
 
@@ -313,3 +326,52 @@ def test_every_busy_notice_is_keyed_to_a_reply():
 
     for _pattern, cle in _BUSY_NOTICES:
         assert cle in REPLIES, f"busy notice keyed to unknown reply {cle!r}"
+
+
+# //// Neoffice — upstream's failure copy must not reach the customer (v2026.9.24).
+def _every_failure_copy():
+    """(name, text) for every template agent/turn_failure_copy.py can hand a chat today."""
+    from agent import turn_failure_copy as tfc
+
+    fields = dict(model="nora", label="Olares", attempts=3, detail="HTTP 502", preview="…", limit=25,
+                  tokens=1000, window=32000, resume="", home="~/.hermes", prefix_hint="",
+                  relogin="hermes auth add custom --type oauth")
+    rendered = [(code, tfc.site_copy(code, **fields)) for code in tfc._SITE_COPY]
+    rendered += [(f"exhausted:{r}", tfc.exhausted_copy(r, label="Olares", attempts=3, summary="HTTP 502"))
+                 for r in [*tfc._EXHAUSTED_LEADS, "unknown"]]
+    rendered += [(f"nonretryable:{r}", t.format_map(tfc._Defaults(fields)))
+                 for r, t in [*tfc._NONRETRYABLE_COPY.items(), ("default", tfc._NONRETRYABLE_DEFAULT_COPY)]]
+    rendered += [(f"auth:{r}", t.format_map(tfc._Defaults(fields))) for r, t in tfc._AUTH_COPY.items()]
+    return rendered
+
+
+def test_no_failure_copy_of_upstream_reaches_the_customer():
+    from neoffice_branding import reply, strip_internal_mechanics
+
+    ours = {reply("provider_unavailable"), reply("no_reply")}
+    leaks = [(name, text[:90]) for name, text in _every_failure_copy() if strip_internal_mechanics(text) not in ours]
+    assert not leaks, leaks
+
+
+def test_an_engine_outage_reads_as_one_and_a_stuck_turn_as_one():
+    from agent.turn_failure_copy import exhausted_copy, site_copy
+    from neoffice_branding import reply, strip_internal_mechanics
+
+    outage = exhausted_copy("overloaded", label="Olares", attempts=3, summary="HTTP 503")
+    assert strip_internal_mechanics(outage) == reply("provider_unavailable")
+    stuck = site_copy("loop_error", detail="boom")
+    assert strip_internal_mechanics(stuck) == reply("no_reply")
+
+
+import pytest  # noqa: E402 — used by the parametrized check below
+
+
+@pytest.mark.parametrize("answer", [
+    "La facture est prête : https://osiris.neoffice.me/app/sales-invoice/new (brouillon).",
+    "Vous avez 547 factures impayées pour un total de 17 371,90 CHF.",
+])
+def test_a_real_answer_is_left_alone(answer):
+    from neoffice_branding import strip_internal_mechanics
+
+    assert strip_internal_mechanics(answer) == answer
+# //// END Neoffice ////
