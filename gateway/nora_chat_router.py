@@ -473,6 +473,19 @@ _FAST_PATH_RULES = (
         "projet",
     ),
     # //// END Neoffice ////
+    # //// Neoffice — chasing a QUOTATION with no job is ventes' (24.09): ventes holds
+    # //// send_email and frappe_quotation_share_link, the acceptance link a follow-up
+    # //// carries. The dunning rule below sent « relance le devis de Martin » to compta,
+    # //// whose reminders are for INVOICES (capability bench, 24.09). The job rule above
+    # //// still wins for « relance le devis du chantier ».
+    (
+        re.compile(
+            r"(?=.*\brelanc\w*\b)(?=.*\b(?:devis|offres?|quotations?|DEVIS-\d+)\b)",
+            re.IGNORECASE,
+        ),
+        "ventes",
+    ),
+    # //// END Neoffice ////
     # //// Neoffice — relancer un PROSPECT is a sales follow-up, not a collection (17.09).
     # //// The dunning rule just below matches \brelanc\w* — deliberately broad, because a
     # //// payment reminder is phrased a dozen ways — and it was swallowing « relance ce
