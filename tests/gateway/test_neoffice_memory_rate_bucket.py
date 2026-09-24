@@ -20,10 +20,10 @@ ROUTE = "chat-route"
 RATE_LIMIT = 3
 
 
-def _adapter() -> WebhookAdapter:
+def _adapter(**extra) -> WebhookAdapter:
     routes = {ROUTE: {"secret": SECRET, "events": ["push"], "prompt": "Event: {event}", "deliver": "log"}}
     config = PlatformConfig(enabled=True, extra={"host": "0.0.0.0", "port": 0, "routes": routes,
-                                                 "rate_limit": RATE_LIMIT})
+                                                 "rate_limit": RATE_LIMIT, "memory_rate_limit": RATE_LIMIT, **extra})
     return WebhookAdapter(config)
 
 
@@ -65,3 +65,15 @@ async def test_a_memory_burst_does_not_refuse_a_chat_message():
         resp = await cli.post(f"/webhooks/{ROUTE}", data=body, headers=headers)
         assert resp.status == 202, f"a chat message was refused by the memory burst ({resp.status})"
     assert len(reads) == RATE_LIMIT
+
+
+def test_the_memory_bucket_is_eight_times_the_chat_pace_by_default():
+    """A nightly pass makes up to ~40 calls per person: at the chat's pace it held a long
+    worker for half an hour on the dev instance."""
+    routes = {ROUTE: {"secret": SECRET, "events": ["push"], "prompt": "p", "deliver": "log"}}
+    adapter = WebhookAdapter(PlatformConfig(enabled=True, extra={"routes": routes, "rate_limit": 30}))
+    assert adapter._memory_rate_limit == 240
+    assert all(adapter._record_rate_limit_hit("r::memory", 0.0, 240) for _ in range(240))
+    assert not adapter._record_rate_limit_hit("r::memory", 0.0, 240)
+    assert adapter._record_rate_limit_hit("r", 0.0), "the chat bucket is untouched"
+

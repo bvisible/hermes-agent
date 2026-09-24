@@ -252,6 +252,11 @@ class WebhookAdapter(BasePlatformAdapter):
         self._seen_deliveries_next_prune_at: float = 0.0
         self._rate_counts: Dict[str, Deque[float]] = {}  # per-route hit timestamps in a fixed window
         self._rate_limit: int = int(extra.get("rate_limit", 30))  # per minute
+        # //// Neoffice — NORA's memory events count in a bucket of their own (_handle_webhook).
+        # //// The nightly pass makes up to ~40 calls per person: at the chat's 30/min it held a
+        # //// long worker for half an hour. 8x the chat pace by default, `memory_rate_limit`.
+        self._memory_rate_limit: int = int(extra.get("memory_rate_limit", self._rate_limit * 8))
+        # //// END Neoffice ////
         self._max_body_bytes: int = int(extra.get("max_body_bytes", 1_048_576))  # 1MB
         self._script_timeout_seconds: int = int(extra.get("script_timeout_seconds", DEFAULT_SCRIPT_TIMEOUT_SECONDS))
         self._route_processor = WebhookRouteProcessor(script_timeout_seconds=self._script_timeout_seconds)
@@ -428,14 +433,14 @@ class WebhookAdapter(BasePlatformAdapter):
             self._seen_deliveries.pop(k, None)
         self._seen_deliveries_next_prune_at = now + min(60.0, max(1.0, self._idempotency_ttl / 10))
 
-    def _record_rate_limit_hit(self, route_name: str, now: float) -> bool:
+    def _record_rate_limit_hit(self, route_name: str, now: float, limit: Optional[int] = None) -> bool:
         """Return True if route is still within limit after recording this hit."""
         if not isinstance(window := self._rate_counts.get(route_name), deque):
             window = self._rate_counts[route_name] = deque(window or ())
         cutoff = now - _RATE_WINDOW_SECONDS
         while window and window[0] < cutoff:
             window.popleft()
-        if len(window) >= self._rate_limit:
+        if len(window) >= (limit or self._rate_limit):  # //// Neoffice — `limit`: the memory bucket's own
             return False
         window.append(now)
         return True
@@ -869,7 +874,8 @@ class WebhookAdapter(BasePlatformAdapter):
             _rate_bucket = f"{route_name}::memory"
         # //// END Neoffice ////
         # Rate limiting (after auth)
-        if not self._record_rate_limit_hit(_rate_bucket, time.time()):
+        if not self._record_rate_limit_hit(  # //// Neoffice — the memory bucket has its own limit
+                _rate_bucket, time.time(), self._memory_rate_limit if _rate_bucket != route_name else None):
             return _json_error("Rate limit exceeded", 429)
         if payload is _UNPARSEABLE:
             return _json_error("Cannot parse body", 400)
