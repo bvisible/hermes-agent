@@ -825,13 +825,28 @@ def finalize_turn(
             finally:
                 _kb_conn.close()
             if _kb_row and _kb_row[0] == "running":
+                import json as _kb_json
+
                 from tools.kanban_tools import _handle_complete as _kb_handle_complete
-                _kb_handle_complete({"summary": _kb_answer[:4000]})
-                logger.info(
-                    "kanban auto-complete net: completed %s in code "
-                    "(worker answered but never called kanban_complete)",
-                    _kb_task_id,
-                )
+                _kb_done = _kb_handle_complete({"summary": _kb_answer[:4000]})
+                # A completion can be REFUSED (our compta evidence guard, among others): the
+                # card then stays running and the dispatcher respawns the task. Logging
+                # "completed" regardless hid three runs of the same loop on 2026-09-24.
+                try:
+                    _kb_refusal = (_kb_json.loads(_kb_done) or {}).get("error")
+                except (TypeError, ValueError, AttributeError):
+                    _kb_refusal = None
+                if _kb_refusal:
+                    logger.warning(
+                        "kanban auto-complete net: completion of %s REFUSED, the card stays "
+                        "running: %s", _kb_task_id, str(_kb_refusal)[:300],
+                    )
+                else:
+                    logger.info(
+                        "kanban auto-complete net: completed %s in code "
+                        "(worker answered but never called kanban_complete)",
+                        _kb_task_id,
+                    )
         except Exception as _kb_net_exc:  # noqa: BLE001
             logger.warning(
                 "kanban auto-complete net failed for %s: %s", _kb_task_id, _kb_net_exc
