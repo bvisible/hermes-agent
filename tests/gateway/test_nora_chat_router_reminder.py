@@ -181,3 +181,46 @@ def test_a_recurring_request_reads_the_answer_inside_frappes_envelope(monkeypatc
     decision = _route_recurrent("Relève mes mails tous les matins à 8h", "staff@example.test", _EXTRA)
 
     assert decision["routed"] is True and decision["task_id"] == "NST-1"
+
+
+# ── a recurring request at a cadence the scheduler cannot run ────────────────────────
+# Recovered to a pole as a one-shot, « Tous les 15 jours, relance les impayés » had the
+# compta worker check the unpaid invoices once, and never mention the cadence.
+
+from types import SimpleNamespace
+
+
+def _recurrent_llm(**_kw):
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="recurrent"))])
+
+
+def _route_recurrent_with(http, monkeypatch, message):
+    import urllib.request
+    from gateway.nora_chat_router import route_chat_message
+
+    monkeypatch.setattr(urllib.request, "urlopen", http)
+    return route_chat_message(
+        message=message, session_chat_id="webhook:nora_chat:test", conversation_id="conv-2",
+        thread_id=None, user_id="u", notifier_profile="default", idempotency_key="k2",
+        call_llm_fn=_recurrent_llm, main_runtime=None, deliver_extra=_EXTRA, chat_user="staff@example.test")
+
+
+def test_an_unsupported_cadence_goes_to_the_orchestrator_with_what_exists(monkeypatch):
+    http = _Http({"task_router.route_recurrent": {"message": {"ok": False, "error": "unsupported cadence",
+                                                              "reason": "unsupported_cadence"}},
+                  "fast_answer.answer_gateway": {"message": {}}})
+
+    decision = _route_recurrent_with(http, monkeypatch, "Tous les 15 jours, relance les impayés")
+
+    assert decision["routed"] is False and decision["category"] == "DIRECT"
+    assert "nora_schedule_task" in decision["agent_hint"] and "do NOT call kanban_create" in decision["agent_hint"]
+
+
+def test_a_message_with_no_cadence_is_still_recovered_to_a_pole(monkeypatch):
+    http = _Http({"task_router.route_recurrent": {"message": {"ok": False, "error": "no cadence",
+                                                              "reason": "no_cadence"}},
+                  "fast_answer.answer_gateway": {"message": {}}})
+
+    decision = _route_recurrent_with(http, monkeypatch, "ok crée un rappel pour les impayés")
+
+    assert not decision.get("agent_hint")

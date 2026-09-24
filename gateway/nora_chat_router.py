@@ -767,6 +767,20 @@ def _is_one_off_reminder(msg: str) -> bool:
 # instance NORA held the tool and still delegated the reminder to the support pole with
 # kanban_create, then answered « C'est noté » with nothing written (2026-09-24). The code
 # decided it is a reminder; the instruction says so at the decision point.
+# //// Neoffice — a recurring request at a cadence the scheduler cannot run (« tous les 15
+# //// jours »). Recovered to a pole as a one-shot, it ran the job once and never mentioned
+# //// the cadence (dev instance, 2026-09-24). The orchestrator explains and asks; it sees
+# //// the conversation, so « chaque lundi alors » that follows keeps the original request.
+_UNSUPPORTED_CADENCE_HINT = (
+    "[Route: the person asked for a RECURRING task at a cadence the scheduler cannot run "
+    "(every N days or weeks, several times a day, a day of the month other than the 1st, the "
+    "end of the month). Do NOT run the task now and do NOT call kanban_create. In their "
+    "language, say this cadence is not available, list what is — every hour, every day, "
+    "weekdays, given days of the week (e.g. every Monday and Thursday), the 1st of every "
+    "month — and ask which one they want. When they choose, call nora_schedule_task with that "
+    "cadence and their original instruction.]"
+)
+# //// END Neoffice ////
 _ONE_OFF_REMINDER_HINT = (
     "[Route: a ONE-OFF reminder for the person asking. Call nora_reminder_create yourself, now "
     "(when=\"YYYY-MM-DD HH:MM\" from the date and time given below, what=their words, user and "
@@ -1272,7 +1286,9 @@ def _route_recurrent(
         logger.info(
             "nora_chat_router: recurrent declined (%s) → agent fallback", (data or {}).get("error")
         )
-        return {"routed": False, "category": "recurrent", "ack": None, "task_id": None}
+        # //// Neoffice — `reason` tells an unsupported cadence from none, see the caller.
+        return {"routed": False, "category": "recurrent", "ack": None, "task_id": None,
+                "reason": (data or {}).get("reason") if isinstance(data, dict) else None}
     ack = data.get("ack") or "C'est noté, je programme ça."
     ack_delivered = _post_ack_to_callback(ack, deliver_extra)
     logger.info(
@@ -1641,7 +1657,14 @@ def route_chat_message(
         # quel rappel…"). Recover IN CODE: prior pole (conversation continuity) first,
         # else a keyword-rule pole; DIRECT only when neither applies (unchanged).
         if _rec.get("routed"):
+            note_nora_reply(conversation_id, _rec.get("ack") or "")
             return _rec
+        # //// Neoffice — an unsupported cadence is not a one-shot, see _UNSUPPORTED_CADENCE_HINT.
+        if _rec.get("reason") == "unsupported_cadence":
+            logger.info("nora_chat_router: recurrent cadence not runnable → orchestrator explains")
+            return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
+                    "agent_hint": _UNSUPPORTED_CADENCE_HINT}
+        # //// END Neoffice ////
         _prior_pole = (prior or {}).get("pole")
         _kw_pole = next((p for rx, p in _FAST_PATH_RULES if rx.search(message or "")), None)
         _recovered = _prior_pole or _kw_pole
