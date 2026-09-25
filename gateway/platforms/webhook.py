@@ -217,6 +217,32 @@ def _neoffice_inject_datetime_tokens(payload: dict, now=None) -> dict:
 # //// END Neoffice ////
 
 
+# //// Neoffice — the WhatsApp inbound route deduplicates on the PROVIDER's message id.
+# //// Our central WhatsApp router sends no delivery header, so the delivery id falls back
+# //// to this gateway's own millisecond clock: a router retry after a 5xx or a refused
+# //// connection (up to 3 attempts, 4 s apart, same payload bytes) arrives with a NEW id,
+# //// passes the duplicate check, and can start a second run and a second kanban task for
+# //// the same message. The router forwards the provider's id (the WhatsApp message key)
+# //// as `message_id`, built once outside its retry loop and omitted — never empty — when
+# //// missing. When present it becomes the delivery id, so the in-memory duplicate check
+# //// AND the kanban task's idempotency key recognise the retry, the latter even across a
+# //// gateway restart. Route-prefixed like upstream's derived ids (open PR #33384), so it
+# //// cannot collide with another route's ids. Absent or blank: unchanged behaviour.
+_NEOFFICE_PROVIDER_ID_ROUTES = frozenset({"whatsapp_inbox"})
+
+
+def _neoffice_provider_delivery_id(route_name: str, payload: Any, delivery_id: str) -> str:
+    """The delivery id to deduplicate on: the provider's message id on a route listed in
+    _NEOFFICE_PROVIDER_ID_ROUTES when the payload carries one, else ``delivery_id``."""
+    if route_name not in _NEOFFICE_PROVIDER_ID_ROUTES or not isinstance(payload, dict):
+        return delivery_id
+    message_id = payload.get("message_id")
+    if not isinstance(message_id, str) or not message_id.strip():
+        return delivery_id
+    return f"{route_name}:{message_id.strip()[:128]}"
+# //// END Neoffice ////
+
+
 class WebhookAdapter(BasePlatformAdapter):
     """Generic webhook receiver that triggers agent runs from HTTP POSTs."""
 
@@ -962,6 +988,9 @@ class WebhookAdapter(BasePlatformAdapter):
                 prompt = self._apply_skills(prompt, skills)
         delivery_id = headers.get("X-GitHub-Delivery", headers.get("svix-id", headers.get(
             "webhook-id", headers.get("X-Request-ID", str(int(time.time() * 1000))))))
+        # //// Neoffice — see _neoffice_provider_delivery_id (the router retries with the same message id).
+        delivery_id = _neoffice_provider_delivery_id(route_name, payload, delivery_id)
+        # //// END Neoffice ////
         now = time.time()  # idempotency: skip duplicate deliveries (webhook retries)
         if not self._record_delivery_id(delivery_id, now):
             logger.info("[webhook] Skipping duplicate delivery %s", delivery_id)
