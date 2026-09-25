@@ -65,6 +65,12 @@ def neoffice_kanban_no_progress_breaker(
     kanban_task = os.environ.get("HERMES_KANBAN_TASK")
     if not kanban_task:
         return _verdict("fallthrough")
+    # A fork turn (the post-task skill review, a side question) runs in the worker's process
+    # and inherits HERMES_KANBAN_TASK, but it is not the worker: on 2026-09-25 the breaker cut
+    # the first skill review that ever started, after three refused skill_manage calls it could
+    # have corrected (a 173-char description, then a YAML quote).
+    if getattr(agent, "_turn_origin", None):
+        return _verdict("fallthrough")
 
     # Defensive: the breaker state may not exist when reset_session_state was not
     # called on this worker path — without it the ``+= 1`` below raises and aborts
@@ -193,7 +199,7 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
 
     "" outside a kanban worker, or when the summary call fails or comes back empty."""
     task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
-    if not task_id:
+    if not task_id or getattr(agent, "_turn_origin", None):  # a fork turn's text reaches nobody
         return ""
     import re
     import uuid

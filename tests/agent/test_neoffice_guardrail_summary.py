@@ -77,3 +77,26 @@ def test_the_summary_is_asked_without_tools(monkeypatch):
     attempt = breaker._neoffice_toolless_summary_attempt(agent, [{"role": "user", "content": "q"}], "rid")
     assert attempt(0) == "Voici ce que j'ai trouvé."
     assert sent["model"] == "nora" and not {"tools", "tool_choice", "parallel_tool_calls"} & set(sent)
+
+
+# ── a fork turn (the post-task skill review) is not the worker ──────────────────────────────
+# 2026-09-25: the first skill review that ever started (#717) inherited HERMES_KANBAN_TASK, and
+# the worker's no-progress breaker cut it after three refused skill_manage calls.
+
+def test_the_breaker_leaves_a_review_alone(monkeypatch):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_test")
+    review = SimpleNamespace(_turn_origin="background_review")
+    verdict = breaker.neoffice_kanban_no_progress_breaker(
+        review, assistant_message=SimpleNamespace(tool_calls=None, content="…"), messages=[],
+        final_response="", _turn_exit_reason=None)
+    assert verdict.action == "fallthrough"
+    assert not hasattr(review, "_kanban_no_progress_streak"), "the worker's streak is not the review's"
+
+
+def test_a_review_stopped_by_the_guardrail_asks_no_summary(monkeypatch, summary_call):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_test")
+    summary_call["answers"] = ["should not be asked"]
+    review = SimpleNamespace(api_mode="chat_completions", _turn_origin="background_review")
+    messages = [{"role": "user", "content": "q"}]
+    assert breaker.neoffice_guardrail_summary(review, messages, DECISION) == ""
+    assert summary_call["calls"] == 0 and len(messages) == 1
