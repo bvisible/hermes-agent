@@ -53,6 +53,12 @@ class ToolSearchConfig:
     defer_tools: Optional[frozenset] = None
     # Tools that never defer (``tools.tool_search.eager``), e.g. a small MCP read tool used
     # daily (Notion fetch), so the model skips a tool_describe round trip.
+    # //// Neoffice — backport of upstream PR #114578 (open on 2026-09-25, salvages #110714):
+    # //// tools.tool_search.eager and mcp_servers.<name>.defer: false. Our pole workers spent
+    # //// 2 to 2.4 tool_search/tool_describe rounds (~5-7 s) before their first business tool
+    # //// on almost every task (osiris, 7 days to 2026-09-25); each pole now pins the tools it
+    # //// uses most. The code is upstream's verbatim: drop this marker (and the one on
+    # //// _eager_mcp_toolsets) when rebasing onto a tag that contains #114578.
     eager_tools: frozenset = frozenset()
 
     @property
@@ -132,6 +138,7 @@ def _config_from_loader(loader_name: str) -> ToolSearchConfig:
         return ToolSearchConfig.from_raw(None)
 
 
+# //// Neoffice — backport of upstream PR #114578 (see ToolSearchConfig.eager_tools).
 def _eager_mcp_toolsets(mcp_servers: Any) -> frozenset[str]:
     """Toolset names (``mcp-<server>``) of servers pinned inline with ``mcp_servers.<name>.defer: false``.
     Per-server granularity: a small, every-turn server stays in ``tools[]`` while a tool-heavy one keeps
