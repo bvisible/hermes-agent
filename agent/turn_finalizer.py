@@ -890,7 +890,12 @@ def finalize_turn(
     # ~30K tokens / event with no human-in-the-loop benefit. Best-effort; the review
     # clones the snapshot structurally so its sanitizers can't reach the live transcript.
     if (
-        final_response
+        # //// Neoffice — was `final_response`. A kanban worker that ends well calls
+        # //// kanban_complete and has NO final text, so no worker was ever reviewed (osiris,
+        # //// 2026-09-25: response_len=0 on every clean end). The review reads the transcript,
+        # //// not the final text, and the block above already kept only a card that ended well.
+        (final_response or _neoffice_worker_task)
+        # //// END Neoffice ////
         and not interrupted
         and not getattr(agent, "skip_background_review", False)
         and (_should_review_memory or _should_review_skills)

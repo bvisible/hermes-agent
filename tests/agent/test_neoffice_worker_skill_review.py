@@ -115,10 +115,10 @@ def _agent_with_review(seconds: float, finished: threading.Event, stop: threadin
     return agent
 
 
-def _finalize(agent, exit_reason: str) -> float:
+def _finalize(agent, exit_reason: str, final_response: str = "Compte 6400") -> float:
     started = time.monotonic()
     finalize_turn(
-        agent, final_response="Compte 6400", api_call_count=14, interrupted=False, failed=False,
+        agent, final_response=final_response, api_call_count=14, interrupted=False, failed=False,
         messages=[{"role": "assistant", "content": "Compte 6400"}], conversation_history=[],
         effective_task_id="worker", turn_id="worker-turn", user_message="work kanban task",
         original_user_message="work kanban task", _should_review_memory=False,
@@ -137,6 +137,19 @@ def test_a_worker_whose_card_is_done_waits_for_its_review(worker_card):
     agent._spawn_background_review.assert_called_once()
     assert agent._spawn_background_review.call_args.kwargs["review_skills"] is True
     assert finished.is_set(), "the worker returned while its skill review was still running"
+
+
+def test_a_worker_that_ends_on_kanban_complete_is_reviewed_too(worker_card):
+    """The normal ending: kanban_complete, and NO final text. The review required one, so a
+    worker that ended well was never reviewed (osiris, 2026-09-25: response_len=0)."""
+    _finish_card(worker_card, "done")
+    finished = threading.Event()
+    agent = _agent_with_review(0.2, finished)
+
+    _finalize(agent, "kanban_terminal_tool(status=done)", final_response="")
+
+    agent._spawn_background_review.assert_called_once()
+    assert finished.is_set()
 
 
 def test_the_wait_never_passes_its_budget(worker_card, monkeypatch):
