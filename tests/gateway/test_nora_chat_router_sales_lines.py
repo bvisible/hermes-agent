@@ -125,7 +125,7 @@ def test_the_prior_pole_still_wins_over_the_page():
 
 # //// Neoffice — changing a party's coordinates is ventes' (frappe_party_contact_update, 24.09).
 @pytest.mark.parametrize("message, expected", (
-    ("Change l'adresse e-mail de la Fleuriste des Alpes : c'est maintenant commandes@exemple.ch.", "ventes"),
+    ("Change l'adresse e-mail de la société Martin : c'est maintenant commandes@exemple.ch.", "ventes"),
     ("Modifie le téléphone de Dupont : 079 123 45 67", "ventes"),
     ("Mets à jour l'adresse du fournisseur Weber", "ventes"),
 ))

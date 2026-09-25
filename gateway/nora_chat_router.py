@@ -298,8 +298,13 @@ _CLASSIFIER_SYSTEM = (
     "lui seul tient les outils du chantier. Un devis pour un client SANS chantier reste "
     "à ventes.\n"
     # //// END Neoffice ////
+    # //// Neoffice — changing a client's or supplier's contact details is ventes' own tool
+    # //// (frappe_party_contact_update, 25.09); support has none. Said here so the classifier
+    # //// does not read « e-mail » as support's.
     "- ventes : devis, commandes clients, factures de vente, articles, stock, clients "
-    "(création/recherche), prix, réapprovisionnement — commandes FOURNISSEURS "
+    "et fournisseurs (création, recherche, et CHANGEMENT de leur e-mail, téléphone ou "
+    "adresse), prix, réapprovisionnement — commandes FOURNISSEURS "
+    # //// END Neoffice ////
     "incluses (« commander 15 unités », « passer commande au fournisseur »).\n"
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
@@ -474,7 +479,7 @@ _MEASUREMENT_RE = re.compile(
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
-    # //// (frappe_party_contact_update). « Change l'adresse e-mail de la Fleuriste des Alpes »
+    # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
     # //// reached support, which has no such tool: tool_search five times (bench, 24.09).
     # //// Not for an employee (rh keeps personnel records).
     (
@@ -484,6 +489,28 @@ _FAST_PATH_RULES = (
             r"[äa]ndere|aggiorna)\b.{0,40}?\b(?:e-?mail|adresse\s+e-?mail|courriel|t[ée]l[ée]phone|"
             r"num[ée]ro\s+de\s+(?:t[ée]l[ée]phone|portable|mobile)|mobile|natel|adresse|email|phone|address|"
             r"telefon|indirizzo)\b",
+            re.IGNORECASE,
+        ),
+        "ventes",
+    ),
+    # //// END Neoffice ////
+    # //// Neoffice — the same change told as a FACT, with no « change » verb (25.09):
+    # //// « Martin SA a une nouvelle adresse e-mail : … », « … a changé d'adresse e-mail »,
+    # //// « nouveau numéro de téléphone pour … », « … a déménagé : rue du Lac 12 ». The first
+    # //// two reached support through the e-mail rule below; the others fell to the
+    # //// classifier. Never when the message asks to SEND something (« écris un courriel à
+    # //// la nouvelle adresse de Martin SA » stays support), never for an employee (rh keeps
+    # //// personnel records), and « a déménagé » only in the third person: « nous avons
+    # //// déménagé » is the company itself, not a client.
+    (
+        re.compile(
+            r"^(?!.*\b(?:employ[ée]e?|collaborat\w*|salari[ée]e?|mitarbeiter\w*|dipendente)\b)"
+            r"(?!.*(?:\benvoi|\benvoy|\b[ée]cri[rstvez]|\br[ée]dig|\btransmet|\badresse-(?:lui|leur|moi)\b))"
+            r".*(?:\bnouve(?:lle|au|l)s?\s+(?:adresse(?:\s+e-?mail)?|e-?mail|courriel|"
+            r"num[ée]ro(?:\s+de\s+(?:t[ée]l[ée]phone|portable|mobile))?|t[ée]l[ée]phone|mobile|natel)\b"
+            r"|\ba\s+chang[ée]\s+d['’]\s*(?:adresse|e-?mail|num[ée]ro|t[ée]l[ée]phone)"
+            r"|\ba\s+d[ée]m[ée]nag[ée]\b"
+            r"|\bchangement\s+d['’]\s*(?:adresse|e-?mail|num[ée]ro))",
             re.IGNORECASE,
         ),
         "ventes",
@@ -580,7 +607,16 @@ _FAST_PATH_RULES = (
     # grep "//// Neoffice".
     (re.compile(
         r"(?=.*\b(?:(?:e-?)?mails?|courriels?|courrier\s+[ée]lectronique)\b)"
-        r"(?=.*(?:envoi|envoy|[ée]cri[rstvez]|r[ée]dig|transmet|transmettre|adress))",
+        # //// Neoffice — « adresse » the NOUN is not a send verb (25.09). A bare `adress`
+        # //// here matched « l'adresse e-mail », so « Martin SA a une nouvelle adresse
+        # //// e-mail » and « … a changé d'adresse e-mail » reached support, which holds no
+        # //// tool to change a contact. Only the verb's own forms count now: adresser,
+        # //// adressez…, « adresse-lui », « adresse un mail ».
+        r"(?=.*(?:envoi|envoy|[ée]cri[rstvez]|r[ée]dig|transmet|transmettre"
+        r"|\badress(?:er|ez|ons|ent|ée?s?)\b|\badresse-(?:lui|leur|moi|nous|les)\b"
+        r"|\badresse\s+(?:un|une|ce|cet|cette|le|la|les|mon|ma|mes|son|sa|ses|notre|votre|leur)\s+"
+        r"(?:e-?mails?|mails?|courriels?|messages?|lettres?)\b))",
+        # //// END Neoffice ////
         re.IGNORECASE,
     ), "support"),
     # //// END Neoffice ////
