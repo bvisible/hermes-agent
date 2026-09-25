@@ -473,6 +473,22 @@ _MEASUREMENT_RE = re.compile(
 
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
+    # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
+    # //// (frappe_party_contact_update). « Change l'adresse e-mail de la Fleuriste des Alpes »
+    # //// reached support, which has no such tool: tool_search five times (bench, 24.09).
+    # //// Not for an employee (rh keeps personnel records).
+    (
+        re.compile(
+            r"^(?!.*\b(?:employ[ée]e?|collaborat\w*|salari[ée]e?|mitarbeiter\w*|dipendente)\b)"
+            r".*\b(?:change[rz]?|modifie[rz]?|met[sz]?\s+[àa]\s+jour|corrige[rz]?|remplace[rz]?|update|"
+            r"[äa]ndere|aggiorna)\b.{0,40}?\b(?:e-?mail|adresse\s+e-?mail|courriel|t[ée]l[ée]phone|"
+            r"num[ée]ro\s+de\s+(?:t[ée]l[ée]phone|portable|mobile)|mobile|natel|adresse|email|phone|address|"
+            r"telefon|indirizzo)\b",
+            re.IGNORECASE,
+        ),
+        "ventes",
+    ),
+    # //// END Neoffice ////
     # //// Neoffice — MY pay is rh's, never a revenue question (capability bench, 24.09):
     # //// « Combien ai-je touché en août ? » from an employee reached compta, which called
     # //// the company's revenue summary five times. First person with touché/gagné/perçu
@@ -1144,6 +1160,22 @@ def _canned_smalltalk_reply(message: str, language: Optional[str]) -> Optional[s
 # //// END Neoffice ////
 
 
+# //// Neoffice — the pole of the document on screen, used ONLY when the classifier fails
+# //// and no earlier turn chose a pole. « Rajoute un siphon là-dessus » on a quotation got an
+# //// empty verdict, went to the orchestrator and ended in « service indisponible » after
+# //// 55 s (capability bench, 2026-09-24): the page said ventes all along.
+_DOCTYPE_POLES = {
+    "Quotation": "ventes", "Sales Order": "ventes", "Delivery Note": "ventes", "Customer": "ventes",
+    "Item": "ventes", "Lead": "ventes", "Opportunity": "ventes",
+    "Sales Invoice": "compta", "Purchase Invoice": "compta", "Payment Entry": "compta",
+    "Journal Entry": "compta", "Purchase Order": "compta", "Supplier": "compta", "Dunning": "compta",
+    "Employee": "rh", "Leave Application": "rh", "Expense Claim": "rh", "Salary Slip": "rh",
+    "Project": "projet", "Task": "projet", "Timesheet": "projet",
+    "Issue": "support", "HD Ticket": "support",
+}
+# //// END Neoffice ////
+
+
 def classify(
     message: str,
     *,
@@ -1152,6 +1184,7 @@ def classify(
     prior: Optional[dict] = None,
     timeout: float = 8.0,
     hint: Optional[str] = None,
+    page_doctype: Optional[str] = None,  # //// Neoffice — failure fallback, see _DOCTYPE_POLES
 ) -> str:
     """Return a pole in :data:`POLES`, or ``"DIRECT"``.
 
@@ -1235,6 +1268,13 @@ def classify(
                 exc,
             )
             return fallback
+        # //// Neoffice — no prior pole: the document on screen decides, see _DOCTYPE_POLES.
+        page_pole = _DOCTYPE_POLES.get(page_doctype or "")
+        if page_pole in POLES:
+            logger.warning("nora_chat_router: classifier failed, pole of the page's %s → %s: %s",
+                           page_doctype, page_pole, exc)
+            return page_pole
+        # //// END Neoffice ////
         logger.warning("nora_chat_router: classifier failed, falling back to DIRECT: %s", exc)
         return "DIRECT"
     # //// Neoffice — the verdict is logged (05.09): a job-page write went DIRECT with no
@@ -1304,7 +1344,12 @@ def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
     )
     try:
         with urllib.request.urlopen(req, timeout=8) as resp:
-            return 200 <= getattr(resp, "status", 0) < 300
+            status = getattr(resp, "status", 0)
+            # //// Neoffice — the thread each ack / fast answer went to (24.09: two replies
+            # //// delivered with a 200 never showed in the chat; only final replies named it).
+            logger.info("nora_chat_router: posted to cid=%s status=%s (%d chars)", cid, status, len(ack))
+            # //// END Neoffice ////
+            return 200 <= status < 300
     except Exception as exc:  # noqa: BLE001
         logger.warning("nora_chat_router: ack callback POST failed: %s", exc)
         return False
@@ -1623,6 +1668,8 @@ def route_chat_message(
             prior=prior,
             timeout=classify_timeout,
             hint=(page_context or {}).get("pole_hint") if isinstance(page_context, dict) else None,  # //// Neoffice — see classify ////
+            page_doctype=((page_context or {}).get("doctype") if isinstance(page_context, dict)  # //// Neoffice
+                          and (page_context or {}).get("name") else None),
         )
     # //// Neoffice — on a job page, a business request is the job's (05.09). « Ajoute 2
     # heures de pose sur ce chantier » classified as RH (« heures ») and the RH worker,

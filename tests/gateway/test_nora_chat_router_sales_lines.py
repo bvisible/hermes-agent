@@ -108,3 +108,38 @@ def test_two_empty_verdicts_keep_the_prior_pole():
 def test_two_empty_verdicts_without_prior_go_direct():
     llm, _calls = _llm_answers("", "")
     assert classify("Et celui-là ?", call_llm_fn=llm, main_runtime=None) == "DIRECT"
+
+
+# //// Neoffice — a failed classification on a document page takes the page's pole (24.09).
+@pytest.mark.parametrize("doctype, pole", (("Quotation", "ventes"), ("Sales Invoice", "compta"), ("Employee", "rh")))
+def test_a_failed_classification_takes_the_pole_of_the_page(doctype, pole):
+    llm, _calls = _llm_answers("", "")
+    assert classify("Rajoute un siphon là-dessus.", call_llm_fn=llm, main_runtime=None, page_doctype=doctype) == pole
+
+
+def test_the_prior_pole_still_wins_over_the_page():
+    llm, _calls = _llm_answers("", "")
+    assert classify("Et celui-là ?", call_llm_fn=llm, main_runtime=None, prior={"pole": "compta", "msg": "x"},
+                    page_doctype="Quotation") == "compta"
+
+
+# //// Neoffice — changing a party's coordinates is ventes' (frappe_party_contact_update, 24.09).
+@pytest.mark.parametrize("message, expected", (
+    ("Change l'adresse e-mail de la Fleuriste des Alpes : c'est maintenant commandes@exemple.ch.", "ventes"),
+    ("Modifie le téléphone de Dupont : 079 123 45 67", "ventes"),
+    ("Mets à jour l'adresse du fournisseur Weber", "ventes"),
+))
+def test_changing_a_partys_coordinates_goes_to_ventes(message, expected):
+    assert _fast_path(message, prior=None) == expected
+
+
+def test_an_employees_coordinates_are_not_ventes():
+    """Personnel records stay rh's."""
+    assert _fast_path("Modifie l'adresse e-mail de Marc, notre employé", prior=None) != "ventes"
+
+
+def test_sending_an_email_is_not_a_change_of_coordinates():
+    from gateway.nora_chat_router import _FAST_PATH_RULES
+
+    contact_rule = next(rx for rx, pole in _FAST_PATH_RULES if pole == "ventes" and "courriel" in rx.pattern)
+    assert not contact_rule.search("Envoie un e-mail à Dupont pour le devis")
