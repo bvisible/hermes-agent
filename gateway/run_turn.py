@@ -3892,6 +3892,12 @@ class GatewayTurnMixin:
         try:
             await self._refresh_agent_cache_message_count(session_key, session_id)
 
+            # //// Neoffice — a queued follow-up runs in the PREVIOUS turn's task and never reaches
+            # //// _hm_admit_event: its memory switch is its own event's, restored once it is done.
+            # //// See gateway/neoffice_turn_memory.py.
+            from gateway.neoffice_turn_memory import bind_turn_memory, unbind_turn_memory
+            _neoffice_memory_token = bind_turn_memory(pending_event)
+            # //// END Neoffice ////
             followup_result = await self._run_agent(
                 message=next_message, context_prompt=turn_ctx.context_prompt, history=updated_history,
                 source=next_source, session_id=session_id, session_key=next_session_key,
@@ -3910,6 +3916,9 @@ class GatewayTurnMixin:
             await _run_followup_processing_hook(
                 _hook_adapter, pending_event, "on_processing_complete", ProcessingOutcome.FAILURE)
             raise
+        # //// Neoffice — the outer turn's memory switch again (see the bind above).
+        unbind_turn_memory(_neoffice_memory_token)
+        # //// END Neoffice ////
         await _run_followup_processing_hook(
             _hook_adapter, pending_event, "on_processing_complete", ProcessingOutcome.SUCCESS)
         merged = _preserve_queued_followup_history_offset(result, followup_result)
