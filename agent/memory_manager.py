@@ -31,6 +31,32 @@ _LEGACY_PRE_COMPRESS_API_VERSION = 1
 _SYNC_DRAIN_TIMEOUT_S = 5.0
 _EXTERNAL_PREFETCH_TIMEOUT_S = 8.0
 
+# //// Neoffice — a turn that must leave no trace in memory. A monitoring probe reaches the
+# //// agent through the real chat route (an hourly « answer with one word » health check);
+# //// its prompt was captured every hour as the probing account's own memory and came back
+# //// in that account's recall. The gateway clears this switch for such a turn, per
+# //// inbound event (gateway/neoffice_turn_memory.py); a ContextVar because the turn runs
+# //// in the executor thread the gateway starts with copy_context(). Default: memory on.
+_TURN_MEMORY_ENABLED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "HERMES_TURN_MEMORY_ENABLED", default=True
+)
+
+
+def turn_memory_enabled() -> bool:
+    """False for a turn that must leave no trace in memory: nothing synced, no recall queued."""
+    return bool(_TURN_MEMORY_ENABLED.get())
+
+
+def set_turn_memory_enabled(enabled: bool) -> contextvars.Token:
+    """Set the switch for the current context; returns the token for ``reset_turn_memory_enabled``."""
+    return _TURN_MEMORY_ENABLED.set(bool(enabled))
+
+
+def reset_turn_memory_enabled(token: contextvars.Token) -> None:
+    """Restore the switch as it was before ``set_turn_memory_enabled`` returned ``token``."""
+    _TURN_MEMORY_ENABLED.reset(token)
+# //// END Neoffice ////
+
 
 # -- Signature introspection (providers are duck-typed; call shapes vary) -----
 
@@ -586,6 +612,10 @@ class MemoryManager:
 
     def queue_prefetch_all(self, query: str, *, session_id: str = "") -> None:
         """Queue background prefetch on all providers for the next turn (see ``sync_all``)."""
+        # //// Neoffice — no recall keyed on a turn that leaves no trace (turn_memory_enabled).
+        if not turn_memory_enabled():
+            return
+        # //// END Neoffice ////
         providers = list(self._providers)
         clean_query = self._strip_skill_scaffolding(query) if providers else None
         if not clean_query:
@@ -610,6 +640,11 @@ class MemoryManager:
         open after the user saw the response. The single worker also serializes writes (turn N before N+1).
         ``turn_author`` reaches only providers whose ``sync_turn`` accepts it.
         """
+        # //// Neoffice — a monitoring turn writes nothing (turn_memory_enabled).
+        if not turn_memory_enabled():
+            logger.debug("sync_all skipped: this turn leaves no trace in memory")
+            return
+        # //// END Neoffice ////
         providers = list(self._providers)
         clean_user_content = self._strip_skill_scaffolding(user_content) if providers else None
         if not clean_user_content:

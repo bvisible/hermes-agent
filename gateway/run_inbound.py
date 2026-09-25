@@ -176,6 +176,15 @@ class GatewayInboundMixin:
             reset_session_vars()
         except Exception:
             logger.debug("reset_session_vars failed at handler entry", exc_info=True)
+        # //// Neoffice — the memory switch belongs to THIS event, like the identity just reset:
+        # //// a monitoring probe (payload context.channel == "monitor") leaves no trace in
+        # //// memory, any other turn writes as before. See gateway/neoffice_turn_memory.py.
+        try:
+            from gateway.neoffice_turn_memory import bind_turn_memory
+            bind_turn_memory(event)
+        except Exception:
+            logger.debug("bind_turn_memory failed at handler entry", exc_info=True)
+        # //// END Neoffice ////
 
         # Identity FIRST. Most adapters canonicalize at their own ingress; internal/voice paths
         # construct SessionSource directly, so this is the shared fail-closed gate. Strict boolean
