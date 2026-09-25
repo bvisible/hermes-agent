@@ -158,29 +158,75 @@ def neoffice_kanban_no_progress_breaker(
 # //// same empty listing again and again. The guardrail stopped it, rightly, and its canned
 # //// stop message reached the person as « je n'ai pas réussi » with four answers of five in
 # //// hand. A kanban worker's final text is what the person reads (the auto-complete net
-# //// completes the card with it), so the model is asked once, without tools, for what it
-# //// found and what it could not get: the summary call upstream makes at the iteration
-# //// limit (chat_completion_helpers.handle_max_iterations). On any failure the canned
-# //// message stands.
+# //// completes the card with it), so the model is asked once more for what it found and what
+# //// it could not get: the summary call upstream makes at the iteration limit
+# //// (chat_completion_helpers.handle_max_iterations). On any failure the canned message stands.
+# ////
+# //// The answer is read where a worker puts it. Upstream reads the text content only and
+# //// discards tool calls; our workers are told by their system prompt to end with
+# //// kanban_complete or kanban_block, and they do even when asked for plain text. Measured on
+# //// a ventes stop (2026-09-25, 10:13): with the tools declared the model answered 3/3 with
+# //// kanban_block(reason="…the right question for the user…"), content empty; without the
+# //// tools it wrote the same call as text and the vLLM stack returned content=null, 3/3, so
+# //// the summary came back empty and the person heard the generic failure. The call keeps the
+# //// tools (the cached prefix: ~2 s instead of a 14 s re-prefill) and the summary of a
+# //// kanban_complete or the reason of a kanban_block is the answer, also inside the
+# //// tool_search bridge (tool_call with calls=[...]).
 NEOFFICE_GUARDRAIL_SUMMARY_REQUEST = (
-    "The system stopped the tool {tool}: it kept returning the same result. Do not call any "
-    "tool. Answer the user now, in their language, with what you have ALREADY found, and say "
-    "plainly which part of the request you could not get."
+    "The system stopped the tool {tool}: it kept returning the same result. Do not call it "
+    "again, nor any other tool that looks something up. Finish now: call kanban_complete with "
+    "your answer to the user as the summary, in their language, from what you have ALREADY "
+    "found, saying plainly which part of the request you could not get. If you need something "
+    "from the user to go on, call kanban_block with your question as the reason instead."
 )
+NEOFFICE_TERMINAL_TEXT_KEYS = {"kanban_complete": ("summary", "result"), "kanban_block": ("reason",)}
 
 
-def _neoffice_toolless_summary_attempt(agent: Any, api_messages: list, request_id: str):
-    """The chat-completions summary attempt WITHOUT the tool declarations.
+def _neoffice_json_args(raw: Any) -> dict:
+    import json
 
-    Upstream keeps them in its summary call for the KV-cache prefix. On 2026-09-25 our model
-    answered the guardrail summary with tool calls, twice, which upstream discards, and the
-    canned stop message came back. A stop is rare: one re-prefill costs less than a lost answer."""
+    if isinstance(raw, dict):
+        return raw
+    try:
+        value = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+    except ValueError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def neoffice_terminal_call_text(tool_calls: Any) -> str:
+    """The user-facing text of a kanban_complete / kanban_block call, "" when there is none.
+
+    A call may come wrapped in the tool_search bridge: tool_call with calls=[{name, arguments}]."""
+    calls = []
+    for tc in tool_calls or ():
+        fn = getattr(tc, "function", None) or tc
+        name = str(getattr(fn, "name", "") or "")
+        args = _neoffice_json_args(getattr(fn, "arguments", None))
+        if name == "tool_call":
+            for inner in args.get("calls") or ():
+                if isinstance(inner, dict):
+                    calls.append((str(inner.get("name") or ""), _neoffice_json_args(inner.get("arguments"))))
+        else:
+            calls.append((name, args))
+    for name, args in calls:
+        for key in NEOFFICE_TERMINAL_TEXT_KEYS.get(name, ()):
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
+
+
+def _neoffice_summary_attempt(agent: Any, api_messages: list, request_id: str, seen: list):
+    """Upstream's chat-completions summary call (tools kept), read for a terminal kanban call.
+
+    ``seen`` collects what each empty attempt returned, for the warning."""
+    import re
+
     from agent import chat_completion_helpers as _cch
 
     kwargs = agent._build_api_kwargs(api_messages)
     _cch.sanitize_outbound_kwargs(agent, kwargs)
-    for key in ("tools", "tool_choice", "parallel_tool_calls"):
-        kwargs.pop(key, None)
 
     def _attempt(retry_count: int) -> str:
         client = agent._ensure_primary_openai_client(reason="neoffice_guardrail_summary")
@@ -189,7 +235,18 @@ def _neoffice_toolless_summary_attempt(agent: Any, api_messages: list, request_i
             lambda request: client.chat.completions.create(**_cch.bypass_chat_sdk_request_transform(request, client)),
             retry_count=retry_count,
         )
-        return _cch._summary_text(agent, response)
+        if _cch.is_router_timeout_shim(response):
+            seen.append("router timeout shim")
+            return ""
+        normalized = agent._get_transport().normalize_response(response)
+        text = neoffice_terminal_call_text(normalized.tool_calls)
+        if not text:
+            text = re.sub(r"<think>.*?</think>\s*", "", normalized.content or "", flags=re.DOTALL).strip()
+        if not text:
+            names = [str(getattr(getattr(tc, "function", None) or tc, "name", "") or "?")
+                     for tc in (normalized.tool_calls or ())]
+            seen.append(f"tool calls {names}" if names else f"no text (finish={normalized.finish_reason})")
+        return text
 
     return _attempt
 
@@ -201,7 +258,6 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
     task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
     if not task_id or getattr(agent, "_turn_origin", None):  # a fork turn's text reaches nobody
         return ""
-    import re
     import uuid
     from contextlib import suppress
 
@@ -212,22 +268,22 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
     request_id = f"neoffice-guardrail-summary:{uuid.uuid4()}"
     outcome = "failed"
     tool = getattr(decision, "tool_name", "") or "a tool"
+    seen: list = []
     append_message(messages, {"role": "user", "content": NEOFFICE_GUARDRAIL_SUMMARY_REQUEST.format(tool=tool)})
     try:
         api_messages = _cch._iteration_summary_api_messages(agent, messages)
-        build = _cch._SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode) or _neoffice_toolless_summary_attempt
-        attempt = build(agent, api_messages, request_id)
+        build = _cch._SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode)  # other transports: upstream's text read
+        attempt = build(agent, api_messages, request_id) if build else _neoffice_summary_attempt(
+            agent, api_messages, request_id, seen)
         for retry_count in (0, 1):
-            text = attempt(retry_count)
-            if not text:
-                continue
-            text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+            text = (attempt(retry_count) or "").strip()
             if text:
                 outcome = "success"
                 logger.info("kanban worker %s: guardrail stop on %s answered with what it found (%d chars)",
                             task_id, tool, len(text))
                 return text
-            break
+        logger.warning("kanban worker %s: guardrail summary on %s came back empty (%s)",
+                       task_id, tool, "; ".join(seen) or "empty text")
     except Exception:  # noqa: BLE001 — the canned stop message still ends the turn
         logger.warning("kanban worker %s: guardrail summary failed", task_id, exc_info=True)
     finally:
