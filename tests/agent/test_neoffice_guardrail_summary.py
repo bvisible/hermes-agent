@@ -190,3 +190,52 @@ def test_a_review_stopped_by_the_guardrail_asks_no_summary(monkeypatch, summary_
     messages = [{"role": "user", "content": "q"}]
     assert breaker.neoffice_guardrail_summary(review, messages, DECISION) == ""
     assert summary_call["calls"] == 0 and len(messages) == 1
+# ── upstream's iteration-limit summary reads the same terminal calls ────────────────────────
+# 2026-09-19..24: 19 worker cards on osiris ended on "I reached the iteration limit and couldn't
+# generate a summary." — the model had answered with kanban_complete, which upstream discarded.
+
+@pytest.fixture
+def upstream_attempt(monkeypatch):
+    """Drive upstream's _chat_summary_attempt (the handle_max_iterations path) with one response."""
+    state = {"response": None}
+    agent = SimpleNamespace(
+        api_mode="chat_completions",
+        _build_api_kwargs=lambda msgs: {"model": "nora", "messages": msgs, "tools": [{"type": "function"}]},
+        _ensure_primary_openai_client=lambda reason: SimpleNamespace(),
+        _get_transport=lambda: SimpleNamespace(normalize_response=lambda raw, **kw: state["response"]),
+    )
+    monkeypatch.setattr(cch, "sanitize_outbound_kwargs", lambda agent, kwargs: None)
+    monkeypatch.setattr(cch, "_managed_summary_call", lambda agent, request_id, request, callback, retry_count: "raw")
+    monkeypatch.setattr(cch, "is_router_timeout_shim", lambda raw: False)
+    state["agent"] = agent
+    state["attempt"] = lambda: cch._chat_summary_attempt(agent, [{"role": "user", "content": "q"}], "rid")(0)
+    return state
+
+
+def test_the_iteration_limit_summary_keeps_a_workers_kanban_complete(monkeypatch, upstream_attempt):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_test")
+    upstream_attempt["response"] = _normalized(
+        tool_calls=[_call("kanban_complete", summary="Compte 6400 pour l'électricité.")], finish="tool_calls")
+    assert upstream_attempt["attempt"]() == "Compte 6400 pour l'électricité."
+
+
+def test_outside_a_worker_upstream_still_discards_tool_calls(monkeypatch, upstream_attempt, caplog):
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    upstream_attempt["response"] = _normalized(tool_calls=[_call("kanban_complete", summary="x")])
+    with caplog.at_level(logging.WARNING, logger=cch.logger.name):
+        assert upstream_attempt["attempt"]() == ""
+    assert "emitted tool calls" in caplog.text
+
+
+def test_a_fork_turn_keeps_upstreams_read(monkeypatch, upstream_attempt):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_test")
+    upstream_attempt["agent"]._turn_origin = "background_review"
+    upstream_attempt["response"] = _normalized(tool_calls=[_call("kanban_block", reason="?")])
+    assert upstream_attempt["attempt"]() == ""
+
+
+def test_a_workers_lookup_call_is_still_discarded(monkeypatch, upstream_attempt):
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_test")
+    upstream_attempt["response"] = _normalized(
+        content="", tool_calls=[_call("mcp__neoffice_compta__list_documents", doctype="Journal Entry")])
+    assert upstream_attempt["attempt"]() == ""

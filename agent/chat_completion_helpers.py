@@ -2224,6 +2224,16 @@ def _summary_text(agent, response, **normalize_kwargs) -> str:
         logger.warning("Iteration summary returned a router timeout shim; retrying")
         return ""
     normalized = agent._get_transport().normalize_response(response, **normalize_kwargs)
+    # //// Neoffice — a kanban worker writes its final answer as kanban_complete / kanban_block,
+    # //// also when asked for plain text, and the discard below threw it away: 19 cards on
+    # //// osiris (2026-09-19..24) ended on "I reached the iteration limit and couldn't generate
+    # //// a summary." The text of that terminal call is the summary (workers only, not fork turns).
+    from agent.neoffice_kanban_breaker import neoffice_worker_answer_from_calls
+
+    worker_answer = neoffice_worker_answer_from_calls(agent, normalized.tool_calls)
+    if worker_answer:
+        return worker_answer
+    # //// END Neoffice ////
     if normalized.tool_calls:
         # No summary path executes tool calls; log so a tool-only response that falls into the
         # empty-summary retry is diagnosable.

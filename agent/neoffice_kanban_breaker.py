@@ -217,6 +217,21 @@ def neoffice_terminal_call_text(tool_calls: Any) -> str:
     return ""
 
 
+def neoffice_worker_answer_from_calls(agent: Any, tool_calls: Any) -> str:
+    """A kanban worker's answer written as its terminal call, for upstream's summary read.
+
+    Upstream's iteration-limit summary reads the text content only and discards tool calls;
+    our workers answer it with kanban_complete / kanban_block, so 19 cards on osiris
+    (2026-09-19..24: 16 compta, 2 support, 1 rh) ended on "I reached the iteration limit and
+    couldn't generate a summary." with the answer written and thrown away. "" outside a
+    kanban worker and in a fork turn (the skill review), where upstream's read stands."""
+    if not tool_calls or not (os.environ.get("HERMES_KANBAN_TASK") or "").strip():
+        return ""
+    if getattr(agent, "_turn_origin", None):
+        return ""
+    return neoffice_terminal_call_text(tool_calls)
+
+
 def _neoffice_summary_attempt(agent: Any, api_messages: list, request_id: str, seen: list):
     """Upstream's chat-completions summary call (tools kept), read for a terminal kanban call.
 
