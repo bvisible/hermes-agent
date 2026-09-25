@@ -287,7 +287,16 @@ async def _paginate_full_list(list_method, items_attr: str, server_name: str,
             else:
                 result = await list_method(cursor=cursor)
         if cache_meta_out is not None and not items:
+            # //// Neoffice — keep only the hints the server SENT. The MCP SDK's ListToolsResult
+            # //// defaults ttl_ms to 0 when a server says nothing, and a 0 TTL expired the schema
+            # //// cache entry the moment it was written: no `lazy: true` server ever started lazily
+            # //// (osiris, 2026-09-25, both our servers). `model_fields_set` names what the payload
+            # //// carried; an object without it (older SDK, mocks) keeps upstream's reading.
+            _sent = getattr(result, "model_fields_set", None)
+            # //// END Neoffice ////
             for key, snake, camel in (("ttl_ms", "ttl_ms", "ttlMs"), ("cache_scope", "cache_scope", "cacheScope")):
+                if isinstance(_sent, (set, frozenset)) and snake not in _sent and camel not in _sent:  # //// Neoffice
+                    continue
                 hint = mcp_field(result, snake, camel)
                 if hint is not None:
                     cache_meta_out[key] = hint
