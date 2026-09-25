@@ -1621,6 +1621,28 @@ def quantity_change_hint(message: str) -> Optional[str]:
 # //// END Neoffice ////
 
 
+# //// Neoffice — a question asked ALOUD is answered aloud (NORA Live, #759). The voice
+# //// clients (the NORA Live page and the quick chat's live widget) read the worker's reply
+# //// through speech synthesis and keep only its prose sentences: a table or a list is shown,
+# //// never spoken. A reply that opens on a table or a list therefore leaves nothing, or only
+# //// a preamble, to say before the answer. « nora-live-widget » is the widget's own tag when
+# //// its page names none; a message TYPED on the NORA Live page carries « nora-console » and
+# //// keeps the usual form.
+VOICE_SOURCES = frozenset({"nora-console-voice", "nora-quick-voice", "nora-live-widget"})
+VOICE_ANSWER_HINT = (
+    "[The question was asked aloud and the answer will be read by speech synthesis. Start with "
+    "the answer itself in one or two short sentences (the figure, the name, the result), with no "
+    "table, list or markdown before it. Details may follow after those sentences.]"
+)
+
+
+def voice_answer_hint(page_context: Optional[dict]) -> Optional[str]:
+    """VOICE_ANSWER_HINT when the turn comes from a voice client, else None."""
+    pc = page_context if isinstance(page_context, dict) else {}
+    return VOICE_ANSWER_HINT if str(pc.get("source") or "").strip() in VOICE_SOURCES else None
+# //// END Neoffice ////
+
+
 def _page_project(page_context: Optional[dict]) -> Optional[str]:
     pc = page_context if isinstance(page_context, dict) else {}
     job = pc.get("job") if isinstance(pc.get("job"), dict) else {}
@@ -2089,6 +2111,11 @@ def route_chat_message(
                 "ask the user which partner to use (kanban_block kind=needs_input) "
                 "and STOP.]"
             )
+            # //// END Neoffice ////
+            # //// Neoffice — asked aloud, see voice_answer_hint. At the back of the body with the
+            # //// language directive: both say how to reply, not what to do.
+            if _voice := voice_answer_hint(page_context):
+                _body = f"{_body}\n\n{_voice}"
             # //// END Neoffice ////
             # //// Neoffice — stable worker cwd (re-ported from fork commit c68c362e6 after
             # taking the richer osiris-poc router). The dispatcher runs the worker with
