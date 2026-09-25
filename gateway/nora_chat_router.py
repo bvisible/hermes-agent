@@ -1570,6 +1570,57 @@ def unnamed_document_hint(message: str, page_context: Optional[dict], film: list
 # //// END Neoffice ////
 
 
+# //// Neoffice — « passe les mitigeurs à quatre pièces » is a QUANTITY. A ventes worker read
+# //// « mitigeur 4 pièces » as an article's name: it had the quotation's line in front of it,
+# //// searched articles « quatre pieces », « mitigeur lavabo 4 pièces »… until the loop guard,
+# //// and answered that it could not (capability bench, 2026-09-24 23:49). Only a count WITH
+# //// its unit word, in a request that changes something: « mets le prix à 95 », « 5 % de
+# //// remise » and « commande 4 pièces » stay untouched.
+_NUMBER_WORDS = {
+    "un": 1, "une": 1, "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "six": 6, "sept": 7,
+    "huit": 8, "neuf": 9, "dix": 10, "onze": 11, "douze": 12, "quinze": 15, "vingt": 20,
+    "ein": 1, "eine": 1, "einen": 1, "zwei": 2, "drei": 3, "vier": 4, "fünf": 5, "sechs": 6,
+    "sieben": 7, "acht": 8, "neun": 9, "zehn": 10, "zwölf": 12, "zwanzig": 20,
+    "uno": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sette": 7, "otto": 8,
+    "nove": 9, "dieci": 10, "venti": 20,
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "twelve": 12, "twenty": 20,
+}
+_COUNT = r"(?P<n>\d+(?:[.,]\d+)?|" + "|".join(sorted(_NUMBER_WORDS, key=len, reverse=True)) + r")"
+_QTY_UNIT = r"(?:pi[eè]ces?|pces?|pcs|unit[ée]s|unit[ée]|exemplaires?|st(?:ü|ue)ck|stk|pezz[io]|unit[àa]|pieces?|units?)"
+_QTY_COUNT_RE = re.compile(rf"(?i)\b{_COUNT}\s+{_QTY_UNIT}\b")
+# « la quantité des mitigeurs à 4 »: the count follows « à / auf / to », never « d'une ligne ».
+_QTY_WORD_RE = re.compile(
+    rf"(?i)\b(?:quantit[ée]|qt[ée]|menge|anzahl|quantit[àa]|quantity|qty)\b[^\d\n]{{0,40}}?"
+    rf"(?:\s|^)(?:à|a|auf|su|to|=|:)\s*{_COUNT}\b"
+)
+_QTY_EDIT_RE = re.compile(
+    r"(?i)\b(?:pass(?:e|er|ez)|met(?:s|tre|tez)|chang(?:e|er|ez)|modifi(?:e|er|ez)|augment(?:e|er|ez)|"
+    r"diminu(?:e|er|ez)|r[ée]dui(?:s|re|sez)|port(?:e|er|ez)|ajust(?:e|er|ez)|corrig(?:e|er|ez)|"
+    r"au lieu d|plut[ôo]t que|[äa]nder\w*|setz\w*|erh[öo]h\w*|reduzier\w*|statt|anstatt|cambi\w*|"
+    r"modific\w*|aument\w*|ridu\w*|mett\w*|port[ai]\w*|invece di|set|increase\w*|reduce\w*|instead of)\b"
+)
+
+
+def quantity_change_hint(message: str) -> Optional[str]:
+    """A hint that « à quatre pièces » is a quantity, when a request changes a count of articles."""
+    text = str(message or "")
+    if not _QTY_EDIT_RE.search(text):
+        return None
+    m = _QTY_COUNT_RE.search(text) or _QTY_WORD_RE.search(text)
+    if not m:
+        return None
+    raw = m.group("n")
+    n = _NUMBER_WORDS.get(raw.lower(), raw)
+    return (
+        f"[« {m.group(0).strip()} » is a QUANTITY ({n}) of an article, not part of the article's "
+        "name: never search for an article whose name contains the number. On a document that "
+        f"already has that article, change the quantity of its line (frappe_draft_line "
+        f"action=update, qty={n}).]"
+    )
+# //// END Neoffice ////
+
+
 def _page_project(page_context: Optional[dict]) -> Optional[str]:
     pc = page_context if isinstance(page_context, dict) else {}
     job = pc.get("job") if isinstance(pc.get("job"), dict) else {}
@@ -2009,6 +2060,9 @@ def route_chat_message(
             # //// Neoffice — « ce produit » that nothing names, see unnamed_document_hint.
             elif _unnamed := unnamed_document_hint(message, page_context, _film_prev):
                 _body = _unnamed + "\n\n" + _body
+            # //// Neoffice — « à quatre pièces » is a quantity, see quantity_change_hint.
+            if _qty_hint := quantity_change_hint(message):
+                _body = _qty_hint + "\n\n" + _body
             # //// END Neoffice ////
             # //// Neoffice — tell the specialist worker which language to answer in (the
             # user's). ALWAYS carry it, FRENCH INCLUDED: the worker SOUL only "leans" FR, and a
