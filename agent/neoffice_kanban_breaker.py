@@ -163,6 +163,31 @@ NEOFFICE_GUARDRAIL_SUMMARY_REQUEST = (
 )
 
 
+def _neoffice_toolless_summary_attempt(agent: Any, api_messages: list, request_id: str):
+    """The chat-completions summary attempt WITHOUT the tool declarations.
+
+    Upstream keeps them in its summary call for the KV-cache prefix. On 2026-09-25 our model
+    answered the guardrail summary with tool calls, twice, which upstream discards, and the
+    canned stop message came back. A stop is rare: one re-prefill costs less than a lost answer."""
+    from agent import chat_completion_helpers as _cch
+
+    kwargs = agent._build_api_kwargs(api_messages)
+    _cch.sanitize_outbound_kwargs(agent, kwargs)
+    for key in ("tools", "tool_choice", "parallel_tool_calls"):
+        kwargs.pop(key, None)
+
+    def _attempt(retry_count: int) -> str:
+        client = agent._ensure_primary_openai_client(reason="neoffice_guardrail_summary")
+        response = _cch._managed_summary_call(
+            agent, request_id, kwargs,
+            lambda request: client.chat.completions.create(**_cch.bypass_chat_sdk_request_transform(request, client)),
+            retry_count=retry_count,
+        )
+        return _cch._summary_text(agent, response)
+
+    return _attempt
+
+
 def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str:
     """The worker's answer from what it found after a guardrail stop.
 
@@ -184,7 +209,7 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
     append_message(messages, {"role": "user", "content": NEOFFICE_GUARDRAIL_SUMMARY_REQUEST.format(tool=tool)})
     try:
         api_messages = _cch._iteration_summary_api_messages(agent, messages)
-        build = _cch._SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode, _cch._chat_summary_attempt)
+        build = _cch._SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode) or _neoffice_toolless_summary_attempt
         attempt = build(agent, api_messages, request_id)
         for retry_count in (0, 1):
             text = attempt(retry_count)

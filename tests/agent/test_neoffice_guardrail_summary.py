@@ -28,7 +28,7 @@ def summary_call(monkeypatch):
         return attempt
 
     monkeypatch.setattr(cch, "_iteration_summary_api_messages", lambda agent, messages: list(messages))
-    monkeypatch.setattr(cch, "_chat_summary_attempt", build)
+    monkeypatch.setattr(breaker, "_neoffice_toolless_summary_attempt", build)
     monkeypatch.setattr(relay_llm, "complete_logical_call", lambda *a, **kw: None)
     return state
 
@@ -59,3 +59,21 @@ def test_no_summary_leaves_the_canned_message(monkeypatch, summary_call, answers
     monkeypatch.setenv("HERMES_KANBAN_TASK", "t_test")
     summary_call["answers"] = list(answers)
     assert breaker.neoffice_guardrail_summary(_agent(), [{"role": "user", "content": "q"}], DECISION) == ""
+
+
+def test_the_summary_is_asked_without_tools(monkeypatch):
+    """With the tools declared, our model answered the summary with tool calls, twice (2026-09-25)."""
+    sent = {}
+    agent = SimpleNamespace(
+        api_mode="chat_completions",
+        _build_api_kwargs=lambda msgs: {"model": "nora", "messages": msgs, "tools": [{"type": "function"}],
+                                        "tool_choice": "auto", "parallel_tool_calls": True},
+        _ensure_primary_openai_client=lambda reason: SimpleNamespace(),
+    )
+    monkeypatch.setattr(cch, "sanitize_outbound_kwargs", lambda agent, kwargs: None)
+    monkeypatch.setattr(cch, "_managed_summary_call",
+                        lambda agent, request_id, request, callback, retry_count: sent.update(request) or "response")
+    monkeypatch.setattr(cch, "_summary_text", lambda agent, response: "Voici ce que j'ai trouvé.")
+    attempt = breaker._neoffice_toolless_summary_attempt(agent, [{"role": "user", "content": "q"}], "rid")
+    assert attempt(0) == "Voici ce que j'ai trouvé."
+    assert sent["model"] == "nora" and not {"tools", "tool_choice", "parallel_tool_calls"} & set(sent)
