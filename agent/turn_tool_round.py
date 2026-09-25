@@ -165,6 +165,11 @@ def run_tool_round(
         decision = agent._tool_guardrail_halt_decision
         _turn_exit_reason = "guardrail_halt"
         final_response = agent._toolguard_controlled_halt_response(decision)
+        # //// Neoffice — a kanban worker answers with what it found, see neoffice_guardrail_summary.
+        from agent.neoffice_kanban_breaker import neoffice_guardrail_summary
+
+        final_response = neoffice_guardrail_summary(agent, messages, decision) or final_response
+        # //// END Neoffice ////
         agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
         append_message(messages, {"role": "assistant", "content": final_response})
         # Emit the halt so it isn't mistaken for a crash; the stream callback is still

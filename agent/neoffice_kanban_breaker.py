@@ -144,3 +144,63 @@ def neoffice_kanban_no_progress_breaker(
         return _verdict("break")
 
     return _verdict("fallthrough")
+
+
+# //// Neoffice — a worker stopped by the tool-loop guardrail answers with what it found.
+# //// 2026-09-25: a compta worker asked for a five-part treasury review read the bank
+# //// balances, the receivables by age, the payables and the reminders due, then called the
+# //// same empty listing again and again. The guardrail stopped it, rightly, and its canned
+# //// stop message reached the person as « je n'ai pas réussi » with four answers of five in
+# //// hand. A kanban worker's final text is what the person reads (the auto-complete net
+# //// completes the card with it), so the model is asked once, without tools, for what it
+# //// found and what it could not get: the summary call upstream makes at the iteration
+# //// limit (chat_completion_helpers.handle_max_iterations). On any failure the canned
+# //// message stands.
+NEOFFICE_GUARDRAIL_SUMMARY_REQUEST = (
+    "The system stopped the tool {tool}: it kept returning the same result. Do not call any "
+    "tool. Answer the user now, in their language, with what you have ALREADY found, and say "
+    "plainly which part of the request you could not get."
+)
+
+
+def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str:
+    """The worker's answer from what it found after a guardrail stop.
+
+    "" outside a kanban worker, or when the summary call fails or comes back empty."""
+    task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    if not task_id:
+        return ""
+    import re
+    import uuid
+    from contextlib import suppress
+
+    from agent import chat_completion_helpers as _cch
+    from agent import relay_llm
+    from agent.message_metadata import append_message
+
+    request_id = f"neoffice-guardrail-summary:{uuid.uuid4()}"
+    outcome = "failed"
+    tool = getattr(decision, "tool_name", "") or "a tool"
+    append_message(messages, {"role": "user", "content": NEOFFICE_GUARDRAIL_SUMMARY_REQUEST.format(tool=tool)})
+    try:
+        api_messages = _cch._iteration_summary_api_messages(agent, messages)
+        build = _cch._SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode, _cch._chat_summary_attempt)
+        attempt = build(agent, api_messages, request_id)
+        for retry_count in (0, 1):
+            text = attempt(retry_count)
+            if not text:
+                continue
+            text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL).strip()
+            if text:
+                outcome = "success"
+                logger.info("kanban worker %s: guardrail stop on %s answered with what it found (%d chars)",
+                            task_id, tool, len(text))
+                return text
+            break
+    except Exception:  # noqa: BLE001 — the canned stop message still ends the turn
+        logger.warning("kanban worker %s: guardrail summary failed", task_id, exc_info=True)
+    finally:
+        with suppress(Exception):
+            relay_llm.complete_logical_call(request_id, outcome=outcome)
+    return ""
+# //// END Neoffice ////
