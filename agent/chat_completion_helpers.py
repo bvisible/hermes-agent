@@ -1480,12 +1480,18 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     from agent.opencode_affinity import merge_session_affinity_headers
 
     kwargs = _build_api_kwargs_for_mode(agent, api_messages, tools_for_api)
-    return merge_session_affinity_headers(
+    kwargs = merge_session_affinity_headers(
         kwargs,
         getattr(agent, "provider", None),
         getattr(agent, "base_url", None),
         getattr(agent, "session_id", None),
     )
+    # //// Neoffice — a worker somebody waits on is served first, see neoffice_request_priority.
+    from agent.neoffice_kanban_breaker import neoffice_request_priority
+
+    kwargs = neoffice_request_priority(agent, kwargs)
+    # //// END Neoffice ////
+    return kwargs
 
 
 def _build_api_kwargs_for_mode(agent, api_messages: list, tools_for_api: list | None = None) -> dict:

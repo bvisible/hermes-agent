@@ -235,3 +235,55 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
             relay_llm.complete_logical_call(request_id, outcome=outcome)
     return ""
 # //// END Neoffice ////
+
+
+# //// Neoffice — a worker somebody is waiting on asks the inference proxy to serve it first.
+# //// The Olares proxy honours an explicit `priority` and gives 10 to any prompt over 16 KB
+# //// otherwise, so a worker's ~70 KB turn queued behind the skill reviews and the nightly memory
+# //// pass. Measured on the engine over 33 h (2026-09-25): a first agent call is slow in 18-20 %
+# //// of cases when nothing waits, 45-74 % when requests queue. A kanban worker whose card has a
+# //// notify subscriber (a chat, a voice call, WhatsApp) sends priority 0; fork turns, cron and
+# //// background tasks keep the proxy's default. Only toward our own proxy: another provider
+# //// would reject the unknown field.
+NEOFFICE_INTERACTIVE_PRIORITY = 0
+NEOFFICE_PRIORITY_HOSTS = ("noraai.ch",)
+_NEOFFICE_SUBSCRIBED: dict = {}
+
+
+def _neoffice_task_has_subscriber(task_id: str) -> bool:
+    """Whether a chat waits on this card; read once per task (a worker process serves one)."""
+    if task_id not in _NEOFFICE_SUBSCRIBED:
+        answer = False
+        try:
+            from hermes_cli import kanban_db_connect as _kbc
+            from hermes_cli import kanban_db_notify as _kbn
+
+            conn = _kbc.connect(board=os.environ.get("HERMES_KANBAN_BOARD") or None)
+            try:
+                answer = bool(_kbn.list_notify_subs(conn, task_id))
+            finally:
+                conn.close()
+        except Exception:  # noqa: BLE001 — no priority is the safe answer
+            answer = False
+        _NEOFFICE_SUBSCRIBED[task_id] = answer
+    return _NEOFFICE_SUBSCRIBED[task_id]
+
+
+def neoffice_request_priority(agent: Any, kwargs: dict) -> dict:
+    """`kwargs` with extra_body.priority = 0 when a person waits on this worker's answer."""
+    task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    if not task_id or getattr(agent, "_turn_origin", None):
+        return kwargs
+    if getattr(agent, "api_mode", None) != "chat_completions":
+        return kwargs
+    base_url = str(getattr(agent, "base_url", "") or "")
+    if not any(host in base_url for host in NEOFFICE_PRIORITY_HOSTS):
+        return kwargs
+    if not _neoffice_task_has_subscriber(task_id):
+        return kwargs
+    extra = kwargs.get("extra_body")
+    extra = dict(extra) if isinstance(extra, dict) else {}
+    extra.setdefault("priority", NEOFFICE_INTERACTIVE_PRIORITY)
+    kwargs["extra_body"] = extra
+    return kwargs
+# //// END Neoffice ////
