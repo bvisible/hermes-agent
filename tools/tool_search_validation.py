@@ -146,6 +146,128 @@ _CALLS_AS_ARRAY_HINT = (
 _ARGUMENTS_AS_OBJECT_HINT = (
     "Send `arguments` as an OBJECT, not as a string. Inside a text value, escape a double quote "
     "as \\\" or use « ». Do not resend the same string.")
+# //// A parse that breaks on a closer, a colon or a comma (or finds extra data) means the text
+# //// values came out whole and the brackets are wrong: say that, not the quote advice, which sent
+# //// a model stripping the accents and line breaks out of an e-mail eight times on 2026-09-26.
+_CALLS_CLOSERS_HINT = (
+    "The brackets do not match; the text values are fine, keep them exactly as they are. One call "
+    'is {"name": "<tool>", "arguments": {...}}: close `arguments` with }, the call with }, then '
+    "the array with ], so a single call ends with }}]. Do not resend the same string.")
+_ARGUMENTS_CLOSERS_HINT = (
+    "The brackets do not match; the text values are fine, keep them exactly as they are. Close "
+    "each { with } and each [ with ], innermost first. Do not resend the same string.")
+
+
+def _json_fix_hint(text: str, error: json.JSONDecodeError, closers_hint: str, quote_hint: str) -> str:
+    """The fix to suggest for ``error``: the brackets when the parse broke on a bracket, a colon or
+    a comma (the text values came out whole), the quotes otherwise (a raw " ends a text value early
+    and the parse stops on the word after it)."""
+    at = text[error.pos:error.pos + 1]
+    if error.msg.startswith("Extra data") or at in ("}", "]", "{", "[", ":", ","):
+        return closers_hint
+    return quote_hint
+
+
+# //// A malformed `calls` string is repaired when only its closing brackets are wrong. Of the 43
+# //// malformed `calls` strings our workers sent up to 2026-09-26 (test instance, all poles), 35
+# //// had only their closers wrong (`}]}` for `}}]`, the array closed before its call object; a
+# //// missing final `]`; a `]` for a `}`; `"name"` left inside `arguments`) and all 35 parse once
+# //// repaired; 5 had a raw quote, 3 a closer too early. Only structural closers move, no text
+# //// value is touched, and the repaired call still goes through the tool's own argument
+# //// validation (validate_deferred_call_args).
+_OPENER_OF = {"}": "{", "]": "["}
+_CLOSER_OF = {"{": "}", "[": "]"}
+
+
+def _rebalance_closers(text: str, *, substitute: bool) -> str:
+    """Rebuild the closing brackets of ``text`` from its opening ones, text values untouched.
+
+    A closer that does not match the innermost open bracket either first closes the brackets
+    opened after its own (``substitute=False``: ``}]}`` becomes ``}}]``) or stands for the
+    innermost bracket's closer (``substitute=True``: ``"x"]`` becomes ``"x"}``). A closer with
+    nothing to close is dropped; brackets still open at the end are closed.
+    """
+    out: List[str] = []
+    stack: List[str] = []
+    in_string = escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch in "{[":
+            stack.append(ch)
+        elif ch in "}]":
+            if stack and stack[-1] != _OPENER_OF[ch]:
+                if substitute:
+                    ch = _CLOSER_OF[stack[-1]]
+                elif _OPENER_OF[ch] in stack:
+                    while stack[-1] != _OPENER_OF[ch]:
+                        out.append(_CLOSER_OF[stack.pop()])
+                else:
+                    continue
+            if not stack:
+                continue
+            stack.pop()
+        out.append(ch)
+    out.extend(_CLOSER_OF[bracket] for bracket in reversed(stack))
+    return "".join(out)
+
+
+def _loads_repairing_closers(text: str, accept) -> Any:
+    """``json.loads(text)``; on a parse error, the first closer repair whose value ``accept``s.
+    Re-raises the original error when no repair gives an accepted value. A text that does not end
+    on a closer is never repaired: that is a cut-off output, and closing it would dispatch a call
+    missing what the model had not written yet."""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as original:
+        if text.rstrip()[-1:] not in ("}", "]"):
+            raise
+        for substitute in (False, True):
+            candidate = _rebalance_closers(text, substitute=substitute)
+            if candidate == text:
+                continue
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if accept(value):
+                logger.info("tool_call: repaired the brackets of a malformed JSON string")
+                return value
+        raise original
+
+
+def _is_tool_name(value: Any) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    from tools.tool_search import _core_tool_names  # late: tool_search imports this module
+    return value in _core_tool_names() or _registry_entry(value) is not None
+
+
+def _lift_name_out_of_arguments(raw: Any) -> Any:
+    """``{"arguments": {..., "name": "<tool>"}}`` → ``{"name": "<tool>", "arguments": {...}}``: the
+    closer of ``arguments`` came after ``name``. Only when the entry has no name of its own and the
+    value is a registered tool, so a tool's own ``name`` parameter is never taken for one."""
+    if not isinstance(raw, dict) or str(raw.get("name") or "").strip():
+        return raw
+    arguments = raw.get("arguments")
+    if not isinstance(arguments, dict) or not _is_tool_name(arguments.get("name")):
+        return raw
+    return {"name": arguments["name"], "arguments": {k: v for k, v in arguments.items() if k != "name"}}
+
+
+def _looks_like_calls(value: Any) -> bool:
+    items = value if isinstance(value, list) else [value]
+    return bool(items) and all(
+        isinstance(item, dict)
+        and (str(item.get("name") or "").strip() or _lift_name_out_of_arguments(item) is not item)
+        for item in items)
 # //// END Neoffice ////
 
 
@@ -167,15 +289,15 @@ def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, An
     if isinstance(raw_calls, str):
         # Tolerate the model emitting the batch envelope as a JSON string —
         # mirror the per-entry `arguments` handling below (#114484).
+        # //// Neoffice — repair the brackets before giving up, and say how to fix it (upstream:
+        # //// json.loads and the parse error alone). Told only « not valid JSON », a model re-sent
+        # //// the identical string until the loop guard (see _rebalance_closers).
         try:
-            raw_calls = json.loads(raw_calls)
+            raw_calls = _loads_repairing_closers(raw_calls, _looks_like_calls)
         except json.JSONDecodeError as e:
-            # //// Neoffice — say how to fix it (upstream: the parse error alone). Told only « not
-            # //// valid JSON », a small model re-sent the identical string until the loop guard: six
-            # //// times on 2026-09-26, an e-mail body with unescaped quotes inside a `calls` string.
-            # //// The array form needs no escaping of its own, so steer to it.
-            return [], f"tool_call 'calls' is not valid JSON: {e}. {_CALLS_AS_ARRAY_HINT}"
-            # //// END Neoffice ////
+            hint = _json_fix_hint(raw_calls, e, _CALLS_CLOSERS_HINT, _CALLS_AS_ARRAY_HINT)
+            return [], f"tool_call 'calls' is not valid JSON: {e}. {hint}"
+        # //// END Neoffice ////
     if isinstance(raw_calls, dict):
         raw_calls = [raw_calls]
     if not isinstance(raw_calls, list) or not raw_calls:
@@ -185,6 +307,7 @@ def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, An
     for position, raw in enumerate(raw_calls):
         if not isinstance(raw, dict):
             return [], f"tool_call calls[{position}] must be an object with 'name' and 'arguments'"
+        raw = _lift_name_out_of_arguments(raw)  # //// Neoffice — see _lift_name_out_of_arguments
         name = str(raw.get("name") or "").strip()
         if not name:
             return [], f"tool_call calls[{position}] requires a 'name'"
@@ -198,13 +321,13 @@ def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, An
             # validate_deferred_call_args instead of an opaque JSON parse error.
             raw_args = {}
         if isinstance(raw_args, str):
+            # //// Neoffice — same as the `calls` string above: repair the brackets, say how to fix it.
             try:
-                raw_args = json.loads(raw_args)
+                raw_args = _loads_repairing_closers(raw_args, lambda value: isinstance(value, dict))
             except json.JSONDecodeError as e:
-                # //// Neoffice — same as the `calls` string above: say how to fix it.
-                return [], (f"tool_call calls[{position}].arguments is not valid JSON: {e}. "
-                            f"{_ARGUMENTS_AS_OBJECT_HINT}")
-                # //// END Neoffice ////
+                hint = _json_fix_hint(raw_args, e, _ARGUMENTS_CLOSERS_HINT, _ARGUMENTS_AS_OBJECT_HINT)
+                return [], f"tool_call calls[{position}].arguments is not valid JSON: {e}. {hint}"
+            # //// END Neoffice ////
         if not isinstance(raw_args, dict):
             return [], f"tool_call calls[{position}].arguments must be an object"
         entries.append({"name": name, "arguments": raw_args})
