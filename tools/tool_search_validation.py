@@ -146,7 +146,7 @@ _CALLS_AS_ARRAY_HINT = (
 _ARGUMENTS_AS_OBJECT_HINT = (
     "Send `arguments` as an OBJECT, not as a string. Inside a text value, escape a double quote "
     "as \\\" or use « ». Do not resend the same string.")
-# //// A parse that breaks on a closer, a colon or a comma (or finds extra data) means the text
+# //// Neoffice — a parse that breaks on a closer, a colon or a comma (or finds extra data) means the text
 # //// values came out whole and the brackets are wrong: say that, not the quote advice, which sent
 # //// a model stripping the accents and line breaks out of an e-mail eight times on 2026-09-26.
 _CALLS_CLOSERS_HINT = (
@@ -168,7 +168,7 @@ def _json_fix_hint(text: str, error: json.JSONDecodeError, closers_hint: str, qu
     return quote_hint
 
 
-# //// A malformed `calls` string is repaired when only its closing brackets are wrong. Of the 43
+# //// Neoffice — a malformed `calls` string is repaired when only its closing brackets are wrong. Of the 43
 # //// malformed `calls` strings our workers sent up to 2026-09-26 (test instance, all poles), 35
 # //// had only their closers wrong (`}]}` for `}}]`, the array closed before its call object; a
 # //// missing final `]`; a `]` for a `}`; `"name"` left inside `arguments`) and all 35 parse once
