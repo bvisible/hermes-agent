@@ -224,6 +224,41 @@ def _deferrable_in(tool_defs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return classify_tools(tool_defs, load_config_readonly().effective_defer_tools)[1]
 
 
+# //// Neoffice — tool_search also names the MCP tools a pin keeps loaded. Since the backport of
+# //// upstream #114578 (tools.tool_search.eager), a worker's most used tools sit in its tool list
+# //// and no longer in the catalog, so a search could never name them: a sales worker searched
+# //// « frappe party contact update » five times, got only a generic field setter, and concluded
+# //// the tool did not exist while that exact tool was loaded (capability bench, 2026-09-26). The
+# //// hits come back apart, under ``loaded``; ``matches`` and every other key are unchanged.
+# //// Drop this block when upstream's search covers pinned tools.
+_LOADED_NOTE = (
+    "Tools under `loaded` are already in your tool list: call them directly by their name, "
+    f"not through `{TOOL_CALL_NAME}`, and without `{TOOL_DESCRIBE_NAME}`.")
+
+
+def _loaded_mcp_in(tool_defs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """MCP tools of pre-assembly ``tool_defs`` that are NOT deferred, i.e. pinned in the model's
+    tool list by ``tools.tool_search.eager`` or ``mcp_servers.<name>.defer: false``. Core and GUI
+    tools are left out: they were never in the catalog, and the model is told they are listed."""
+    visible = classify_tools(tool_defs, load_config_readonly().effective_defer_tools)[0]
+    return [td for td, name in zip(visible, _tool_def_names(visible))
+            if is_mcp_tool_name(name) or (_registry_toolset(name) or "").startswith("mcp-")]
+
+
+def _loaded_hits(corpus: List[CatalogEntry], loaded_catalog: List[CatalogEntry], query: str,
+                 limit: int) -> List[str]:
+    """Names of the loaded tools the search would have offered before the pin: those in the
+    top ``limit`` of one search over the deferred corpus plus the loaded tools. A loaded-only
+    corpus would skew the rarest-token gate, and going past the top ``limit`` would offer weak
+    hits (a generic « create » tool for « create quotation »)."""
+    if not loaded_catalog:
+        return []
+    loaded_names = {entry.name for entry in loaded_catalog}
+    return [entry.name for entry in search_catalog(corpus + loaded_catalog, query, limit=limit)
+            if entry.name in loaded_names]
+# //// END Neoffice ////
+
+
 def estimate_tokens_from_schemas(tool_defs: Iterable[Dict[str, Any]]) -> int:
     """Token cost via the chars/4 rule (order-of-magnitude precision suffices)."""
     def _chars(td: Dict[str, Any]) -> int:
@@ -495,6 +530,7 @@ def dispatch_tool_search(args: Dict[str, Any], *, current_tool_defs: List[Dict[s
     limit = (config.search_default_limit if raw_limit is None
              else _clamped_int(raw_limit, config.search_default_limit, 1, config.max_search_limit))
     catalog = build_catalog(_deferrable_in(current_tool_defs))
+    loaded_catalog = build_catalog(_loaded_mcp_in(current_tool_defs))  # //// Neoffice — see _loaded_hits
     remote_entries: List[List[CatalogEntry]] = [[] for _ in queries]
     hosted_failure: Optional[str] = None
     if connections_in_scope(current_tool_defs):
@@ -510,7 +546,13 @@ def dispatch_tool_search(args: Dict[str, Any], *, current_tool_defs: List[Dict[s
             tools_map.setdefault(h.name, _shared_tool_record(h))
         matches = [h.name for h in hits]
         group: Dict[str, Any] = {"query": query, "matches": matches}
-        if not matches and available_sources:
+        # //// Neoffice — loaded tools the query names (see _loaded_hits). A group that has some
+        # //// gets no "retry before concluding" hint: the capability is in the tool list.
+        loaded = _loaded_hits(corpus, loaded_catalog, query, limit)
+        if loaded:
+            group["loaded"] = loaded
+        # //// END Neoffice ////
+        if not matches and not loaded and available_sources:  # //// Neoffice — `not loaded`
             group["available_sources"] = available_sources
             group["hint"] = (
                 "This query returned no lexical matches, but the sources above "
@@ -523,6 +565,8 @@ def dispatch_tool_search(args: Dict[str, Any], *, current_tool_defs: List[Dict[s
                                "results": results, "tools": tools_map}
     if hosted_failure:
         payload["connectors"] = connectors_unavailable(hosted_failure, verb="searched")
+    if any("loaded" in group for group in results):  # //// Neoffice — see _loaded_hits
+        payload["loaded_note"] = _LOADED_NOTE
     return json.dumps(payload, ensure_ascii=False)
 
 
