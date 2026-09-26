@@ -136,6 +136,19 @@ def validate_deferred_call_args(name: str, args: Dict[str, Any]) -> Optional[str
         return None
 
 
+# //// Neoffice — the fix a model needs after a JSON parse error, not only the error (see
+# //// normalize_tool_call_entries). Plain ASCII quotes inside a text value break a JSON string;
+# //// « » need no escaping.
+_CALLS_AS_ARRAY_HINT = (
+    'Send `calls` as an ARRAY of objects, not as a string: {"calls": [{"name": "<tool>", '
+    '"arguments": {...}}]}. Inside a text value, escape a double quote as \\" or use « ». '
+    "Do not resend the same string.")
+_ARGUMENTS_AS_OBJECT_HINT = (
+    "Send `arguments` as an OBJECT, not as a string. Inside a text value, escape a double quote "
+    "as \\\" or use « ». Do not resend the same string.")
+# //// END Neoffice ////
+
+
 def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], Optional[str]]:
     """Normalize ``tool_call`` arguments into a ``calls[]`` list of entries.
 
@@ -157,7 +170,12 @@ def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, An
         try:
             raw_calls = json.loads(raw_calls)
         except json.JSONDecodeError as e:
-            return [], f"tool_call 'calls' is not valid JSON: {e}"
+            # //// Neoffice — say how to fix it (upstream: the parse error alone). Told only « not
+            # //// valid JSON », a small model re-sent the identical string until the loop guard: six
+            # //// times on 2026-09-26, an e-mail body with unescaped quotes inside a `calls` string.
+            # //// The array form needs no escaping of its own, so steer to it.
+            return [], f"tool_call 'calls' is not valid JSON: {e}. {_CALLS_AS_ARRAY_HINT}"
+            # //// END Neoffice ////
     if isinstance(raw_calls, dict):
         raw_calls = [raw_calls]
     if not isinstance(raw_calls, list) or not raw_calls:
@@ -183,7 +201,10 @@ def normalize_tool_call_entries(args: Dict[str, Any]) -> Tuple[List[Dict[str, An
             try:
                 raw_args = json.loads(raw_args)
             except json.JSONDecodeError as e:
-                return [], f"tool_call calls[{position}].arguments is not valid JSON: {e}"
+                # //// Neoffice — same as the `calls` string above: say how to fix it.
+                return [], (f"tool_call calls[{position}].arguments is not valid JSON: {e}. "
+                            f"{_ARGUMENTS_AS_OBJECT_HINT}")
+                # //// END Neoffice ////
         if not isinstance(raw_args, dict):
             return [], f"tool_call calls[{position}].arguments must be an object"
         entries.append({"name": name, "arguments": raw_args})
