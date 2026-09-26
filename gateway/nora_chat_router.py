@@ -147,12 +147,17 @@ _CONV_HISTORY_TURNS = 10  # recent film entries carried to the worker (user + NO
 # //// Neoffice — a bare yes answers a PROPOSAL, never a question. With NORA's question
 # //// missing from the film, « Oui, vas-y » after « Pourriez-vous me donner le nom exact
 # //// du client ? » had the worker pick a customer and change its address, and after « sur
-# //// quel document ? » submit a quotation (capability bench, 2026-09-24).
+# //// quel document ? » submit a quotation (capability bench, 2026-09-24). A CHOICE is a
+# //// question too: after « remplacer l'e-mail principal ou ajouter un contact
+# //// supplémentaire ? », a second « Oui, vas-y. » had the worker replace the e-mail, which
+# //// put another person's address on the existing contact (capability bench, 2026-09-26).
 _BARE_YES_RULE = (
     "A bare « oui / vas-y / ok / d'accord » CONFIRMS only a change NORA PROPOSED in its last "
     "line (shown to the user before being made). If NORA's last line was a QUESTION — which "
     "customer, which document, which article, a missing figure — « oui » does not answer it: "
-    "ask that question again and change NOTHING."
+    "ask that question again and change NOTHING. If it offered a CHOICE between options "
+    "(« remplacer … ou ajouter … ? »), « oui » picks none of them: ask again, naming each "
+    "option, and never take the one that overwrites or deletes existing data."
 )
 # //// END Neoffice ////
 
