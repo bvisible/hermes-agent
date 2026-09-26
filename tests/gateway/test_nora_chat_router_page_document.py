@@ -88,6 +88,21 @@ def test_a_bare_yes_reaches_the_worker_with_the_question_and_the_rule(monkeypatc
     assert "« oui » does not answer it" in body
 
 
+def test_a_bare_yes_to_a_choice_picks_no_option(monkeypatch):
+    """Capability bench, 2026-09-26: after « remplacer l'e-mail principal ou ajouter un contact
+    supplémentaire ? », a second « Oui, vas-y. » had the worker replace the e-mail, which put
+    another person's address on the existing contact."""
+    created = _fake_kanban(monkeypatch)
+    _route("Ajoute Paul Dupont (paul@example.test) comme contact chez la Boulangerie du Lac", "conv-choice-1")
+    router.note_nora_reply("conv-choice-1", "Souhaitez-vous remplacer l'e-mail principal du contact "
+                                            "existant ou ajouter un contact supplémentaire ?")
+    _route("Oui, vas-y.", "conv-choice-1")
+    body = created[-1]["body"]
+    assert "NORA: Souhaitez-vous remplacer l'e-mail principal" in body, "the choice NORA offered is in the film"
+    assert "« oui » picks none of them" in body
+    assert "never take the one that overwrites or deletes existing data" in body
+
+
 def test_the_same_reply_is_filmed_once():
     router.note_nora_reply("conv-dup", "Voici le changement que je propose.")
     router.note_nora_reply("conv-dup", "Voici le changement que je propose.")
