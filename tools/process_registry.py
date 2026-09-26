@@ -105,6 +105,11 @@ _SYSTEMD_SCOPE_PROBED_AT = 0.0
 # Both verdicts expire: the user bus can vanish after a True (session logout without linger,
 # #110803) and reappear after a False (linger enabled later, #104893).
 _SYSTEMD_SCOPE_PROBE_TTL_SECONDS = 60.0
+# //// Neoffice — a probe that only TIMED OUT is retried with a longer bound, and its
+# //// verdict is kept seconds, not a minute (see _systemd_run_user_scope_available).
+_SYSTEMD_SCOPE_PROBE_TIMEOUTS = (3.0, 10.0)
+_SYSTEMD_SCOPE_TIMEOUT_VERDICT_TTL_SECONDS = 5.0
+# //// END Neoffice ////
 _MIN_WORKER_MEMORY_MAX_BYTES = 64 * 1024 * 1024
 _DEFAULT_WORKER_MEMORY_MAX_BYTES = 1024 * 1024 * 1024
 _WORKER_MEMORY_MAX_CAP_BYTES = 4 * 1024 * 1024 * 1024
@@ -244,30 +249,58 @@ def _systemd_run_user_scope_available() -> bool:
         if verdict is not None:
             return verdict
         available = False
+        # //// Neoffice — a probe that TIMES OUT is a slow user manager, not a missing bus.
+        # Upstream probed once with a 3 s bound and cached the failure for 60 s. On a host
+        # under memory pressure the user systemd manager is paged out and its first D-Bus
+        # call pays the page-in (measured 2.98 s, then 0.02 s for the next four calls): the
+        # probe timed out, every Kanban spawn of the next minute raised
+        # RestartSafeScopeUnavailable, and the dispatcher retried each task ~5 min later.
+        # A timeout is retried once with a longer bound; a verdict that still only timed
+        # out is kept a few seconds, so the next spawn probes again. A real failure (the
+        # probe ran and systemd-run refused) keeps the upstream 60 s.
+        timed_out = False
         if _IS_LINUX:
             try:
                 import shutil
 
                 binary = shutil.which("systemd-run")
                 if binary:
-                    # Unique unit avoids collisions; the timeout bounds D-Bus.
-                    probe_unit = f"hermes-probe-scope-{os.getpid()}-{uuid.uuid4().hex[:8]}"
-                    result = subprocess.run(
-                        _systemd_scope_argv(binary, probe_unit, "/bin/sh", "-c", "exit 0"),
-                        capture_output=True,
-                        timeout=3,
-                        env=systemd_user_bus_env(),
-                    )
-                    available = result.returncode == 0
-                    if not available:
-                        logger.debug(
-                            "systemd-run --user --scope probe failed (rc=%s): %s",
-                            result.returncode, (result.stderr or b"").decode("utf-8", "replace").strip(),
-                        )
+                    for bound in _SYSTEMD_SCOPE_PROBE_TIMEOUTS:
+                        # Unique unit avoids collisions; the timeout bounds D-Bus.
+                        probe_unit = f"hermes-probe-scope-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+                        try:
+                            result = subprocess.run(
+                                _systemd_scope_argv(binary, probe_unit, "/bin/sh", "-c", "exit 0"),
+                                capture_output=True,
+                                timeout=bound,
+                                env=systemd_user_bus_env(),
+                            )
+                        except subprocess.TimeoutExpired:
+                            timed_out = True
+                            logger.debug("systemd-run --user --scope probe timed out after %.0f s", bound)
+                            continue
+                        timed_out = False
+                        available = result.returncode == 0
+                        if not available:
+                            logger.debug(
+                                "systemd-run --user --scope probe failed (rc=%s): %s",
+                                result.returncode, (result.stderr or b"").decode("utf-8", "replace").strip(),
+                            )
+                        break
             except Exception as exc:
                 logger.debug("systemd-run --user --scope probe error: %s", exc)
         _SYSTEMD_SCOPE_AVAILABLE = available
         _SYSTEMD_SCOPE_PROBED_AT = time.monotonic()
+        if timed_out:
+            # Expire this verdict after a few seconds instead of the full TTL.
+            _SYSTEMD_SCOPE_PROBED_AT -= _SYSTEMD_SCOPE_PROBE_TTL_SECONDS - _SYSTEMD_SCOPE_TIMEOUT_VERDICT_TTL_SECONDS
+            logger.warning(
+                "systemd-run --user --scope did not answer within %s s: this spawn is refused, "
+                "the next one probes again in %.0f s",
+                "/".join(f"{b:.0f}" for b in _SYSTEMD_SCOPE_PROBE_TIMEOUTS),
+                _SYSTEMD_SCOPE_TIMEOUT_VERDICT_TTL_SECONDS,
+            )
+        # //// END Neoffice ////
         return available
 
 
