@@ -33,7 +33,7 @@ Behavioral settings live in `$HERMES_HOME/mem0.json` (set them via `hermes memor
 | `sync_max_chars` | `450` | Per-message character cap applied before each turn is sent for fact extraction (cut at the last sentence boundary). Default fits 512-token embedders; raise it (e.g. `6000`) for 8k-token embedders such as `text-embedding-3-small`, `jina-embeddings-v3`, `bge-m3` |
 
 <!-- //// Neoffice — the shared company bucket and its switch are fork additions (#881). -->
-**Neoffice fork — shared company bucket.** A fact stored with `scope: "company"` lands in one bucket shared by every user of the instance, and reads merge it with the caller's own bucket.
+**Neoffice fork — shared company bucket.** A fact stored with `scope: "company"` lands in one bucket shared by every user of the instance, and reads merge it with the caller's own bucket. Only the gateway's signed `memory_retain` route writes it, and a fact that states an amount of money or anything about pay goes to the named user's own bucket instead (the response's `kept_private` counts them). `mem0_add` / `mem0_conclude` never write it: a `scope: "company"` from the chat model is stored in the caller's own bucket, and the tool result says so.
 
 | Key | Default | Description |
 |-----|---------|-------------|

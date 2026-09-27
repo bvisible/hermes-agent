@@ -606,7 +606,9 @@ class WebhookAdapter(BasePlatformAdapter):
         if user.startswith(("probe-", "test-", "det-", "canary-")):
             return web.json_response({"status": "skipped_test_user", "user": user, "stored": 0})
         # //// END Neoffice ////
-        scope = str(payload.get("scope") or "user").lower()
+        # //// Neoffice — only the literal "company" names the shared bucket: a missing,
+        # //// misspelled or invented scope must never widen the audience (#881).
+        scope = "company" if str(payload.get("scope") or "").strip().lower() == "company" else "user"
         texts: List[str] = []
         for f in raw_facts:
             raw = f.get("text", "") if isinstance(f, dict) else f
@@ -617,6 +619,19 @@ class WebhookAdapter(BasePlatformAdapter):
             return web.json_response(
                 {"status": "stored", "user": user, "stored": 0}, status=200
             )
+        # //// Neoffice — the company bucket never receives an amount of money, nor anything
+        # //// about pay (#881): every colleague recalls it, whatever their rights, and a
+        # //// stored fact carries neither author nor source. The caller proposes the scope,
+        # //// this route decides: such a fact goes to the named user's own bucket instead.
+        # //// The filter is a local copy of NORA's (gateway/neoffice_memory_policy.py), so a
+        # //// signed request that skipped it is still held to the rule. `stored` stays the
+        # //// total, as the caller counts it; `kept_private` says how many were moved.
+        if scope == "company":
+            from gateway.neoffice_memory_policy import split_company_facts
+
+            company_texts, user_texts = split_company_facts(texts)
+        else:
+            company_texts, user_texts = [], texts
 
         @with_launch_profile_secrets  # //// Neoffice — see gateway/neoffice_scope.py
         def _store() -> int:
@@ -624,7 +639,17 @@ class WebhookAdapter(BasePlatformAdapter):
 
             prov = Mem0MemoryProvider()
             prov.initialize("memory_retain", user_id=user)
-            return prov.retain_facts(texts, scope=scope)
+            stored_now = 0
+            # Company first, as NORA writes it: mem0 is additive, so a retry after a failure
+            # between the two writes duplicates the smaller set.
+            if company_texts:
+                stored_now += prov.retain_facts(company_texts, scope="company")
+            if user_texts:
+                stored_now += prov.retain_facts(user_texts, scope="user")
+            return stored_now
+
+        kept_private = len(user_texts) if scope == "company" else 0
+        # //// END Neoffice ////
 
         try:
             stored = await asyncio.get_running_loop().run_in_executor(None, _store)
@@ -632,10 +657,13 @@ class WebhookAdapter(BasePlatformAdapter):
             logger.exception("[webhook] memory_retain failed user=%s", user)
             return web.json_response({"status": "error", "error": str(e)}, status=502)
         logger.info(
-            "[webhook] memory_retain user=%s stored=%d/%d", user, stored, len(texts)
+            "[webhook] memory_retain user=%s scope=%s stored=%d/%d kept_private=%d",  # //// Neoffice — #881
+            user, scope, stored, len(texts), kept_private,
         )
         return web.json_response(
-            {"status": "stored", "user": user, "stored": stored}, status=200
+            # //// Neoffice — `kept_private`: facts moved from the company to the user bucket (#881)
+            {"status": "stored", "user": user, "stored": stored, "kept_private": kept_private},
+            status=200,
         )
 
     # //// Neoffice — read a user's mem0 (profile or search) for an external caller (the

@@ -223,12 +223,14 @@ def test_company_recall_off_reads_only_the_callers_bucket():
 
 
 def test_company_recall_off_still_stores_a_company_fact():
-    """The switch is about reads only: what the bucket holds is a separate decision."""
+    """The switch is about reads only: what the bucket holds is a separate decision.
+    The company bucket's only writer is the trusted server path (retain_facts, behind the
+    gateway's memory_retain); the chat tool no longer writes it (#881)."""
     backend = OwnedBackend()
     added = []
     backend.add = lambda messages, **kw: added.append(kw["user_id"]) or {}
     provider = _provider(backend, company_recall=False)
-    _call(provider, "mem0_add", {"content": "the office moves in May", "scope": "company"})
+    assert provider.retain_facts(["the office moves in May"], scope="company") == 1
     assert added == [COMPANY]
 
 

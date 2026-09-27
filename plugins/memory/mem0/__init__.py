@@ -14,7 +14,10 @@ id), agent_id. MEM0_* env vars remain a fallback.
     mode does not tolerate two live clients on one path.
   * Shared company-scope bucket: scope="company" facts land in ONE bucket
     (user_id=company_id) visible to every user of the instance; reads merge
-    the per-user bucket + the company bucket.
+    the per-user bucket + the company bucket. Only the gateway's signed
+    memory_retain route writes it, and it keeps any amount or pay out (#881);
+    mem0_add / mem0_conclude refuse scope="company" and store the fact in the
+    caller's own bucket, saying so in the tool result.
   * Per-turn capture stores the RAW turn (infer=False) — reliable, zero LLM
     load; the nightly consolidation distills durable facts (memory_retain).
   * retain_facts(): bulk verbatim store used by the gateway webhook
@@ -330,12 +333,14 @@ def _schema(name: str, description: str, properties: dict[str, tuple[str, str]],
 TOOL_SCHEMAS = [
     _schema("mem0_search", "Search the user's memories by meaning; returns facts ranked by relevance. Use this before answering any question that may depend on what you know about the user (preferences, facts, history, people, projects, past decisions). For multi-part or multi-hop questions, call it several times — vary the wording and run follow-up searches on what earlier results reveal; one search is rarely enough.",
             {"query": ("string", "What to search for."), "top_k": ("integer", "Max results (default: 10, max: 50)."), "rerank": ("boolean", "Rerank results for relevance (default: false, platform mode only).")}, ["query"]),
-    # //// Neoffice — `scope` added to the write schema: a fact can be stored in the
-    # //// shared company bucket instead of the caller's private one. One instance =
-    # //// one company, so a company fact must be recallable by every colleague.
-    # //// Drop when upstream supports a shared bucket. ////
+    # //// Neoffice — no `scope` on the write schema any more (#881). It used to offer
+    # //// "company = shared with everyone in the organisation", and the chat model wrote
+    # //// salaries and revenue figures there, which every colleague then recalled whatever
+    # //// their rights. mem0_add writes the caller's own bucket only (the handler refuses
+    # //// a scope an old prompt still sends); the company bucket is written by the gateway's
+    # //// signed memory_retain route alone. Same schema as upstream again.
     _schema("mem0_add", "Store a durable fact about the user, verbatim (no LLM extraction). Call this the moment the user states a lasting preference, correction, decision, or personal detail worth recalling on future turns — don't wait to be asked to remember. Skip transient chit-chat and facts you've already stored.",
-            {"content": ("string", "The fact to store."), "scope": ("string", "user = private to this user (default); company = shared with everyone in the organisation.")},
+            {"content": ("string", "The fact to store.")},
             ["content"]),
     _schema("mem0_update", "Replace the text of an existing memory by its ID (take the ID from a mem0_search result). Use when a stored fact has changed or was wrong — correct it in place instead of adding a duplicate.",
             {"memory_id": ("string", "Memory UUID to update."), "text": ("string", "New text content.")}, ["memory_id", "text"]),
@@ -799,26 +804,33 @@ class Mem0MemoryProvider(MemoryProvider):
                            "page": page, "page_size": page_size})
     # //// END Neoffice ////
 
+    # //// Neoffice — what mem0_add answers when a conversation asks for the company bucket.
+    _COMPANY_SCOPE_REFUSED = (
+        "Shared company memory cannot be written from a conversation. This fact was stored "
+        "in this user's own memory instead: only they will recall it.")
+
     def _tool_add(self, args: dict) -> str:
         # //// Neoffice — accept the legacy `conclusion` spelling (pre-v2026.7.1 SOUL prompts
-        # //// and skills still say mem0_conclude(conclusion=...)), and honour scope="company"
-        # //// by writing into the shared bucket instead of the caller's private one.
+        # //// and skills still say mem0_conclude(conclusion=...)).
         content = args.get("content", "") or args.get("conclusion", "")
         if not content:
             return tool_error("Missing required parameter: content")
-        if str(args.get("scope") or "user").lower() == "company":
-            result = self._backend.add(
-                [{"role": "user", "content": content}], user_id=self._company_id,
-                agent_id=self._agent_id, infer=False,
-                metadata={"channel": self._channel} if self._channel else {})
-            event_id = result.get("event_id") if isinstance(result, dict) else None
-            msg = "Fact stored." if (self._mode == "oss" or self._host) else "Fact queued for storage."
-            return json.dumps({"result": msg, "event_id": event_id})
+        # //// Neoffice — the chat model may no longer write the shared company bucket (#881).
+        # //// Everything stored there is recalled by every colleague whatever their rights,
+        # //// and a fact carries neither author nor source: on the development instance a
+        # //// salesperson recalled a salary and a revenue figure the model had put there. A
+        # //// scope="company" (an older prompt may still send one) is not an error, the fact
+        # //// is worth keeping, so it lands in the caller's own bucket and the result says so.
+        # //// The company bucket is written by the gateway's signed memory_retain alone.
+        company_refused = str(args.get("scope") or "").strip().lower() == "company"
         # //// END Neoffice ////
         result = self._add([{"role": "user", "content": content}], infer=False)
         event_id = result.get("event_id") if isinstance(result, dict) else None
         # Cloud add is async (server-side extraction); OSS and self-hosted store synchronously.
         msg = "Fact stored." if (self._mode == "oss" or self._host) else "Fact queued for storage."
+        if company_refused:  # //// Neoffice — say where the fact went (#881, see above)
+            return json.dumps({"result": msg, "event_id": event_id, "scope": "user",
+                               "note": self._COMPANY_SCOPE_REFUSED})
         return json.dumps({"result": msg, "event_id": event_id})
 
     # //// Neoffice — mem0_update / mem0_delete act only on the caller's own memories (#881).
@@ -926,7 +938,11 @@ class Mem0MemoryProvider(MemoryProvider):
     # be done by US, in the consolidation pass. grep "//// Neoffice".
     def retain_facts(self, facts: List[str], *, scope: str = "user") -> int:
         """Consolidate pre-extracted facts into memory, scoped to self._user_id
-        (or the shared company bucket for scope="company"). Returns count stored."""
+        (or the shared company bucket for scope="company"). Returns count stored.
+
+        Trusted server path only: it writes whatever bucket it is told. The gateway's
+        memory_retain is its caller and keeps any amount or pay out of the company
+        bucket before calling it (gateway/neoffice_memory_policy.py, #881)."""
         if self._backend is None or self._is_breaker_open():
             return 0
         write_user_id = (
