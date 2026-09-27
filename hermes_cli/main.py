@@ -1676,7 +1676,11 @@ def _start_chat_background_prefetch() -> None:
     on the very first launch), so the first run syncs in the foreground and
     drops the banner's skills cache.
     """
-    if _termux_should_prefetch_update_check():
+    # //// Neoffice — a kanban worker (`chat -q` spawned by the dispatcher) shows no banner: its
+    # //// update check and banner data (git subprocesses, a scan of every skill) only competed
+    # //// with its start-up for the CPU. The bundled-skills sync below still runs.
+    if _termux_should_prefetch_update_check() and not os.environ.get("HERMES_KANBAN_TASK"):
+        # //// END Neoffice ////
         try:
             from hermes_cli.banner import prefetch_banner_data, prefetch_update_check
 
@@ -3560,9 +3564,14 @@ def main():
         except Exception:
             pass
         try:
-            from hermes_cli.update_cmd_fleet import _warn_pending_fleet_restart_on_startup
+            # //// Neoffice — not in a kanban worker: its stdout is the task's log, nobody reads
+            # //// the hint there, and resolving the hint's path imports the whole gateway
+            # //// package (0.42 s of the worker's start under a sampling profiler, 2026-09-27).
+            if not os.environ.get("HERMES_KANBAN_TASK"):
+                from hermes_cli.update_cmd_fleet import _warn_pending_fleet_restart_on_startup
 
-            _warn_pending_fleet_restart_on_startup()
+                _warn_pending_fleet_restart_on_startup()
+            # //// END Neoffice ////
         except Exception:
             pass
 

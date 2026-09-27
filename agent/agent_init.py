@@ -1363,6 +1363,10 @@ def _init_memory(agent, _agent_cfg, skip_memory, platform, memory_manager=None):
     inject_memory_provider_tools(agent)
 
 
+# //// Neoffice — tools that run commands on the host, see _apply_agent_section.
+_COMMAND_TOOL_NAMES = frozenset({"terminal", "process_manage", "execute_code"})
+
+
 def _apply_agent_section(agent, _agent_cfg):
     # Skills config: nudge interval for skill creation reminders
     agent._skill_nudge_interval = 10
@@ -1407,6 +1411,13 @@ def _apply_agent_section(agent, _agent_cfg):
         "environment_probe", "bot_mode_protocol",
     ):
         setattr(agent, f"_{_key}", bool(_agent_section.get(_key, True)))
+    # //// Neoffice — the probe describes the local Python toolchain to an agent that can run
+    # //// commands. Without a command tool the line serves nothing, and its subprocesses held
+    # //// up every kanban worker's first model request: the prompt build waits for them (0.38 s
+    # //// under a sampling profiler on the dev instance, 2026-09-27). Kept when one is loaded.
+    if agent._environment_probe and not (set(getattr(agent, "valid_tool_names", None) or ()) & _COMMAND_TOOL_NAMES):
+        agent._environment_probe = False
+    # //// END Neoffice ////
     # Warm the probe (~0.5s of subprocesses) off-thread so the first prompt build finds it cached.
     if agent._environment_probe:
         with suppress(Exception):
