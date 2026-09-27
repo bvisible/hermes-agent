@@ -105,3 +105,20 @@ def test_the_tick_after_a_poke_runs_at_once(monkeypatch):
         return ticks[1] - poked_at
 
     assert asyncio.run(scenario()) < 0.3
+
+
+def test_after_a_routed_message_the_notifier_polls_fast(monkeypatch):
+    """A poke opens the notifier's hot window: it waits 0.25 s instead of its interval."""
+    monkeypatch.setattr(kw, "KANBAN_POKE", None)
+    monkeypatch.setattr(kw, "KANBAN_NOTIFIER_HOT_UNTIL", float("-inf"))
+
+    async def timed_wait():
+        t0 = time.monotonic()
+        await _Runner()._kanban_notifier_wait(1.0)
+        return time.monotonic() - t0
+
+    assert asyncio.run(timed_wait()) >= 0.9          # nobody waits: the usual interval
+    kw.poke_kanban_dispatcher()
+    assert asyncio.run(timed_wait()) < 0.5           # an answer is awaited: fast polling
+    monkeypatch.setattr(kw, "KANBAN_NOTIFIER_HOT_UNTIL", time.monotonic() - 1)
+    assert asyncio.run(timed_wait()) >= 0.9          # the window is over

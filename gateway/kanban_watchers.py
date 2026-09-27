@@ -51,12 +51,27 @@ KANBAN_POKE: "asyncio.Event | None" = None
 
 def poke_kanban_dispatcher() -> None:
     """Wake the dispatcher loop now (same-loop callers only; best-effort)."""
+    global KANBAN_NOTIFIER_HOT_UNTIL
+    # A routed task means someone waits for its answer: the notifier polls fast for a while.
+    KANBAN_NOTIFIER_HOT_UNTIL = time.monotonic() + _NOTIFIER_HOT_WINDOW_S
     ev = KANBAN_POKE
     if ev is not None:
         try:
             ev.set()
         except Exception:
             pass
+# //// END Neoffice ////
+
+
+# //// Neoffice — the notifier polls every 1 s (kanban.notifier_interval_seconds): a worker's
+# //// answer waited 0.05-0.99 s (median 0.74 s, dev instance, 2026-09-27) between the worker's
+# //// kanban_complete and its delivery to the chat. Polling 4x faster all the time would cost
+# //// every instance a steady load for nothing; a routed chat message is when someone is
+# //// waiting, so for _NOTIFIER_HOT_WINDOW_S after one the notifier polls every
+# //// _NOTIFIER_HOT_INTERVAL_S (a light SQLite read in a thread), then goes back to its interval.
+KANBAN_NOTIFIER_HOT_UNTIL = float("-inf")
+_NOTIFIER_HOT_WINDOW_S = 180.0
+_NOTIFIER_HOT_INTERVAL_S = 0.25
 # //// END Neoffice ////
 
 
@@ -273,7 +288,10 @@ class GatewayKanbanWatchersMixin:
                     ).deliver()
             except Exception as exc:
                 logger.warning("kanban notifier tick failed: %s", exc)
-            await self._sleep_between_ticks(interval)
+            # //// Neoffice — upstream: `await self._sleep_between_ticks(interval)`; see
+            # //// KANBAN_NOTIFIER_HOT_UNTIL.
+            await self._kanban_notifier_wait(interval)
+            # //// END Neoffice ////
 
     def _kanban_sub_op(self, board: Optional[str], op: str, sub: dict, **extra: Any) -> None:
         """Sync helper (runs in to_thread): call ``kanban_db_notify.<op>`` for one subscription on its board."""
@@ -490,6 +508,15 @@ class GatewayKanbanWatchersMixin:
             # //// END Neoffice ////
 
         self._release_kanban_dispatcher_lock()
+
+    # //// Neoffice — the notifier's wait between two ticks (see KANBAN_NOTIFIER_HOT_UNTIL).
+    async def _kanban_notifier_wait(self, interval: float) -> None:
+        """_NOTIFIER_HOT_INTERVAL_S while a routed answer is awaited, else the usual interval."""
+        if time.monotonic() < KANBAN_NOTIFIER_HOT_UNTIL:
+            await asyncio.sleep(_NOTIFIER_HOT_INTERVAL_S)
+        else:
+            await self._sleep_between_ticks(interval)
+    # //// END Neoffice ////
 
     # //// Neoffice — the dispatcher's only wait between two ticks (see KANBAN_POKE).
     async def _kanban_dispatch_wait(self, interval: float) -> bool:
