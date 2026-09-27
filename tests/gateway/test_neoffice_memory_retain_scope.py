@@ -78,6 +78,11 @@ class FakeProvider:
 
     def initialize(self, session_id, **kwargs):
         FakeProvider.calls.append(("init", kwargs.get("user_id")))
+        self._user_id = kwargs.get("user_id")
+        self._company_id = "company"
+
+    def _own_bucket_is_company(self):
+        return self._user_id == self._company_id
 
     def retain_facts(self, facts, *, scope="user"):
         FakeProvider.calls.append((scope, list(facts)))
@@ -156,3 +161,53 @@ def test_a_throwaway_test_user_is_still_skipped(provider):
     _, body = _retain({"user": "probe-1", "scope": "company", "facts": ["Paul's salary is 7000"]})
     assert body["status"] == "skipped_test_user"
     assert provider.calls == []
+
+
+# --- a `user` that IS the company bucket id ----------------------------------------------
+# The company half of such a batch was written and the user half refused: the short count
+# kept NORA's rows pending, so every nightly retry wrote the same company facts again.
+
+@pytest.mark.parametrize("scope", ["company", "user"])
+def test_a_user_named_like_the_company_is_refused_as_a_whole(provider, scope):
+    status, body = _retain({"user": "company", "scope": scope, "facts": [
+        "We invoice on the 25th", "Paul's salary is 7000"]})
+    assert status == 403
+    assert body["status"] == "refused" and body["stored"] == 0
+    assert provider.calls == [("init", "company")], "not one write, company half included"
+
+
+class RecordingBackend:
+    def __init__(self):
+        self.adds = []
+
+    def add(self, messages, *, user_id, agent_id, infer=False, metadata=None):
+        self.adds.append((user_id, [m["content"] for m in messages]))
+        return {"event_id": "ev-1"}
+
+
+@pytest.fixture
+def real_provider(monkeypatch):
+    """The real provider, with a recording store and a mem0.json that names the company id."""
+    backend = RecordingBackend()
+    config = {"company_id": "company"}
+    monkeypatch.setattr(mem0_plugin, "_load_config", lambda: dict(config))
+    monkeypatch.setattr(mem0_plugin.Mem0MemoryProvider, "_create_backend", lambda self: backend)
+    return backend, config
+
+
+def test_the_real_provider_writes_nothing_for_a_user_named_like_the_company(real_provider):
+    backend, _ = real_provider
+    status, _ = _retain({"user": "company", "scope": "company", "facts": [
+        "We invoice on the 25th", "Paul's salary is 7000"]})
+    assert status == 403
+    assert backend.adds == []
+
+
+def test_the_configured_company_id_is_the_one_refused(real_provider):
+    backend, config = real_provider
+    config["company_id"] = "acme-shared"
+    assert _retain({"user": "acme-shared", "facts": ["I prefer tea"]})[0] == 403
+    assert backend.adds == []
+    status, body = _retain({"user": USER, "scope": "company", "facts": ["We bill in CHF"]})
+    assert (status, body["stored"]) == (200, 1)
+    assert backend.adds == [("acme-shared", ["We bill in CHF"])]

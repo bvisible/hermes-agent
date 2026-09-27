@@ -634,11 +634,18 @@ class WebhookAdapter(BasePlatformAdapter):
             company_texts, user_texts = [], texts
 
         @with_launch_profile_secrets  # //// Neoffice — see gateway/neoffice_scope.py
-        def _store() -> int:
+        def _store() -> Optional[int]:
             from plugins.memory.mem0 import Mem0MemoryProvider
 
             prov = Mem0MemoryProvider()
             prov.initialize("memory_retain", user_id=user)
+            # //// Neoffice — a `user` that IS the company bucket id is refused as a whole,
+            # //// before any write (#881). Otherwise the company half of a batch was
+            # //// written and the user half refused: the short count kept NORA's rows
+            # //// pending, so every nightly retry wrote the same company facts again
+            # //// (mem0 is additive). None = refused; nothing was stored.
+            if user == prov._company_id or prov._own_bucket_is_company():
+                return None
             stored_now = 0
             # Company first, as NORA writes it: mem0 is additive, so a retry after a failure
             # between the two writes duplicates the smaller set.
@@ -656,6 +663,17 @@ class WebhookAdapter(BasePlatformAdapter):
         except Exception as e:  # noqa: BLE001 — surface as 502, never crash the loop
             logger.exception("[webhook] memory_retain failed user=%s", user)
             return web.json_response({"status": "error", "error": str(e)}, status=502)
+        # //// Neoffice — see the refusal in _store above (#881). A 403, not a 200 with a
+        # //// short count: NORA records a failed retain for that user, its rows stay
+        # //// pending, and no retry writes anything.
+        if stored is None:
+            logger.warning("[webhook] memory_retain refused: user=%s is the company bucket id", user)
+            return web.json_response(
+                {"status": "refused", "user": user, "stored": 0,
+                 "error": "memory_retain: 'user' is the shared company memory's id; nothing was stored"},
+                status=403,
+            )
+        # //// END Neoffice ////
         logger.info(
             "[webhook] memory_retain user=%s scope=%s stored=%d/%d kept_private=%d",  # //// Neoffice — #881
             user, scope, stored, len(texts), kept_private,
