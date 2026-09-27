@@ -55,3 +55,81 @@ def test_a_request_to_send_an_email_stays_support(message):
 @pytest.mark.parametrize("message", LEFT_TO_THE_CLASSIFIER)
 def test_no_keyword_rule_takes_these(message):
     assert _keyword_pole(message) is None
+
+
+# ── an employee's record is rh's (#843) ─────────────────────────────────────────────────────
+# « <Prénom Nom> a déménagé : sa nouvelle adresse est … Mets sa fiche à jour » reached ventes,
+# which searched clients and suppliers seventeen times: the person was an employee. The router
+# asks nora whether the name is an employee's, and only for a contact change routed to ventes.
+
+import io
+import json
+
+from gateway import nora_chat_router as router
+
+EMPLOYEE_MOVED = "Marie Exemple a déménagé : sa nouvelle adresse est rue du Lac 12, 1003 Lausanne. Mets sa fiche à jour."
+
+
+def test_a_contact_change_that_names_an_employee_goes_to_rh(monkeypatch):
+    monkeypatch.setattr(router, "_employee_named", lambda message, extra: True)
+    assert router._pole_for_an_employee_record("ventes", EMPLOYEE_MOVED, {}) == "rh"
+
+
+def test_a_client_s_contact_change_stays_with_ventes(monkeypatch):
+    monkeypatch.setattr(router, "_employee_named", lambda message, extra: False)
+    assert router._pole_for_an_employee_record("ventes", "Martin SA a déménagé : rue du Lac 12", {}) == "ventes"
+
+
+def _never_asked(message, extra):
+    raise AssertionError("only a contact change routed to ventes is looked up")
+
+
+@pytest.mark.parametrize(
+    "category, message",
+    [
+        ("ventes", "Fais un devis pour Marie Exemple : 3 heures de conseil"),
+        ("compta", EMPLOYEE_MOVED),
+        ("support", "Envoie un e-mail à Marie Exemple pour confirmer le rendez-vous"),
+    ],
+)
+def test_nothing_else_is_looked_up(monkeypatch, category, message):
+    monkeypatch.setattr(router, "_employee_named", _never_asked)
+    assert router._pole_for_an_employee_record(category, message, {}) == category
+
+
+def test_without_the_desk_callback_there_is_no_lookup():
+    assert router._employee_named(EMPLOYEE_MOVED, {}) is False
+
+
+class _Answer(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.mark.parametrize(
+    "body, employee",
+    [
+        ({"message": {"ok": True, "employee": "HR-EMP-00001", "employee_name": "Marie Exemple"}}, True),
+        ({"message": {"ok": True}}, False),
+        ({"message": {"ok": False, "error": "boom"}}, False),
+    ],
+)
+def test_the_lookup_reads_frappe_s_envelope(monkeypatch, body, employee):
+    import urllib.request
+
+    seen = {}
+
+    def urlopen(req, timeout=None):
+        seen["url"] = req.full_url
+        return _Answer(json.dumps(body).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    extra = {
+        "callback_url": "https://erp.example.ch/api/method/nora.api.v2.hermes_callback.deliver",
+        "callback_token": "t",
+    }
+    assert router._employee_named(EMPLOYEE_MOVED, extra) is employee
+    assert seen["url"].endswith("nora.api.v2.task_router.employee_named")

@@ -481,23 +481,37 @@ _MEASUREMENT_RE = re.compile(
 )
 # //// END Neoffice ////
 
+# //// Neoffice — a client's or supplier's contact change, as a request (« change l'adresse de … »)
+# //// and as a fact (« … a déménagé »): named, so the employee check of route_chat_message (#843)
+# //// reads the same words as the rules below. See the rules for what each half excludes.
+_CONTACT_CHANGE_RE = re.compile(
+    r"^(?!.*\b(?:employ[ée]e?|collaborat\w*|salari[ée]e?|mitarbeiter\w*|dipendente)\b)"
+    r".*\b(?:change[rz]?|modifie[rz]?|met[sz]?\s+[àa]\s+jour|corrige[rz]?|remplace[rz]?|update|"
+    r"[äa]ndere|aggiorna)\b.{0,40}?\b(?:e-?mail|adresse\s+e-?mail|courriel|t[ée]l[ée]phone|"
+    r"num[ée]ro\s+de\s+(?:t[ée]l[ée]phone|portable|mobile)|mobile|natel|adresse|email|phone|address|"
+    r"telefon|indirizzo)\b",
+    re.IGNORECASE,
+)
+_CONTACT_FACT_RE = re.compile(
+    r"^(?!.*\b(?:employ[ée]e?|collaborat\w*|salari[ée]e?|mitarbeiter\w*|dipendente)\b)"
+    r"(?!.*(?:\benvoi|\benvoy|\b[ée]cri[rstvez]|\br[ée]dig|\btransmet|\badresse-(?:lui|leur|moi)\b))"
+    r".*(?:\bnouve(?:lle|au|l)s?\s+(?:adresse(?:\s+e-?mail)?|e-?mail|courriel|"
+    r"num[ée]ro(?:\s+de\s+(?:t[ée]l[ée]phone|portable|mobile))?|t[ée]l[ée]phone|mobile|natel)\b"
+    r"|\ba\s+chang[ée]\s+d['’]\s*(?:adresse|e-?mail|num[ée]ro|t[ée]l[ée]phone)"
+    r"|\ba\s+d[ée]m[ée]nag[ée]\b"
+    r"|\bchangement\s+d['’]\s*(?:adresse|e-?mail|num[ée]ro))",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
     # //// reached support, which has no such tool: tool_search five times (bench, 24.09).
     # //// Not for an employee (rh keeps personnel records).
-    (
-        re.compile(
-            r"^(?!.*\b(?:employ[ée]e?|collaborat\w*|salari[ée]e?|mitarbeiter\w*|dipendente)\b)"
-            r".*\b(?:change[rz]?|modifie[rz]?|met[sz]?\s+[àa]\s+jour|corrige[rz]?|remplace[rz]?|update|"
-            r"[äa]ndere|aggiorna)\b.{0,40}?\b(?:e-?mail|adresse\s+e-?mail|courriel|t[ée]l[ée]phone|"
-            r"num[ée]ro\s+de\s+(?:t[ée]l[ée]phone|portable|mobile)|mobile|natel|adresse|email|phone|address|"
-            r"telefon|indirizzo)\b",
-            re.IGNORECASE,
-        ),
-        "ventes",
-    ),
+    (_CONTACT_CHANGE_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — the same change told as a FACT, with no « change » verb (25.09):
     # //// « Martin SA a une nouvelle adresse e-mail : … », « … a changé d'adresse e-mail »,
@@ -507,19 +521,7 @@ _FAST_PATH_RULES = (
     # //// la nouvelle adresse de Martin SA » stays support), never for an employee (rh keeps
     # //// personnel records), and « a déménagé » only in the third person: « nous avons
     # //// déménagé » is the company itself, not a client.
-    (
-        re.compile(
-            r"^(?!.*\b(?:employ[ée]e?|collaborat\w*|salari[ée]e?|mitarbeiter\w*|dipendente)\b)"
-            r"(?!.*(?:\benvoi|\benvoy|\b[ée]cri[rstvez]|\br[ée]dig|\btransmet|\badresse-(?:lui|leur|moi)\b))"
-            r".*(?:\bnouve(?:lle|au|l)s?\s+(?:adresse(?:\s+e-?mail)?|e-?mail|courriel|"
-            r"num[ée]ro(?:\s+de\s+(?:t[ée]l[ée]phone|portable|mobile))?|t[ée]l[ée]phone|mobile|natel)\b"
-            r"|\ba\s+chang[ée]\s+d['’]\s*(?:adresse|e-?mail|num[ée]ro|t[ée]l[ée]phone)"
-            r"|\ba\s+d[ée]m[ée]nag[ée]\b"
-            r"|\bchangement\s+d['’]\s*(?:adresse|e-?mail|num[ée]ro))",
-            re.IGNORECASE,
-        ),
-        "ventes",
-    ),
+    (_CONTACT_FACT_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — MY pay is rh's, never a revenue question (capability bench, 24.09):
     # //// « Combien ai-je touché en août ? » from an employee reached compta, which called
@@ -1496,6 +1498,54 @@ def _route_reminder(message: str, chat_user: Optional[str], deliver_extra: Optio
 # //// END Neoffice ////
 
 
+# //// Neoffice — an EMPLOYEE's record is rh's, not a client's (27.09, #843). « <Prénom Nom> a
+# //// déménagé : sa nouvelle adresse est … Mets sa fiche à jour » matches the contact rules
+# //// word for word and reached ventes, which searched clients and suppliers seventeen times
+# //// and asked for the spelling: the person was an employee, whose address rh writes
+# //// (hr_employee_update). Words cannot tell the two apart, so nora looks the name up
+# //// (task_router.employee_named), over the desk callback and token of _route_reminder.
+# //// Asked only for a contact change already routed to ventes; any failure keeps ventes.
+def _employee_named(message: str, deliver_extra: Optional[dict]) -> bool:
+    extra = deliver_extra or {}
+    cb = (extra.get("callback_url") or "").strip()
+    token = (extra.get("callback_token") or "").strip()
+    _DELIVER = "nora.api.v2.hermes_callback.deliver"
+    _ROUTE = "nora.api.v2.task_router.employee_named"
+    if not (cb and token) or _DELIVER not in cb:
+        return False
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(
+        cb.replace(_DELIVER, _ROUTE),
+        data=_json.dumps({"message": message}).encode(),
+        method="POST", headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = _json.loads(resp.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("nora_chat_router: employee lookup failed → ventes kept: %s", exc)
+        return False
+    if isinstance(data, dict) and isinstance(data.get("message"), dict):
+        data = data["message"]  # a whitelisted Frappe method answers {"message": {...}}
+    return bool(isinstance(data, dict) and data.get("ok") and data.get("employee"))
+
+
+def _pole_for_an_employee_record(category: str, message: str, deliver_extra: Optional[dict]) -> str:
+    """rh when a contact change routed to ventes names one of the company's employees."""
+    msg = message or ""
+    if (
+        category == "ventes"
+        and (_CONTACT_CHANGE_RE.search(msg) or _CONTACT_FACT_RE.search(msg))
+        and _employee_named(msg, deliver_extra)
+    ):
+        logger.info("nora_chat_router: ventes → rh (the contact change names an employee)")
+        return "rh"
+    return category
+# //// END Neoffice ////
+
+
 # //// Neoffice — DETERMINISTIC FAST-PATH engine call. Ask the nora fast_answer engine
 # (ONE structured-intent LLM call + a Frappe query in CODE) over the SAME desk callback
 # the ack uses (X-Hermes-Token), exactly like _route_recurrent. Returns the answer text
@@ -1811,6 +1861,7 @@ def route_chat_message(
         logger.info("nora_chat_router: DIRECT → projet (job page %s)", _page_project(page_context))
         category = "projet"
     # //// END Neoffice ////
+    category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
     if conversation_id:
