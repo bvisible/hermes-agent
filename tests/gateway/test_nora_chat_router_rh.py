@@ -22,6 +22,10 @@ from gateway.nora_chat_router import _CLASSIFIER_SYSTEM, _fast_path
         "où en sont les certificats de salaire ?",
         "quel est le barème de l'impôt à la source à Genève ?",
         "combien de jours de congé me reste-t-il ?",
+        "la paie de septembre est-elle validée ?",
+        "où en est la paye du mois ?",
+        "j'ai besoin de ma fiche de paie d'août",
+        "lance le calcul de paie",
     ),
 )
 def test_hr_requests_route_to_rh(message):
@@ -33,6 +37,11 @@ def test_hr_requests_route_to_rh(message):
     (
         "quelles factures fournisseurs sont à payer cette semaine ?",
         "fais un devis pour ce client",
+        # //// Neoffice — the verb, not the payroll (27.09, development instance): these went to rh.
+        "Qui paie en retard ?",
+        "Qui paye en retard ?",
+        "il paie ses factures en retard",
+        "ce client paie toujours à 60 jours",
     ),
 )
 def test_the_rh_rule_does_not_swallow_other_poles(message):
