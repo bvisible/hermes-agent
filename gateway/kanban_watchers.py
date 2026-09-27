@@ -480,28 +480,40 @@ class GatewayKanbanWatchersMixin:
             except Exception:
                 logger.exception("kanban dispatcher: unexpected watcher error")
 
-            # Sleep in 1s slices so shutdown is snappy — otherwise a stop()
-            # waits up to `interval` seconds for the current sleep to finish.
-            # //// Neoffice — a poke (task created by the chat router) breaks
-            # the wait immediately: dispatch happens the instant work exists
-            # instead of at the next periodic tick.
-            slept = 0.0
-            while slept < interval and self._running:
-                ev = KANBAN_POKE
-                if ev is not None:
-                    try:
-                        await asyncio.wait_for(ev.wait(), timeout=min(1.0, interval - slept))
-                        ev.clear()
-                        break  # poked → tick now
-                    except asyncio.TimeoutError:
-                        pass
-                else:
-                    await asyncio.sleep(min(1.0, interval - slept))
-                slept += 1.0
+            # //// Neoffice — upstream: `await self._sleep_between_ticks(interval)`. Replaced by
+            # //// a wait a poke cuts short. The v2026.9.7 port kept BOTH (ours, then upstream's
+            # //// sleep), so from 2026-09-08 every poke was followed by one more full interval
+            # //// before the tick: the worker a chat message needs started 1.05-1.11 s after
+            # //// its task on a 1 s interval (dev instance, 2026-09-27), 0.1 s when the poke
+            # //// happened to land during the second sleep.
+            await self._kanban_dispatch_wait(interval)
             # //// END Neoffice ////
-            await self._sleep_between_ticks(interval)
 
         self._release_kanban_dispatcher_lock()
+
+    # //// Neoffice — the dispatcher's only wait between two ticks (see KANBAN_POKE).
+    async def _kanban_dispatch_wait(self, interval: float) -> bool:
+        """Wait *interval* (floored to 1 s, like _sleep_between_ticks) or until a poke.
+
+        Sleeps in 1 s slices so stop() stays snappy. Returns True when a poke cut the
+        wait short: the next tick must run now, with no further sleep.
+        """
+        interval = max(interval, 1.0)
+        slept = 0.0
+        while slept < interval and self._running:
+            ev = KANBAN_POKE
+            if ev is not None:
+                try:
+                    await asyncio.wait_for(ev.wait(), timeout=min(1.0, interval - slept))
+                    ev.clear()
+                    return True  # poked → tick now
+                except asyncio.TimeoutError:
+                    pass
+            else:
+                await asyncio.sleep(min(1.0, interval - slept))
+            slept += 1.0
+        return False
+    # //// END Neoffice ////
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
