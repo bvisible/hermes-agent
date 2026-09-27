@@ -1676,7 +1676,11 @@ def _start_chat_background_prefetch() -> None:
     on the very first launch), so the first run syncs in the foreground and
     drops the banner's skills cache.
     """
-    if _termux_should_prefetch_update_check():
+    # //// Neoffice — a kanban worker (`chat -q` spawned by the dispatcher) shows no banner: its
+    # //// update check and banner data (git subprocesses, a scan of every skill) only competed
+    # //// with its start-up for the CPU. The bundled-skills sync below still runs.
+    if _termux_should_prefetch_update_check() and not os.environ.get("HERMES_KANBAN_TASK"):
+        # //// END Neoffice ////
         try:
             from hermes_cli.banner import prefetch_banner_data, prefetch_update_check
 
@@ -2921,21 +2925,6 @@ def _command_has_dedicated_mcp_startup(args) -> bool:
 
 
 def _should_background_mcp_startup(args) -> bool:
-    # //// Neoffice — a kanban worker must NOT background MCP discovery (was tagged
-    # //// "NORA CORE PATCH", the legacy alias). Upstream 0c6e133c0 backgrounds discovery
-    # //// for `chat` so interactive startup never blocks. But a worker is a short-lived,
-    # //// dispatcher-spawned `chat -q` one-shot (HERMES_KANBAN_TASK is set by the kanban
-    # //// spawn): it reaches its first tool snapshot — and often exits — BEFORE the
-    # //// background thread has connected its per-pole MCP server (Frappe REST auth,
-    # //// 1.5-20 s), so it boots with ONLY the kanban_* tools and self-blocks
-    # //// ("je n'ai pas accès", or an empty completion — the staging-soak bug: kanban_show
-    # //// then an empty kanban_complete, revenue_summary never called). Returning False
-    # //// forces the synchronous discovery path in _prepare_agent_startup, which is what
-    # //// worked before 0c6e133c0. Interactive chat keeps the fast default. Drop when
-    # //// upstream lets a one-shot wait for discovery.
-    if os.environ.get("HERMES_KANBAN_TASK"):
-        return False
-    # //// END Neoffice ////
     return not _is_tui_chat_launch(args) and args.command in {None, "chat", "rl"}
 
 
@@ -3575,9 +3564,14 @@ def main():
         except Exception:
             pass
         try:
-            from hermes_cli.update_cmd_fleet import _warn_pending_fleet_restart_on_startup
+            # //// Neoffice — not in a kanban worker: its stdout is the task's log, nobody reads
+            # //// the hint there, and resolving the hint's path imports the whole gateway
+            # //// package (0.42 s of the worker's start under a sampling profiler, 2026-09-27).
+            if not os.environ.get("HERMES_KANBAN_TASK"):
+                from hermes_cli.update_cmd_fleet import _warn_pending_fleet_restart_on_startup
 
-            _warn_pending_fleet_restart_on_startup()
+                _warn_pending_fleet_restart_on_startup()
+            # //// END Neoffice ////
         except Exception:
             pass
 

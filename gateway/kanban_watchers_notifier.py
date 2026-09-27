@@ -531,6 +531,21 @@ _NEOFFICE_DOMAINS = {
 }
 
 
+# //// Neoffice — the pole's name in the language the answer is written in (#867). The router
+# //// asks every worker « [Reply to the user in <Language>. …] » at the back of the task body;
+# //// an English answer headed « ✅ Comptabilité — » read half French (dmis, 27.09).
+_NEOFFICE_REPLY_LANGUAGE_RE = re.compile(r"\[Reply to the user in (French|German|Italian|English)\b")
+_NEOFFICE_LANGUAGE_CODES = {"French": "fr", "German": "de", "Italian": "it", "English": "en"}
+
+
+def _neoffice_task_language(n: "_KanbanNotification") -> str:
+    """The language the router told this task's worker to answer in; French when it said none."""
+    body = (getattr(n.task, "body", "") or "") if n.task else ""
+    m = _NEOFFICE_REPLY_LANGUAGE_RE.search(body)
+    return _NEOFFICE_LANGUAGE_CODES.get(m.group(1), "fr") if m else "fr"
+# //// END Neoffice ////
+
+
 def _neoffice_head(n: "_KanbanNotification") -> str:
     """The pole name the customer knows, never the board/assignee/task id."""
     who = (getattr(n.task, "assignee", "") or "") if n.task else ""
@@ -541,7 +556,7 @@ def _neoffice_head(n: "_KanbanNotification") -> str:
     try:
         from gateway.nora_chat_router import POLE_LABELS
 
-        label = (POLE_LABELS.get("fr") or {}).get(who)
+        label = (POLE_LABELS.get(_neoffice_task_language(n)) or {}).get(who) or (POLE_LABELS.get("fr") or {}).get(who)
         if label:
             return label
     except Exception:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os  # //// Neoffice — the kanban worker MCP wait, see _resolve_discovery_timeout
 import threading
 from contextlib import nullcontext
 from contextvars import copy_context
@@ -135,6 +136,10 @@ def start_background_mcp_discovery(*, logger, thread_name: str) -> None:
         thread.start()
 
 
+# //// Neoffice — see _resolve_discovery_timeout.
+_KANBAN_WORKER_MCP_WAIT_S = 60.0
+
+
 def _resolve_discovery_timeout(explicit: "float | None", *, single_query: bool = False) -> float:
     """Resolve the MCP discovery wait bound: explicit arg > config.yaml > ``DEFAULT_CONFIG``.
 
@@ -143,6 +148,17 @@ def _resolve_discovery_timeout(explicit: "float | None", *, single_query: bool =
     """
     if explicit is not None:
         return explicit
+    # //// Neoffice — a kanban worker (a dispatcher-spawned `chat -q`, HERMES_KANBAN_TASK set)
+    # //// waits for its pole's MCP server as long as the synchronous discovery it used until
+    # //// 2026-09-27 did: the server's own connect timeout, 40 s in the fleet profiles. Its
+    # //// tools ARE the worker; built without them it self-blocks (« je n'ai pas accès »,
+    # //// the staging-soak bug). The discovery now starts in the background at process
+    # //// start, so the server's start-up (0.89 s on the dev instance, 2026-09-27) overlaps
+    # //// the imports and the agent setup; upstream's 15 s single-query bound suits an
+    # //// interactive -q.
+    if single_query and os.environ.get("HERMES_KANBAN_TASK"):
+        return _KANBAN_WORKER_MCP_WAIT_S
+    # //// END Neoffice ////
     key = "mcp_single_query_discovery_timeout" if single_query else "mcp_discovery_timeout"
     fallback = 15.0 if single_query else 1.5
     try:

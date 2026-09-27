@@ -772,7 +772,12 @@ _FAST_PATH_RULES = (
     # which sent it to compta; compta keeps the same expense tools as a fallback.
     (
         re.compile(
-            r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des)"
+            # //// Neoffice — « paie » only as the payroll NOUN, after a determiner (« la paie de
+            # //// septembre », « de paie »), « paye » too. The bare word also caught the verb:
+            # //// « Qui paie en retard ? » reached rh, which holds no receivables tool, and its
+            # //// worker listed invoices for 2 min before the loop guard (27.09, development instance).
+            r"(cong[ée]s?\b|fiche de paie|bulletin de salaire"
+            r"|\b(?:la|ma|sa|ta|notre|votre|leur|de|les|mes|ses|des)\s+pa(?:ie|ye)s?\b|absences? (du|des)"
             r"|notes? de frais|certificats? de salaire|imp[ôo]ts? [àa] la source"
             # //// Neoffice — Swiss HR doctrine the rh worker holds in its wiki (24.09): a
             # //// public-holiday question was answered by the orchestrator itself, citing the
@@ -1551,6 +1556,19 @@ def _pole_for_an_employee_record(category: str, message: str, deliver_extra: Opt
 # the ack uses (X-Hermes-Token), exactly like _route_recurrent. Returns the answer text
 # on a confident hit, else None → the caller routes to a worker (zero regression).
 # grep "//// Neoffice".
+# //// Neoffice — which turns ask nora's fast-answer engine. It ran for French only: its
+# //// sentences were French. Since 2026-09-27 (nora #867) the engine answers in the language
+# //// of the question, all four of them, and nora tells the gateway the message's language;
+# //// a question asked in English or German no longer waits for a worker it did not need.
+_FAST_ANSWER_LANGUAGES = frozenset({"fr", "de", "it", "en"})
+
+
+def _asks_fast_answer(language: Optional[str], canned_text: Optional[str], one_off_reminder: bool) -> bool:
+    """True unless the turn is canned small talk or a one-off reminder, both answered elsewhere."""
+    return _norm_lang(language) in _FAST_ANSWER_LANGUAGES and not canned_text and not one_off_reminder
+# //// END Neoffice ////
+
+
 def _fast_answer(
     message: str,
     chat_user: Optional[str],
@@ -1809,7 +1827,7 @@ def route_chat_message(
     # //// Neoffice — a one-off reminder is an action nora sets in code (_route_reminder):
     # //// the read-only fast-answer engine has nothing to answer, so it is not asked.
     _one_off_reminder = _is_one_off_reminder(message)
-    if _norm_lang(language) == "fr" and not _canned_text and not _one_off_reminder:
+    if _asks_fast_answer(language, _canned_text, _one_off_reminder):
         import concurrent.futures as _cf
 
         _fa_pool = _cf.ThreadPoolExecutor(max_workers=1)
