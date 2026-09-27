@@ -114,6 +114,46 @@ def test_the_tool_refuses_when_the_callers_bucket_is_the_company_bucket():
     assert "Nothing was stored" in out["error"]
 
 
+class CompanyRowBackend(RecordingBackend):
+    """A store where every memory sits in the company bucket."""
+
+    def __init__(self):
+        super().__init__()
+        self.writes = []
+
+    def get(self, memory_id):
+        return {"id": memory_id, "memory": "We invoice on the 25th", "user_id": COMPANY}
+
+    def update(self, memory_id, text):
+        self.writes.append(("update", memory_id, text))
+        return {"result": "Memory updated.", "memory_id": memory_id}
+
+    def delete(self, memory_id):
+        self.writes.append(("delete", memory_id))
+        return {"result": "Memory deleted.", "memory_id": memory_id}
+
+
+@pytest.mark.parametrize("tool,args", [
+    ("mem0_update", {"memory_id": "shared", "text": "We never invoice"}),
+    ("mem0_delete", {"memory_id": "shared"}),
+])
+def test_a_caller_named_like_the_company_cannot_change_a_company_memory(tool, args):
+    """The company owner is checked before the own-bucket shortcut: that caller would
+    otherwise "own" every memory every colleague recalls."""
+    backend = CompanyRowBackend()
+    out = _call(_named_like_the_company(backend), tool, args)
+    assert "shared with the whole company" in out["error"]
+    assert backend.writes == []
+
+
+def test_the_trusted_server_path_still_retires_a_company_memory_for_that_caller():
+    backend = CompanyRowBackend()
+    out = _call(_named_like_the_company(backend), "mem0_delete", {"memory_id": "shared"},
+                allow_company_bucket=True)
+    assert "error" not in out
+    assert backend.writes == [("delete", "shared")]
+
+
 def test_a_user_retain_never_lands_in_the_company_bucket_through_the_users_name():
     backend = RecordingBackend()
     assert _named_like_the_company(backend).retain_facts(["Paul's salary is 7000"]) == 0

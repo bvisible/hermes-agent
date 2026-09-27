@@ -40,7 +40,7 @@ Behavioral settings live in `$HERMES_HOME/mem0.json` (set them via `hermes memor
 | `company_id` | `company` | `user_id` of the shared company bucket |
 | `company_recall` | `true` | `false` leaves the company bucket out of every read (`mem0_search`, `mem0_list`, the recall prefetch and the gateway's `memory_read`). Stored facts are kept and writes to the bucket are unchanged. Set it per site in that site's `mem0.json`; `"false"`, `"0"`, `"no"` and `"off"` all mean off |
 
-`mem0_update` and `mem0_delete` only act on a memory in the caller's own bucket. An id from another user's bucket answers "Memory not found", and a company memory is refused to the chat tools; only the gateway's signed `memory_forget` route may retire one.
+`mem0_update` and `mem0_delete` only act on a memory in the caller's own bucket. An id from another user's bucket answers "Memory not found", and a company memory is refused to the chat tools, even for a caller whose own id is the company bucket id; only the gateway's signed `memory_forget` route may retire one.
 <!-- //// END Neoffice -->
 
 The plugin has three connection modes:

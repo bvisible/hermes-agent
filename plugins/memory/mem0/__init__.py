@@ -875,8 +875,9 @@ class Mem0MemoryProvider(MemoryProvider):
         if not isinstance(record, dict) or not record:
             return tool_error(f"Memory not found: {memory_id}")
         owner = str(record.get("user_id") or "").strip()
-        if owner and owner == self._user_id:
-            return None
+        # //// Neoffice — the company bucket is checked BEFORE the own-bucket shortcut: a
+        # //// caller whose own id is the company id (_own_bucket_is_company) would otherwise
+        # //// "own" every company memory and rewrite or erase what every colleague recalls.
         company_id = getattr(self, "_company_id", None)
         if company_id and owner == company_id:
             if allow_company:
@@ -884,6 +885,8 @@ class Mem0MemoryProvider(MemoryProvider):
             return tool_error(
                 "This memory is shared with the whole company: it cannot be changed or "
                 "deleted from a conversation. Nothing was changed.")
+        if owner and owner == self._user_id:
+            return None
         return tool_error(f"Memory not found: {memory_id}")
     # //// END Neoffice ////
 
