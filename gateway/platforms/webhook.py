@@ -712,7 +712,13 @@ class WebhookAdapter(BasePlatformAdapter):
             removed, failed = 0, []
             for memory_id in ids:
                 try:
-                    out = prov.handle_tool_call("mem0_delete", {"memory_id": memory_id})
+                    # //// Neoffice — mem0_delete now refuses any id outside the named
+                    # //// user's bucket, and the company bucket unless the caller says it
+                    # //// is trusted (#881). This HMAC-signed route is: NORA's nightly pass
+                    # //// retires superseded facts it read from the user's merged view,
+                    # //// company ones included. Another user's id is still refused.
+                    out = prov.handle_tool_call(
+                        "mem0_delete", {"memory_id": memory_id}, allow_company_bucket=True)
                     # handle_tool_call reports failures in-band as {"error": ...}
                     if isinstance(out, str) and '"error"' in out:
                         failed.append(memory_id)

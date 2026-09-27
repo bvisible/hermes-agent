@@ -37,6 +37,16 @@ class Mem0Backend(ABC):
         self._delete(memory_id)
         return {"result": "Memory deleted.", "memory_id": memory_id}
 
+    # //// Neoffice — read ONE memory by id, so the provider can check whose bucket it sits in
+    # //// before mem0_update / mem0_delete touch it (#881). Upstream exposes no single read:
+    # //// update and delete trust any id the model hands them, so a user could rewrite or erase
+    # //// a colleague's memory, or the shared company bucket, by id. Concrete (not abstract) on
+    # //// purpose: a backend that cannot answer makes the provider refuse, it never breaks import.
+    def get(self, memory_id: str) -> dict | None:
+        """The stored memory (with its ``user_id``), or None when it does not exist."""
+        raise NotImplementedError(f"{type(self).__name__} cannot read a single memory")
+    # //// END Neoffice ////
+
     def close(self) -> None:
         pass
 
@@ -59,6 +69,10 @@ class PlatformBackend(Mem0Backend):
 
     def _delete(self, memory_id: str) -> None:
         self._client.delete(memory_id=memory_id)
+
+    # //// Neoffice — single read for the ownership check (see Mem0Backend.get, #881).
+    def get(self, memory_id: str) -> dict | None:
+        return self._client.get(memory_id=memory_id) or None
 
 
 class SelfHostedBackend(Mem0Backend):
@@ -89,6 +103,11 @@ class SelfHostedBackend(Mem0Backend):
 
     def _delete(self, memory_id: str) -> None:
         self._json("DELETE", f"/memories/{memory_id}")
+
+    # //// Neoffice — single read for the ownership check (see Mem0Backend.get, #881). A 404
+    # //// raises through raise_for_status and is answered "Memory not found" by the provider.
+    def get(self, memory_id: str) -> dict | None:
+        return self._json("GET", f"/memories/{memory_id}") or None
 
     def close(self) -> None:
         with suppress(Exception):
@@ -216,6 +235,12 @@ class OSSBackend(Mem0Backend):
 
     def _delete(self, memory_id: str) -> None:
         self._memory.delete(memory_id)
+
+    # //// Neoffice — single read for the ownership check (see Mem0Backend.get, #881).
+    # //// mem0 OSS Memory.get promotes the payload's user_id to the top level of the
+    # //// record and returns None for an unknown id (checked on mem0ai 2.0.10).
+    def get(self, memory_id: str) -> dict | None:
+        return self._memory.get(memory_id)
 
     def close(self):
         with suppress(Exception):

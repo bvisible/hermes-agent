@@ -21,6 +21,11 @@ id), agent_id. MEM0_* env vars remain a fallback.
     (event_type "memory_retain") for NORA's end-of-day consolidation.
   * mem0_profile / mem0_conclude kept as hidden aliases of mem0_list /
     mem0_add so pre-v2026.7.1 SOUL prompts and skills keep working.
+  * mem0_update / mem0_delete only touch a memory in the caller's own bucket
+    (#881); the company bucket is refused to the chat tools and allowed only to
+    a trusted server caller that says so (allow_company_bucket=True).
+  * `company_recall` in mem0.json (default true) turns the company bucket off
+    in every read, per site, without touching what is stored.
 //// END Neoffice ////
 """
 
@@ -362,6 +367,19 @@ _PROMPT_BODY = (
 def _neoffice_write_metadata(provider: Any) -> Dict[str, Any]:
     """Tag a write with the gateway channel, exactly as upstream's inlined literal does."""
     return {"channel": provider._channel} if provider._channel else {}
+
+
+# //// Neoffice — read a boolean switch from mem0.json. JSON gives a bool, a hand-edited file
+# //// or an env-templated one may give "false" / "0" / "no" / "off": all of them mean off.
+def _config_flag(value: Any, *, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return default
+        return text not in ("false", "0", "no", "off")
+    return bool(value)
 # //// END Neoffice ////
 
 class Mem0MemoryProvider(MemoryProvider):
@@ -499,6 +517,12 @@ class Mem0MemoryProvider(MemoryProvider):
         # The gateway passes company_id per call; default "company" = one
         # shared bucket per instance. grep "//// Neoffice".
         self._company_id = kwargs.get("company_id") or self._config.get("company_id", "company")
+        # //// Neoffice — `company_recall` (mem0.json, default true = unchanged behaviour)
+        # //// lets a site stop merging the company bucket into reads (#881): its facts
+        # //// carry neither author nor source, so they cannot be filtered by the reader's
+        # //// rights. Whether the default should flip is a product decision still open;
+        # //// until then this is the per-site switch. Writes to the bucket are unchanged.
+        self._company_recall = _config_flag(self._config.get("company_recall"), default=True)
         # //// END Neoffice ////
         self._channel = kwargs.get("platform") or "cli"
         self._sync_max_chars = int(cfg.get("sync_max_chars") or _SYNC_MSG_MAX_CHARS)
@@ -526,6 +550,11 @@ class Mem0MemoryProvider(MemoryProvider):
         # //// here so the per-user bucket keeps the exact upstream shape.
         buckets = [{"user_id": self._user_id}]
         company_id = getattr(self, "_company_id", None)
+        # //// Neoffice — `company_recall: false` in mem0.json leaves the company bucket
+        # //// out of every read: search, list, prefetch and the webhook's memory_read (#881).
+        if not getattr(self, "_company_recall", True):
+            return buckets
+        # //// END Neoffice ////
         if company_id and company_id != self._user_id:
             buckets.append({"user_id": company_id})
         return buckets
@@ -792,6 +821,41 @@ class Mem0MemoryProvider(MemoryProvider):
         msg = "Fact stored." if (self._mode == "oss" or self._host) else "Fact queued for storage."
         return json.dumps({"result": msg, "event_id": event_id})
 
+    # //// Neoffice — mem0_update / mem0_delete act only on the caller's own memories (#881).
+    # //// Upstream hands any id straight to the backend, so a user could rewrite or erase a
+    # //// colleague's memory, or a fact every colleague recalls, by naming its id (ids are
+    # //// shown by mem0_search / mem0_list, company ones included). A memory in another
+    # //// user's bucket answers "not found", exactly like an id that does not exist, so the
+    # //// check does not reveal what others keep. The company bucket has no notion of who may
+    # //// manage it, so it is refused to the chat tools; only a trusted server caller (the
+    # //// gateway's HMAC-signed memory_forget, driven by NORA's nightly consolidation) passes
+    # //// allow_company_bucket=True. The model controls `args`, never the call's kwargs.
+    _OWNED_WRITE_TOOLS = ("mem0_update", "mem0_delete")
+
+    def _refuse_unowned_memory(self, memory_id: str, *, allow_company: bool) -> Optional[str]:
+        """None when the caller may modify ``memory_id``; otherwise the tool error to return."""
+        getter = getattr(self._backend, "get", None)
+        if not callable(getter):
+            return tool_error("Cannot check who owns this memory on this backend; nothing was changed.")
+        try:
+            record = getter(memory_id)
+        except NotImplementedError:
+            return tool_error("Cannot check who owns this memory on this backend; nothing was changed.")
+        if not isinstance(record, dict) or not record:
+            return tool_error(f"Memory not found: {memory_id}")
+        owner = str(record.get("user_id") or "").strip()
+        if owner and owner == self._user_id:
+            return None
+        company_id = getattr(self, "_company_id", None)
+        if company_id and owner == company_id:
+            if allow_company:
+                return None
+            return tool_error(
+                "This memory is shared with the whole company: it cannot be changed or "
+                "deleted from a conversation. Nothing was changed.")
+        return tool_error(f"Memory not found: {memory_id}")
+    # //// END Neoffice ////
+
     _TOOL_HANDLERS = {
         "mem0_search": (("query",), "Search failed", _tool_search, "skip"),
         # //// Neoffice — mem0_list (see the schema and the handler above) ////
@@ -822,6 +886,15 @@ class Mem0MemoryProvider(MemoryProvider):
         if missing := next((k for k in required if not args.get(k, "")), None):
             return tool_error(f"Missing required parameter: {missing}")
         try:
+            # //// Neoffice — ownership check before any update or delete (#881). Inside the
+            # //// try: a lookup that fails refuses the write (fail closed), and a "not found"
+            # //// from the backend is answered like any other unknown id.
+            if tool_name in self._OWNED_WRITE_TOOLS:
+                refusal = self._refuse_unowned_memory(
+                    str(args["memory_id"]), allow_company=kwargs.get("allow_company_bucket") is True)
+                if refusal is not None:
+                    return refusal
+            # //// END Neoffice ////
             result = body(self, args)
         except Exception as e:
             client = _is_client_error(e)
