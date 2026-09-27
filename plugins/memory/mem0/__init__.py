@@ -699,6 +699,10 @@ class Mem0MemoryProvider(MemoryProvider):
         # wants capture can still configure an explicit user_id.
         if (self._user_id or _DEFAULT_USER_ID) == _DEFAULT_USER_ID:
             return
+        # //// Neoffice — a conversation whose user id IS the company bucket id would write
+        # //// its raw turns into what every colleague recalls (#881).
+        if self._own_bucket_is_company():
+            return
         # //// END Neoffice ////
 
         def _sync():
@@ -809,6 +813,17 @@ class Mem0MemoryProvider(MemoryProvider):
         "Shared company memory cannot be written from a conversation. This fact was stored "
         "in this user's own memory instead: only they will recall it.")
 
+    # //// Neoffice — the per-user write paths refuse a caller named like the company bucket.
+    def _own_bucket_is_company(self) -> bool:
+        """True when this caller's per-user bucket id is the shared company bucket id (#881).
+
+        The company bucket is a plain mem0 user_id, so a user named like it (a gateway id,
+        a mem0.json user_id, a memory_retain `user`) would turn every "own bucket" write
+        into a shared one, past the chat-tool refusal and the gateway's money/pay filter.
+        Every per-user write path refuses in that case instead."""
+        company_id = getattr(self, "_company_id", None)
+        return bool(company_id) and self._user_id == company_id
+
     def _tool_add(self, args: dict) -> str:
         # //// Neoffice — accept the legacy `conclusion` spelling (pre-v2026.7.1 SOUL prompts
         # //// and skills still say mem0_conclude(conclusion=...)).
@@ -823,6 +838,10 @@ class Mem0MemoryProvider(MemoryProvider):
         # //// is worth keeping, so it lands in the caller's own bucket and the result says so.
         # //// The company bucket is written by the gateway's signed memory_retain alone.
         company_refused = str(args.get("scope") or "").strip().lower() == "company"
+        if self._own_bucket_is_company():
+            return tool_error(
+                "This conversation's user id is the shared company memory's id, so a fact "
+                "stored here would be recalled by every colleague. Nothing was stored.")
         # //// END Neoffice ////
         result = self._add([{"role": "user", "content": content}], infer=False)
         event_id = result.get("event_id") if isinstance(result, dict) else None
@@ -944,6 +963,11 @@ class Mem0MemoryProvider(MemoryProvider):
         memory_retain is its caller and keeps any amount or pay out of the company
         bucket before calling it (gateway/neoffice_memory_policy.py, #881)."""
         if self._backend is None or self._is_breaker_open():
+            return 0
+        # //// Neoffice — a user write must never land in the company bucket unfiltered (#881):
+        # //// store nothing, so the short count keeps NORA's rows pending and visible.
+        if scope != "company" and self._own_bucket_is_company():
+            logger.warning("retain_facts: user %r is the company bucket id; nothing stored", self._user_id)
             return 0
         write_user_id = (
             self._company_id if scope == "company" else self._user_id

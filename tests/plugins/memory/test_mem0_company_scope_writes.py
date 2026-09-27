@@ -95,3 +95,45 @@ def test_the_trusted_server_path_still_writes_the_company_bucket():
     assert provider.retain_facts(["We invoice on the 25th"], scope="company") == 1
     assert provider.retain_facts(["I prefer tea"]) == 1
     assert [user for user, _, _ in backend.adds] == [COMPANY, ME]
+
+
+# --- a caller whose own bucket IS the company bucket -------------------------------------
+# The company bucket is a plain mem0 user_id: a user named like it would turn every
+# "own bucket" write into a shared one, past the tool refusal and the gateway's filter.
+
+def _named_like_the_company(backend):
+    provider = _provider(backend)
+    provider._user_id = COMPANY
+    return provider
+
+
+def test_the_tool_refuses_when_the_callers_bucket_is_the_company_bucket():
+    backend = RecordingBackend()
+    out = _call(_named_like_the_company(backend), "mem0_add", {"content": "Paul's salary is 7000"})
+    assert backend.adds == []
+    assert "Nothing was stored" in out["error"]
+
+
+def test_a_user_retain_never_lands_in_the_company_bucket_through_the_users_name():
+    backend = RecordingBackend()
+    assert _named_like_the_company(backend).retain_facts(["Paul's salary is 7000"]) == 0
+    assert backend.adds == [], "a short count keeps NORA's rows pending instead"
+
+
+def test_a_company_retain_is_unaffected_by_the_callers_name():
+    backend = RecordingBackend()
+    assert _named_like_the_company(backend).retain_facts(["We bill in CHF"], scope="company") == 1
+    assert [user for user, _, _ in backend.adds] == [COMPANY]
+
+
+@pytest.mark.parametrize("user,expected", [(ME, [ME]), (COMPANY, [])])
+def test_per_turn_capture_skips_a_caller_named_like_the_company(user, expected):
+    backend = RecordingBackend()
+    provider = _provider(backend)
+    provider._user_id = user
+    provider.sync_turn("Our supplier for paper is changing next month.",
+                       "Understood, I will use the new supplier from next month on.", session_id="s1")
+    thread = getattr(provider, "_sync_thread", None)
+    if thread is not None:
+        thread.join(timeout=5)
+    assert [owner for owner, _, _ in backend.adds] == expected
