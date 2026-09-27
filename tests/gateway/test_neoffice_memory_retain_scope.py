@@ -6,7 +6,7 @@ nothing about pay; any other fact goes to the named user's own bucket.
 The company bucket is merged into what every colleague recalls, whatever their rights,
 and a stored fact carries neither its author nor its source. NORA's nightly
 consolidation already filters (``_stays_private``); the route now holds a signed request
-to the same rule itself. No model, no store: the mem0 provider is replaced.
+to the same rule itself. No model: the mem0 provider, or its store, is replaced.
 """
 
 import asyncio
@@ -18,56 +18,11 @@ pytest.importorskip("aiohttp")
 
 import plugins.memory.mem0 as mem0_plugin  # noqa: E402
 from gateway.config import PlatformConfig  # noqa: E402
-from gateway.neoffice_memory_policy import split_company_facts, stays_private  # noqa: E402
 from gateway.platforms.webhook import WebhookAdapter  # noqa: E402
 
 USER = "jean@example.test"
 
-# Same cases as NORA's own test of the filter, with neutral names.
-PRIVATE = [
-    "Marie earns CHF 8'500 a month",
-    "Our 2025 revenue was 1.2 million CHF",
-    "The rent is 3'000.- per month",
-    "The rent is 3000 per month",
-    "Paul's salary is 7000",
-    "We charge 120 CHF/hour",
-    "Invoice INV-1 is € 500",
-    "Revenue reached 800k",
-    "Payroll runs on the 25th",
-    "The CEO earns more than the CTO",
-    "Marie gets a bonus in December",
-    "Le salaire de Marie est de 7000",
-    "Le 13e salaire est versé en novembre",
-    "Die Lohnabrechnung kommt am Monatsende",
-]
-
-SHARED = [
-    "Our electricity supplier is the local utility",
-    "We invoice on the 25th",
-    "We book fuel to account 6200.",
-    "Client X pays within 30 days",
-    "We have 12 employees",
-    "We give a 5% discount to resellers",
-    "Marie handles the supplier invoices",
-    "We bill in CHF",
-    "The main supplier is Fr. Example AG",
-]
-
-
-@pytest.mark.parametrize("text", PRIVATE)
-def test_an_amount_or_pay_stays_private(text):
-    assert stays_private(text), text
-
-
-@pytest.mark.parametrize("text", SHARED)
-def test_a_plain_business_fact_may_be_shared(text):
-    assert not stays_private(text), text
-
-
-def test_split_keeps_the_order_of_each_side():
-    shared, private = split_company_facts(["We bill in CHF", "Paul's salary is 7000", "We have 12 employees"])
-    assert shared == ["We bill in CHF", "We have 12 employees"]
-    assert private == ["Paul's salary is 7000"]
+# The rule itself, and the vectors it shares with NORA: test_neoffice_memory_policy.py.
 
 
 # --- the route ---------------------------------------------------------------------------
