@@ -382,6 +382,15 @@ KANBAN_GUIDANCE = (
     "- Do not shell out to `hermes kanban <verb>` for board operations. Use the `kanban_*` tools — they work across "
     "all terminal backends.\n"
     "- Do not complete a task you didn't actually finish. Block it.\n"
+    # //// Neoffice — added bullet (27.09, #843). A worker whose pole held no credit note tool
+    # //// told the person « l'outil de lecture des lignes est en panne »: nothing had failed, the
+    # //// tool simply was not there. A made-up breakdown sends the person to support and hides
+    # //// the real gap (the routing, the missing tool). Drop if the kernel ever checks a claimed
+    # //// failure against the run's own tool results.
+    "- Never tell the person a tool is broken, down or failing unless a tool call in THIS run returned an error "
+    "saying so. When none of your tools does what is asked, say that plainly in `kanban_block(reason=...)`: "
+    "what you could not do, and that another desk may.\n"
+    # //// END Neoffice ////
     "- Do not call `clarify` to ask questions. You are running headless — there is no live user to answer. The call "
     "will time out and the task will sit silently in `running` with no signal to the operator. Instead: "
     "`kanban_comment` the context, then `kanban_block(reason=...)` so the task surfaces on the board as needing "

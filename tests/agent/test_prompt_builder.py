@@ -1025,3 +1025,13 @@ def test_the_block_instruction_is_not_keyed_on_a_prefix_either():
 
     assert "If your `frappe_*` tools cannot answer" not in KANBAN_GUIDANCE
     assert "If your domain tools cannot answer" in KANBAN_GUIDANCE
+
+
+# //// Neoffice — added 27.09 (#843). A worker whose pole held no credit note tool told the
+# //// person « l'outil de lecture des lignes est en panne »: no tool had failed.
+def test_a_worker_never_announces_a_breakdown_no_tool_reported():
+    from agent.prompt_builder import KANBAN_GUIDANCE
+
+    rule = KANBAN_GUIDANCE.split("## Do NOT", 1)[1]
+    assert "Never tell the person a tool is broken" in rule
+    assert "unless a tool call in THIS run returned an error" in rule
