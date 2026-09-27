@@ -33,6 +33,45 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# //// Neoffice — the hesitation budget (27.09). A worker whose pole has no tool for the request
+# //// does not stop: it rebuilds the answer by hand. « Qui paie en retard ? » reached rh by a routing
+# //// slip, and its worker listed and counted invoices for two minutes, twenty model calls, until
+# //// the repetition guard cut it; the person waited with nothing on screen. What a secretary does
+# //// instead is ask. After NEOFFICE_KANBAN_HESITATION_ROUNDS tool rounds (8 by default, 0 turns it
+# //// off) the worker is told once to finish or to ask the user one short question, and four rounds
+# //// later to finish now. On the night of 26 to 27.09, 63 of the capability bench's 70 worker
+# //// sessions took 6 calls or fewer; the 7 above were loops and wrong routes (a credit note in 25
+# //// calls, a refusal in 20) and a purchase order in 12.
+NEOFFICE_HESITATION_NUDGE = (
+    "You have made {n} tool calls and not answered yet. If your tools cannot answer this request "
+    "directly, or if it can be read two ways, stop now: call kanban_block with ONE short question for "
+    "the user, or kanban_complete saying plainly what you cannot do here. Do not rebuild the answer by "
+    "hand from raw listings. If you already have what you need, finish with kanban_complete."
+)
+NEOFFICE_HESITATION_FINISH = (
+    "{n} tool calls: finish now. Call kanban_complete with your answer from what you ALREADY have, in "
+    "the user's language, saying which part you could not get, or kanban_block with your question if "
+    "you need the user. Do not call any other tool."
+)
+
+
+def neoffice_hesitation_nudge(rounds: int, first: int | None = None) -> str:
+    """The message a kanban worker gets after its `rounds`-th tool round, "" when none is due."""
+    if first is None:
+        try:
+            first = int(os.environ.get("NEOFFICE_KANBAN_HESITATION_ROUNDS", "8") or 0)
+        except ValueError:
+            first = 8
+    if first <= 0:
+        return ""
+    if rounds == first:
+        return NEOFFICE_HESITATION_NUDGE.format(n=rounds)
+    if rounds == first + 4:
+        return NEOFFICE_HESITATION_FINISH.format(n=rounds)
+    return ""
+# //// END Neoffice ////
+
+
 @dataclass
 class KanbanBreakerVerdict:
     """``action``: ``"fallthrough"`` (nothing to do — honour the tool round's own
@@ -79,6 +118,8 @@ def neoffice_kanban_no_progress_breaker(
         agent._kanban_no_progress_streak = 0
         agent._kanban_no_progress_nudged = False
         agent._kanban_made_progress = False
+    # //// Neoffice — every tool round counts toward the hesitation budget (see above).
+    agent._kanban_tool_rounds = getattr(agent, "_kanban_tool_rounds", 0) + 1
 
     progress = _classify_worker_turn_progress(assistant_message)
     if progress in ("progress", "terminal"):
@@ -88,6 +129,18 @@ def neoffice_kanban_no_progress_breaker(
         # auto-complete net may deliver its result. Structural signal, not a text guess.
         if progress == "progress":
             agent._kanban_made_progress = True
+            # //// Neoffice — the hesitation budget: told once to finish or ask, then to finish.
+            nudge = neoffice_hesitation_nudge(agent._kanban_tool_rounds)
+            if nudge:
+                logger.warning(
+                    "kanban worker %s: %d tool rounds without an answer — hesitation nudge",
+                    kanban_task, agent._kanban_tool_rounds,
+                )
+                messages.append({"role": "user", "content": nudge, "_kanban_hesitation_nudge": True})
+                agent._stream_needs_break = True
+                agent._session_messages = messages
+                return _verdict("continue")
+            # //// END Neoffice ////
             return _verdict("fallthrough")
 
         # A SUCCESSFUL terminal kanban tool ends the run. The model is told to stop

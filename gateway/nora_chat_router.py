@@ -772,7 +772,12 @@ _FAST_PATH_RULES = (
     # which sent it to compta; compta keeps the same expense tools as a fallback.
     (
         re.compile(
-            r"(cong[ée]s?\b|fiche de paie|bulletin de salaire|\bpaie\b|absences? (du|des)"
+            # //// Neoffice — « paie » only as the payroll NOUN, after a determiner (« la paie de
+            # //// septembre », « de paie »), « paye » too. The bare word also caught the verb:
+            # //// « Qui paie en retard ? » reached rh, which holds no receivables tool, and its
+            # //// worker listed invoices for 2 min before the loop guard (27.09, development instance).
+            r"(cong[ée]s?\b|fiche de paie|bulletin de salaire"
+            r"|\b(?:la|ma|sa|ta|notre|votre|leur|de|les|mes|ses|des)\s+pa(?:ie|ye)s?\b|absences? (du|des)"
             r"|notes? de frais|certificats? de salaire|imp[ôo]ts? [àa] la source"
             # //// Neoffice — Swiss HR doctrine the rh worker holds in its wiki (24.09): a
             # //// public-holiday question was answered by the orchestrator itself, citing the
