@@ -1224,6 +1224,40 @@ _DOCTYPE_POLES = {
 # //// END Neoffice ////
 
 
+# //// Neoffice — a message that points at THE document on screen goes to that document's
+# //// pole, before the classifier (#914). On 28.09 « Résume ce document » sent from a
+# //// journal entry was classified « support » in 2.8 s: a cold support worker answered
+# //// « lequel ? » after 57 s, while the page said compta. The page's pole was only a
+# //// fallback for a classifier that failed; a demonstrative (« ce document », « cette
+# //// écriture », « this invoice », « dieses Dokument », « questo documento ») says the
+# //// page is the subject, so the page decides. Four languages, like the rest of NORA.
+_POINTS_AT_THE_PAGE_RE = re.compile(
+    r"\b(?:"
+    r"(?:ce|cet|cette|ces)\s+(?:document|documents|pi[eè]ce|[eé]criture|facture|devis|offre|commande|"
+    r"bon|livraison|paiement|r[eè]glement|note|fiche|dossier|ticket|projet|t[aâ]che|demande|contrat|"
+    r"relance|client|fournisseur|article|employ[eé]|cong[eé])"
+    r"|(?:le|la)\s+(?:document|page|fiche|pi[eè]ce)\s+(?:ouvert|ouverte|affich[eé]e?|en\s+cours)"
+    r"|(?:this|these)\s+(?:document|documents|entry|invoice|quote|quotation|offer|order|delivery|payment|"
+    r"record|note|ticket|project|task|claim|request|contract|customer|supplier|item|page)"
+    r"|(?:dieses|diese|diesen|dieser)\s+(?:dokument|buchung|rechnung|angebot|auftrag|lieferung|zahlung|"
+    r"beleg|ticket|projekt|aufgabe|antrag|vertrag|kunden|lieferanten|artikel|seite)"
+    r"|(?:questo|questa|questi|queste)\s+(?:documento|documenti|registrazione|fattura|offerta|preventivo|"
+    r"ordine|consegna|pagamento|ticket|progetto|attivit[aà]|richiesta|contratto|cliente|fornitore|"
+    r"articolo|pagina)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _page_document_pole(message: str, page_doctype: Optional[str]) -> Optional[str]:
+    """The pole of the document open on the page when the message points at it, else None."""
+    pole = _DOCTYPE_POLES.get(page_doctype or "")
+    if pole in POLES and _POINTS_AT_THE_PAGE_RE.search(message or ""):
+        return pole
+    return None
+# //// END Neoffice ////
+
+
 def classify(
     message: str,
     *,
@@ -1261,6 +1295,13 @@ def classify(
     if hint in POLES:
         logger.info("nora_chat_router: page pole hint → %s (no LLM call)", hint)
         return hint
+    # //// END Neoffice ////
+    # //// Neoffice — « ce document » on a page with a document open: the page decides (#914).
+    page_pole = _page_document_pole(msg, page_doctype)
+    if page_pole:
+        logger.info("nora_chat_router: the message points at the page's %s → %s (no LLM call)",
+                    page_doctype, page_pole)
+        return page_pole
     # //// END Neoffice ////
     user_content = msg[:2000]
     if prior and prior.get("pole"):
