@@ -1742,7 +1742,8 @@ def build_ack(pole: str, language: Optional[str] = None) -> str:
     # //// END Neoffice ////
 
 
-def _add_notify_sub(notify_db, conn, *, conversation_id: Optional[str] = None, **kw) -> None:
+def _add_notify_sub(notify_db, conn, *, conversation_id: Optional[str] = None,
+                    page_context: Optional[dict] = None, **kw) -> None:
     """Subscribe the notifier so the worker's terminal result comes back to THIS chat.
 
     The desk conversation id rides in upstream's ``delivery_metadata`` (a JSON blob the
@@ -1750,10 +1751,15 @@ def _add_notify_sub(notify_db, conn, *, conversation_id: Optional[str] = None, *
     needed: ``webhook.send`` reads ``metadata["conversation_id"]`` to reach the right
     desk thread. Before v2026.9.7 we carried a bespoke ``conversation_id`` column here.
     """
+    metadata = dict(kw.pop("delivery_metadata", None) or {})
     if conversation_id:
-        metadata = dict(kw.pop("delivery_metadata", None) or {})
         metadata.setdefault("conversation_id", conversation_id)
-        kw["delivery_metadata"] = metadata
+    # The worker cannot recover voice origin from its prose prompt. Persist only
+    # the existing voice-source allowlist, never an arbitrary client priority.
+    pc = page_context if isinstance(page_context, dict) else {}
+    source = str(pc.get("source") or "").strip()
+    metadata["neoffice_request_source"] = source if source in VOICE_SOURCES else ""
+    kw["delivery_metadata"] = metadata
     notify_db.add_notify_sub(conn, **kw)
 
 
@@ -2810,6 +2816,7 @@ def route_chat_message(
                 user_id=user_id or None,
                 notifier_profile=notifier_profile,
                 conversation_id=_unified_cid,
+                page_context=page_context,
             )
             # //// Neoffice — wake the dispatcher NOW: without the poke the new
             # task waited for the next periodic tick (0..interval s of dead

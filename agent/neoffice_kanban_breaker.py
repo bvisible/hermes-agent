@@ -366,35 +366,48 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
 # //// otherwise, so a worker's ~70 KB turn queued behind the skill reviews and the nightly memory
 # //// pass. Measured on the engine over 33 h (2026-09-25): a first agent call is slow in 18-20 %
 # //// of cases when nothing waits, 45-74 % when requests queue. A kanban worker whose card has a
-# //// notify subscriber (a chat, a voice call, WhatsApp) sends priority 0; fork turns, cron and
+# //// notify subscriber (a chat, a voice call, WhatsApp) sends priority 0; an allowlisted voice
+# //// source persisted by the NORA router sends -10, as the direct voice caller does. Fork turns, cron and
 # //// background tasks keep the proxy's default. Only toward our own proxy: another provider
 # //// would reject the unknown field.
 NEOFFICE_INTERACTIVE_PRIORITY = 0
+NEOFFICE_VOICE_PRIORITY = -10
+NEOFFICE_VOICE_SOURCES = frozenset({"nora-console-voice", "nora-quick-voice", "nora-live-widget"})
 NEOFFICE_PRIORITY_HOSTS = ("noraai.ch",)
 _NEOFFICE_SUBSCRIBED: dict = {}
+_NEOFFICE_TASK_PRIORITIES: dict = {}
 
 
 def _neoffice_task_has_subscriber(task_id: str) -> bool:
-    """Whether a chat waits on this card; read once per task (a worker process serves one)."""
+    """Read subscriber status and allowed voice priority once per worker task."""
     if task_id not in _NEOFFICE_SUBSCRIBED:
         answer = False
+        priority = NEOFFICE_INTERACTIVE_PRIORITY
         try:
             from hermes_cli import kanban_db_connect as _kbc
             from hermes_cli import kanban_db_notify as _kbn
 
             conn = _kbc.connect(board=os.environ.get("HERMES_KANBAN_BOARD") or None)
             try:
-                answer = bool(_kbn.list_notify_subs(conn, task_id))
+                subscribers = _kbn.list_notify_subs(conn, task_id)
+                answer = bool(subscribers)
+                for sub in subscribers:
+                    metadata = sub.get("delivery_metadata")
+                    if (sub.get("platform") == "webhook" and isinstance(metadata, dict)
+                            and metadata.get("neoffice_request_source") in NEOFFICE_VOICE_SOURCES):
+                        priority = NEOFFICE_VOICE_PRIORITY
+                        break
             finally:
                 conn.close()
         except Exception:  # noqa: BLE001 — no priority is the safe answer
             answer = False
         _NEOFFICE_SUBSCRIBED[task_id] = answer
+        _NEOFFICE_TASK_PRIORITIES[task_id] = priority
     return _NEOFFICE_SUBSCRIBED[task_id]
 
 
 def neoffice_request_priority(agent: Any, kwargs: dict) -> dict:
-    """`kwargs` with extra_body.priority = 0 when a person waits on this worker's answer."""
+    """Subscribed voice workers use -10, other subscribers 0; background stays unchanged."""
     task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
     if not task_id or getattr(agent, "_turn_origin", None):
         return kwargs
@@ -405,9 +418,10 @@ def neoffice_request_priority(agent: Any, kwargs: dict) -> dict:
         return kwargs
     if not _neoffice_task_has_subscriber(task_id):
         return kwargs
+    priority = _NEOFFICE_TASK_PRIORITIES.get(task_id, NEOFFICE_INTERACTIVE_PRIORITY)
     extra = kwargs.get("extra_body")
     extra = dict(extra) if isinstance(extra, dict) else {}
-    extra.setdefault("priority", NEOFFICE_INTERACTIVE_PRIORITY)
+    extra.setdefault("priority", priority)
     kwargs["extra_body"] = extra
     return kwargs
 # //// END Neoffice ////
