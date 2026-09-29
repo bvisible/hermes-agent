@@ -29,6 +29,7 @@ USER = "jean@example.test"
 
 class FakeProvider:
     calls = []
+    metadata = []
     store_fewer_by = 0
 
     def initialize(self, session_id, **kwargs):
@@ -39,14 +40,16 @@ class FakeProvider:
     def _own_bucket_is_company(self):
         return self._user_id == self._company_id
 
-    def retain_facts(self, facts, *, scope="user"):
+    def retain_facts(self, facts, *, scope="user", extra_metadata=None):
         FakeProvider.calls.append((scope, list(facts)))
+        FakeProvider.metadata.append((scope, extra_metadata))
         return max(0, len(facts) - FakeProvider.store_fewer_by)
 
 
 @pytest.fixture
 def provider(monkeypatch):
     FakeProvider.calls = []
+    FakeProvider.metadata = []
     FakeProvider.store_fewer_by = 0
     monkeypatch.setattr(mem0_plugin, "Mem0MemoryProvider", FakeProvider)
     return FakeProvider
@@ -112,6 +115,35 @@ def test_stored_reports_what_the_store_actually_kept(provider):
     assert body["stored"] == 1, "company 2-1 + user 1-1: a short store stays visible to the caller"
 
 
+# --- a company fact a conversation taught (#958) ------------------------------------------
+# NORA's nightly consolidation shares a business fact heard in one person's chat as heard
+# once; the recall then says how often it was heard (plugins/memory/mem0).
+
+def test_a_fact_a_conversation_taught_enters_as_heard_once(provider):
+    _retain({"user": USER, "scope": "company", "source": "conversation", "facts": [
+        "We invoice on the 25th", "Paul's salary is 7000"]})
+    assert provider.calls[1:] == [("company", ["We invoice on the 25th"]), ("user", ["Paul's salary is 7000"])]
+    assert provider.metadata == [("company", {"source": "conversation", "seen": 1}), ("user", None)], \
+        "only the shared fact is tagged; a fact the rule kept private is the person's own"
+
+
+@pytest.mark.parametrize("source", [" Conversation ", "CONVERSATION"])
+def test_the_source_is_read_case_and_space_insensitively(provider, source):
+    _retain({"user": USER, "scope": "company", "source": source, "facts": ["We bill in CHF"]})
+    assert provider.metadata == [("company", {"source": "conversation", "seen": 1})]
+
+
+@pytest.mark.parametrize("source", ["erp", "chat", "conversations", None, 1, ["conversation"]])
+def test_any_other_source_stores_the_fact_untagged(provider, source):
+    _retain({"user": USER, "scope": "company", "source": source, "facts": ["We bill in CHF"]})
+    assert provider.metadata == [("company", None)]
+
+
+def test_a_user_batch_is_never_tagged(provider):
+    _retain({"user": USER, "source": "conversation", "facts": ["I prefer tea"]})
+    assert provider.metadata == [("user", None)]
+
+
 def test_a_throwaway_test_user_is_still_skipped(provider):
     _, body = _retain({"user": "probe-1", "scope": "company", "facts": ["Paul's salary is 7000"]})
     assert body["status"] == "skipped_test_user"
@@ -134,9 +166,11 @@ def test_a_user_named_like_the_company_is_refused_as_a_whole(provider, scope):
 class RecordingBackend:
     def __init__(self):
         self.adds = []
+        self.metadata = []
 
     def add(self, messages, *, user_id, agent_id, infer=False, metadata=None):
         self.adds.append((user_id, [m["content"] for m in messages]))
+        self.metadata.append(metadata)
         return {"event_id": "ev-1"}
 
 
@@ -166,3 +200,14 @@ def test_the_configured_company_id_is_the_one_refused(real_provider):
     status, body = _retain({"user": USER, "scope": "company", "facts": ["We bill in CHF"]})
     assert (status, body["stored"]) == (200, 1)
     assert backend.adds == [("acme-shared", ["We bill in CHF"])]
+
+
+def test_the_real_provider_stores_the_heard_tag_with_the_channel(real_provider):
+    backend, _ = real_provider
+    status, _ = _retain({"user": USER, "scope": "company", "source": "conversation",
+                         "facts": ["We bill in CHF"]})
+    assert status == 200
+    assert backend.adds == [("company", ["We bill in CHF"])]
+    tag = backend.metadata[0]
+    assert tag["source"] == "conversation" and tag["seen"] == 1
+    assert set(tag) <= {"source", "seen", "channel"}

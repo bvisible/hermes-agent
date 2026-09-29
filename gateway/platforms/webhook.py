@@ -650,6 +650,13 @@ class WebhookAdapter(BasePlatformAdapter):
             company_texts, user_texts = split_company_facts(texts)
         else:
             company_texts, user_texts = [], texts
+        # //// A company fact that a conversation taught enters as heard once (#958): NORA's
+        # //// nightly consolidation sends `source: "conversation"`, then counts each later
+        # //// hearing in the stored payload, and the recall says how often it was heard
+        # //// (plugins/memory/mem0, _neoffice_heard_label). Only that literal is read: any
+        # //// other source stores the fact untagged, as a fact built by code.
+        heard = str(payload.get("source") or "").strip().lower() == "conversation"
+        company_metadata = {"source": "conversation", "seen": 1} if heard else None
 
         @with_launch_profile_secrets  # //// Neoffice — see gateway/neoffice_scope.py
         def _store() -> Optional[int]:
@@ -668,7 +675,7 @@ class WebhookAdapter(BasePlatformAdapter):
             # Company first, as NORA writes it: mem0 is additive, so a retry after a failure
             # between the two writes duplicates the smaller set.
             if company_texts:
-                stored_now += prov.retain_facts(company_texts, scope="company")
+                stored_now += prov.retain_facts(company_texts, scope="company", extra_metadata=company_metadata)
             if user_texts:
                 stored_now += prov.retain_facts(user_texts, scope="user")
             return stored_now
@@ -693,8 +700,8 @@ class WebhookAdapter(BasePlatformAdapter):
             )
         # //// END Neoffice ////
         logger.info(
-            "[webhook] memory_retain user=%s scope=%s stored=%d/%d kept_private=%d",  # //// Neoffice — #881
-            user, scope, stored, len(texts), kept_private,
+            "[webhook] memory_retain user=%s scope=%s source=%s stored=%d/%d kept_private=%d",  # //// Neoffice — #881, #958
+            user, scope, "conversation" if heard else "-", stored, len(texts), kept_private,
         )
         return web.json_response(
             # //// Neoffice — `kept_private`: facts moved from the company to the user bucket (#881)

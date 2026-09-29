@@ -84,7 +84,19 @@
 		"We open at 8.30",
 		"The books close on 31.12",
 		"l'utilisateur retient 6000 CHF pour le loyer",
-		"Pour le loyer, l'utilisateur retient 6000 - Loyer de 50 par mois"
+		"Pour le loyer, l'utilisateur retient 6000 - Loyer de 50 par mois",
+		"Luca Example is on sick leave until Monday",
+		"Nina Example called in sick today",
+		"Julie Exemple est en arrêt maladie jusqu'à lundi",
+		"Julie Exemple est en congé maternité depuis mars",
+		"Marc Exemple a été engagé comme magasinier",
+		"Paul Example has resigned and leaves the company at the end of June",
+		"Tom Example was hired as a warehouse clerk",
+		"Anna Beispiel ist schwanger",
+		"Tom Beispiel ist seit Montag krankgeschrieben",
+		"Tom Beispiel wurde fristlos entlassen",
+		"Sara Esempio è in malattia da lunedì",
+		"Nina Example's date of birth is 3 May 1990"
 	],
 	"shared": [
 		"3 doors",
@@ -130,6 +142,14 @@
 		"The main supplier is Fr. Muster AG",
 		"The report is sent monthly to 3 managers",
 		"Pour le compte de charge de Supplier X, l'utilisateur retient 6000 - Loyer - ABC (NORA proposait 6100 - Entretien - ABC — corrigé par un humain, prévaut sur l'historique).",
-		"Pour le compte de charge de Café des Vergers Sàrl, l'utilisateur retient 6570 - Frais de repas - pri."
+		"Pour le compte de charge de Café des Vergers Sàrl, l'utilisateur retient 6570 - Frais de repas - pri.",
+		"Le fournisseur Mutuelle Exemple Assurance Maladie SA doit être imputé sur le compte 5730",
+		"Der Lieferant Beispiel Krankenversicherung AG wird auf Konto 5730 gebucht",
+		"Example Hospital is a customer and pays within 30 days",
+		"Our electricity supplier is Example Energy SA",
+		"Deliveries leave the warehouse every morning",
+		"The workshop heats with a gas-fired boiler",
+		"Les commandes sont engagées dans le système avant midi",
+		"The company's software licencing is handled by the IT provider"
 	]
 }

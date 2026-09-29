@@ -34,7 +34,12 @@ shared, and keeps everything else private:
       sales, rent, rate, doit, schuldet, Stundensatz...) keeps it private;
   (c) as before, a currency or a rate next to a number ("CHF 50", "50.-", "8000 net",
       "3000 per month") and any word about pay (salary, payroll, bonus...) keep it private,
-      with or without a number.
+      with or without a number;
+  (d) a person's health, leave or employment event keeps it private, with or without a
+      number: sick leave, pregnancy, parental leave, hiring, departure, date of birth.
+      The words are anchored to a person ("est en arrêt maladie", "was hired", "ist
+      krankgeschrieben"): a bare "maladie" or "Kranken" also names suppliers ("...
+      Assurance Maladie SA"), whose account choice stays company knowledge.
 
 The shapes of a number that is no amount, recognised and masked before (a) and (b):
 
@@ -83,6 +88,44 @@ _PAY = re.compile(
     r"|(?:net|gross)\s+pay|earn(?:s|ed|ing|ings)?|bonus(?:es)?|remunerat\w*|rémunér\w*|compensation"
     r"|fiches?\s+de\s+paie|bulletins?\s+de\s+(?:salaire|paie)|la\s+paie|lohn\w*|gehalt\w*|stipendi\w*"
     r"|13(?:th|e|ème)\s+(?:month|mois|salary|salaire))\b",
+    re.IGNORECASE,
+)
+
+# ── (d) Private with or without a number: a person's health, leave and employment ──
+# Not money, and still nobody else's business: a colleague's sick leave, pregnancy, hiring
+# or departure (Jeremy, 2026-09-29: private data is never company knowledge). Health is
+# sensitive data under the Swiss data protection act. Every word is anchored to a person:
+# a bare "maladie", "Kranken" or "hospital" also names suppliers ("... Assurance Maladie
+# SA", "... Krankenversicherung AG") whose account choice is company knowledge (#958).
+_PERSONAL = re.compile(
+    r"\b(?:sick\s+(?:leave|note|day)s?|(?:is|was|are|were|been|be|off|falls?|fell|feeling)\s+(?:sick|ill|unwell)(?![\w-])"
+    r"|call(?:s|ed)?\s+in\s+sick|burn-?out|medical\s+(?:certificate|leave|note)|hospitali[sz]ed|in\s+(?:the\s+)?hospital"
+    r"|arr[êe]ts?\s+(?:de\s+)?(?:maladie|travail)|cong[ée]s?\s+(?:de\s+)?maladie|certificat\s+m[ée]dical|hospitalis[ée]e?s?"
+    r"|(?:est|[ée]tait|sont|[ée]taient|tomb[ée]e?s?|reste|restera|sera)\s+malades?"
+    r"|krankgeschrieben|krank\s*gemeldet|krankmeldung\w*|krankheit(?:en)?|arztzeugnis\w*|hospitalisiert"
+    r"|(?:ist|war|sind|waren|wird|bleibt|wurde)\s+krank(?![\w-])|krank\s+(?:seit|bis|zu\s+hause)|(?:ist|war|liegt|lag)\s+im\s+spital"
+    r"|(?:[èe]|era|sono|erano)\s+(?:in\s+malattia|malat[oaie])|congedo\s+(?:per\s+)?malattia|certificato\s+medico|ricoverat[oaie]"
+    r"|(?:maternity|paternity|parental)\s+leave|cong[ée]s?\s+(?:de\s+)?(?:maternit[ée]|paternit[ée]|parental|naissance)"
+    r"|(?:mutterschafts|vaterschafts|eltern)urlaub|elternzeit|mutterschutz"
+    r"|congedo\s+(?:di\s+)?(?:maternit[àa]|paternit[àa]|parentale)"
+    r"|pregnan(?:t|cy|cies)|enceinte|grossesses?|schwanger\w*|incinta|gravidanz[ae]"
+    r"|(?:was|were|is|are|has\s+been|have\s+been|had\s+been|got|gets|get|been|being|newly|just)"
+    r"\s+(?:hired|dismissed|fired|laid\s+off|let\s+go)|hired\s+as|resign(?:ed|s|ing|ation)|dismissal|lay-?offs?"
+    r"|handed\s+in\s+(?:his|her|their)\s+notice|(?:leaves|left|leaving|quits?|quitting)\s+(?:the\s+|our\s+)?"
+    r"(?:company|firm|team|job)(?![\'\u2019]s\b|\s+(?:premises|site|building|warehouse|parking)\b)"
+    r"|embauch\w*|d[ée]mission\w*|licenciements?|licencier|(?:a|ont|est|sont|sera|seront)\s+(?:été\s+)?licenci[ée]e?s?"
+    r"|(?:a\s+été|ont\s+été|vient\s+d[\'\u2019]être|nouvellement)\s+engag[ée]e?s?"
+    r"|quitt\w*\s+(?:l[\'\u2019]entreprise|la\s+soci[ée]t[ée]|la\s+bo[iî]te|son\s+poste|l[\'\u2019][ée]quipe)"
+    r"|(?:son|leur)\s+dernier\s+jour\s+(?:de\s+travail|chez\s+nous|dans\s+l[\'\u2019]entreprise)"
+    r"|nouve(?:au|l|lle)\s+(?:employ[ée]e?|collaborat(?:eur|rice)|coll[èe]gue|apprentie?)"
+    r"|fristlos\w*|entlassen|entlassung\w*|neueinstellung\w*|neuanstellung\w*|(?:neu|fest)\s+(?:eingestellt|angestellt)"
+    r"|(?:eingestellt|angestellt)\s+als|austritt\w*|letzter\s+arbeitstag|k[üu]ndigung\s+eingereicht"
+    r"|arbeitsvertrag\w*\s+(?:\w+\s+){0,3}gek[üu]ndigt|k[üu]ndigung\s+(?:des|seines|ihres)\s+arbeitsvertrag\w*"
+    r"|(?:verlässt|verliess|verließ)\s+(?:das\s+unternehmen|die\s+firma|das\s+team)"
+    r"|(?:das\s+unternehmen|die\s+firma|das\s+team)\s+verlassen"
+    r"|licenziat[oaie]|licenziament[oi]|dimission[ie]|dimess[oaie]|(?:[èe]|sono)\s+stat[oaie]\s+assunt[oaie]|assunt[oaie]\s+come"
+    r"|(?:lascia|lasciato|lascer[àa]|lasciano)\s+(?:l[\'\u2019]azienda|la\s+ditta|la\s+societ[àa])|ultimo\s+giorno\s+di\s+lavoro"
+    r"|date\s+de\s+naissance|date\s+of\s+birth|birth\s*date|geburtsdatum|data\s+di\s+nascita)\b",
     re.IGNORECASE,
 )
 
@@ -296,7 +339,7 @@ def _money_next_to_a_number(sentence: str) -> bool:
 def stays_private(text: str) -> bool:
     """True when a fact must not reach the shared company bucket (module docstring)."""
     text = str(text or "")
-    if _PAY.search(text) or _MONEY.search(text):
+    if _PAY.search(text) or _MONEY.search(text) or _PERSONAL.search(text):
         return True
     masked = _mask(text)
     if _AMOUNT_SHAPE.search(masked):

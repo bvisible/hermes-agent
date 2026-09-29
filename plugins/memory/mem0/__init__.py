@@ -374,6 +374,41 @@ def _neoffice_write_metadata(provider: Any) -> Dict[str, Any]:
     return {"channel": provider._channel} if provider._channel else {}
 
 
+# //// Neoffice — a company fact that conversations taught says how often it was heard
+# //// (#958). NORA's nightly consolidation shares a business fact drawn from one person's
+# //// chat ("Our electricity supplier is X") as heard once (metadata source="conversation",
+# //// seen=1), and counts one more hearing in the stored payload each time another
+# //// conversation restates it. The recall says so: the model checks a fact heard once, and
+# //// relies on one confirmed many times. A memory without that source (built by code from
+# //// the ERP, written by an administrator, or the person's own) carries no label.
+def _neoffice_heard_label(item: Dict[str, Any]) -> Optional[str]:
+    """How often a company fact taught by conversations was heard, or None for any other memory."""
+    metadata = item.get("metadata") or {}
+    if not isinstance(metadata, dict) or metadata.get("source") != "conversation":
+        return None
+    try:
+        seen = max(1, int(metadata.get("seen") or 1))
+    except (TypeError, ValueError):
+        seen = 1
+    if seen == 1:
+        return "company knowledge heard once in a conversation, not confirmed: check it before relying on it"
+    return f"company knowledge confirmed in {seen} conversations"
+
+
+def _neoffice_recall_line(item: Dict[str, Any]) -> str:
+    """A memory as the prefetch shows it: its text, and how often it was heard (#958)."""
+    label = _neoffice_heard_label(item)
+    memory = item.get("memory", "")
+    return f"{memory} ({label})" if label else memory
+
+
+def _neoffice_listed(item: Dict[str, Any], shown: Dict[str, Any]) -> Dict[str, Any]:
+    """A memory as mem0_search / mem0_list show it, with a `heard` note when it has one (#958)."""
+    label = _neoffice_heard_label(item)
+    return {**shown, "heard": label} if label else shown
+# //// END Neoffice ////
+
+
 # //// Neoffice — read a boolean switch from mem0.json. JSON gives a bool, a hand-edited file
 # //// or an env-templated one may give "false" / "0" / "no" / "off": all of them mean off.
 def _config_flag(value: Any, *, default: bool) -> bool:
@@ -657,7 +692,9 @@ class Mem0MemoryProvider(MemoryProvider):
                 lambda: self._merged_search(backend, query, top_k=10, rerank=True),
                 logger.debug, "Mem0 prefetch failed: %s")
             # //// END Neoffice ////
-            lines = [r.get("memory", "") for r in (results or []) if r.get("memory")]
+            # //// Neoffice — a company fact says how often it was heard (#958, _neoffice_heard_label)
+            lines = [_neoffice_recall_line(r) for r in (results or []) if r.get("memory")]
+            # //// END Neoffice ////
             body = "## Mem0 Memory\n" + "\n".join(f"- {l}" for l in lines) if lines else ""
             with self._prefetch_lock:
                 if self._prefetch_query == query:
@@ -788,8 +825,10 @@ class Mem0MemoryProvider(MemoryProvider):
         results = self._merged_search(self._backend, args["query"], top_k=top_k, rerank=rerank)
         if not results:
             return json.dumps({"result": "No relevant memories found."})
-        items = [{"id": r.get("id"), "memory": r.get("memory", ""), "score": r.get("score", 0),
-                  "created_at": r.get("created_at")} for r in results]
+        # //// A company fact says how often it was heard (#958, _neoffice_heard_label).
+        items = [_neoffice_listed(r, {"id": r.get("id"), "memory": r.get("memory", ""),
+                                      "score": r.get("score", 0), "created_at": r.get("created_at")})
+                 for r in results]
         # //// END Neoffice ////
         return json.dumps({"results": items, "count": len(items)})
 
@@ -802,8 +841,9 @@ class Mem0MemoryProvider(MemoryProvider):
         results = (response or {}).get("results", [])
         if not results:
             return json.dumps({"result": "No memories stored yet."})
-        items = [{"id": m.get("id"), "memory": m.get("memory", ""),
-                  "created_at": m.get("created_at")} for m in results]
+        # //// A company fact says how often it was heard (#958, _neoffice_heard_label).
+        items = [_neoffice_listed(m, {"id": m.get("id"), "memory": m.get("memory", ""),
+                                      "created_at": m.get("created_at")}) for m in results]
         return json.dumps({"results": items, "count": response.get("count", len(items)),
                            "page": page, "page_size": page_size})
     # //// END Neoffice ////
@@ -958,13 +998,16 @@ class Mem0MemoryProvider(MemoryProvider):
     # text in ENGLISH (mem0's extraction prompt), which fragments a French
     # store and degrades vector recall. Superseding contradicting facts has to
     # be done by US, in the consolidation pass. grep "//// Neoffice".
-    def retain_facts(self, facts: List[str], *, scope: str = "user") -> int:
+    def retain_facts(self, facts: List[str], *, scope: str = "user",
+                     extra_metadata: Optional[Dict[str, Any]] = None) -> int:
         """Consolidate pre-extracted facts into memory, scoped to self._user_id
         (or the shared company bucket for scope="company"). Returns count stored.
 
         Trusted server path only: it writes whatever bucket it is told. The gateway's
         memory_retain is its caller and keeps any amount or pay out of the company
-        bucket before calling it (gateway/neoffice_memory_policy.py, #881)."""
+        bucket before calling it (gateway/neoffice_memory_policy.py, #881).
+        `extra_metadata` joins the channel tag on every fact of the call: memory_retain
+        marks there the company facts a conversation taught (#958, _neoffice_heard_label)."""
         if self._backend is None or self._is_breaker_open():
             return 0
         # //// Neoffice — a user write must never land in the company bucket unfiltered (#881):
@@ -975,6 +1018,7 @@ class Mem0MemoryProvider(MemoryProvider):
         write_user_id = (
             self._company_id if scope == "company" else self._user_id
         )
+        metadata = {**_neoffice_write_metadata(self), **(extra_metadata or {})}
         stored = 0
         for fact in facts:
             text = (fact or "").strip()
@@ -986,7 +1030,7 @@ class Mem0MemoryProvider(MemoryProvider):
                     user_id=write_user_id,
                     agent_id=self._agent_id,
                     infer=False,
-                    metadata=_neoffice_write_metadata(self),
+                    metadata=dict(metadata),  # a fresh dict per write, as before: mem0 may fill it
                 )
                 stored += 1
             except Exception as e:
