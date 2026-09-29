@@ -608,6 +608,50 @@ def _kanban_task_user() -> str:
         found = ""
     _TASK_USER_CACHE[task_id] = found
     return found
+
+
+# //// Neoffice — carry WHO is asking into the call itself (#882). Upstream passes the
+# //// model's arguments through untouched; for our neoffice-* servers the gateway writes
+# //// the answering person as `bridge_user` instead, so the model never chooses whose
+# //// rights apply. Three rules, each closing a way the model's value used to survive:
+# ////   1. Written at the top level AND inside `params` when it is a dict. The servers
+# ////      build their body from `params` for kwargs tools and from the top level for the
+# ////      others; stamping only `params` let a model-supplied top-level value reach a
+# ////      tool whose body is the top level.
+# ////   2. Always written, even empty: what the model may have put must not survive.
+# ////   3. Fail closed: if resolving the person raises, the call names nobody (empty),
+# ////      it never keeps the model's value. The server then applies its own narrow rule
+# ////      for an unnamed caller.
+def _neoffice_stamp_bridge_user(server_name: str, tool_name: str, args) -> None:
+    """Overwrite ``bridge_user`` in *args* (and ``args["params"]``) for a neoffice-* server."""
+    if not isinstance(args, dict) or not server_name.startswith("neoffice-"):
+        return
+    raw = ""
+    try:
+        # Read here, in the answering task's context: the session lives in a ContextVar
+        # on purpose, since an os.environ mirror would let one concurrent turn hand
+        # another turn's identity to a tool.
+        from gateway.session_context import get_session_env
+
+        raw = (get_session_env("HERMES_SESSION_USER_ID") or "").strip()
+        if not raw:
+            # A pole worker has no session — the dispatcher stripped it. Its task,
+            # however, still names the human.
+            raw = _kanban_task_user()
+        keep = raw if ("@" in raw and not raw.startswith("webhook:")) else ""
+        if not keep:
+            logger.info(
+                "[bridge_user] %s.%s: no session user (raw=%r) — the call names nobody",
+                server_name, tool_name, raw)
+    except Exception as exc:  # fail closed: the call names nobody
+        keep = ""
+        logger.warning(
+            "[bridge_user] %s.%s: resolving the person failed (%s) — the call names nobody",
+            server_name, tool_name, exc)
+    args["bridge_user"] = keep
+    params = args.get("params")
+    if isinstance(params, dict):
+        params["bridge_user"] = keep
 # //// END Neoffice ////
 
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
@@ -619,29 +663,8 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float):
         # //// sub-agent of the gateway, not a kanban task, so the server it spawns
         # //// cannot resolve the person; every « me » tool then ran as the service
         # //// account and the model GUESSED a name — an hour was booked under a
-        # //// customer's (16.09). Read here, in the answering task's context, because
-        # //// the session lives in a ContextVar on purpose: an os.environ mirror would
-        # //// let one concurrent turn hand another turn's identity to a tool.
-        # //// Always written, even empty: what the model may have put must not survive.
-        if isinstance(args, dict) and server_name.startswith("neoffice-"):
-            try:
-                from gateway.session_context import get_session_env
-
-                _who = (get_session_env("HERMES_SESSION_USER_ID") or "").strip()
-                if not _who:
-                    # A pole worker has no session — the dispatcher stripped it. Its
-                    # task, however, still names the human.
-                    _who = _kanban_task_user()
-                _params = args.get("params")
-                _target = _params if isinstance(_params, dict) else args
-                _keep = _who if ("@" in _who and not _who.startswith("webhook:")) else ""
-                _target["bridge_user"] = _keep
-                if not _keep:
-                    logger.info(
-                        "[bridge_user] %s.%s: no session user (raw=%r) — the tool will act "
-                        "as the service account", server_name, tool_name, _who)
-            except Exception:  # a CLI run has no session — the tool stays as it was
-                pass
+        # //// customer's (16.09). Top level AND params, fail closed: see the helper (#882).
+        _neoffice_stamp_bridge_user(server_name, tool_name, args)
         # //// END Neoffice ////
         # Security boundary: untrusted-server write tools need approval before ANY transport work (incl. lazy spawn).
         error = _trust_gate_check(server_name, tool_name) or _check_circuit_breaker(server_name)

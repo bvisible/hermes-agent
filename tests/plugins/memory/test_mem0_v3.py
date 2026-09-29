@@ -41,6 +41,13 @@ class FakeBackend:
         self.captured.append(("delete", memory_id))
         return {"result": "Memory deleted.", "memory_id": memory_id}
 
+    # //// Neoffice — mem0_update / mem0_delete now read the memory first and act only on
+    # //// the caller's own bucket (#881); the fake owns every id for the test user "u123".
+    # //// Not recorded in `captured`, so the upstream assertions on the write stay as they are.
+    def get(self, memory_id):
+        return {"id": memory_id, "memory": "stored fact", "user_id": "u123"}
+    # //// END Neoffice ////
+
 
 class TestMem0V3Tools:
     """Test v3 tool names and response handling."""

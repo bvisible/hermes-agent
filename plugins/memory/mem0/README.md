@@ -32,6 +32,17 @@ Behavioral settings live in `$HERMES_HOME/mem0.json` (set them via `hermes memor
 | `rerank` | `false` | Rerank search results for relevance (platform mode only) |
 | `sync_max_chars` | `450` | Per-message character cap applied before each turn is sent for fact extraction (cut at the last sentence boundary). Default fits 512-token embedders; raise it (e.g. `6000`) for 8k-token embedders such as `text-embedding-3-small`, `jina-embeddings-v3`, `bge-m3` |
 
+<!-- //// Neoffice — the shared company bucket and its switch are fork additions (#881). -->
+**Neoffice fork — shared company bucket.** A fact stored with `scope: "company"` lands in one bucket shared by every user of the instance, and reads merge it with the caller's own bucket. Only the gateway's signed `memory_retain` route writes it, and a fact that says anything about pay, or holds a number not recognised as something other than money (a year, a date, a phone number, an account number...), goes to the named user's own bucket instead (the response's `kept_private` counts them; the rule is `gateway/neoffice_memory_policy.py`). `mem0_add` / `mem0_conclude` never write it: a `scope: "company"` from the chat model is stored in the caller's own bucket, and the tool result says so. A caller whose own id is the company bucket id (`company_id`) stores nothing through the tool or the per-turn capture, and `memory_retain` refuses such a `user` as a whole (HTTP 403, nothing stored, company facts included).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `company_id` | `company` | `user_id` of the shared company bucket |
+| `company_recall` | `true` | `false` leaves the company bucket out of every read (`mem0_search`, `mem0_list`, the recall prefetch and the gateway's `memory_read`). Stored facts are kept and writes to the bucket are unchanged. Set it per site in that site's `mem0.json`; `"false"`, `"0"`, `"no"` and `"off"` all mean off |
+
+`mem0_update` and `mem0_delete` only act on a memory in the caller's own bucket. An id from another user's bucket answers "Memory not found", and a company memory is refused to the chat tools, even for a caller whose own id is the company bucket id; only the gateway's signed `memory_forget` route may retire one.
+<!-- //// END Neoffice -->
+
 The plugin has three connection modes:
 
 - **Platform** — Mem0's hosted cloud (`api.mem0.ai`). Set `MEM0_API_KEY`. (default)
