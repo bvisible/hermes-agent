@@ -63,6 +63,14 @@ def diagnostic_event(ev) -> bool:
 # unattended gate where a false drop means silent work pileup.
 MAX_SEND_FAILURES = 12
 
+
+# //// Neoffice — added (#625): a recipient that can never be delivered to. Raised only for a
+# //// number the central WhatsApp router rejects (webhook platform, error_kind not_found), so
+# //// the subscription is dropped at its first answer instead of after twelve attempts.
+class _DeadRecipient(RuntimeError):
+    pass
+# //// END Neoffice ////
+
 _LOCAL_PATH_RE = re.compile(r"(?<![\w:/])(?:/(?:Users|home|private|tmp|var|etc|workspace)/[^\s,;]+|" r"[A-Za-z]:\\[^\s,;]+)")
 
 
@@ -855,6 +863,10 @@ class _KanbanNotification:
         # (else the event is lost); None / non-SendResult keeps the
         # "no exception == delivered" contract.
         if getattr(_send_res, "success", True) is False:
+            # //// Neoffice — see _DeadRecipient (#625).
+            if self.platform_str == "webhook" and getattr(_send_res, "error_kind", None) == "not_found":
+                raise _DeadRecipient(getattr(_send_res, "error", None) or "dead recipient")
+            # //// END Neoffice ////
             raise RuntimeError(f"adapter send() reported failure: {getattr(_send_res, 'error', None) or 'unknown error'}")
         logger.debug("kanban notifier: delivered %s event for %s to %s/%s on board %s",
                      ev.kind, self.task_id, self.platform_str, sub["chat_id"], self.board_slug)
@@ -914,6 +926,14 @@ class _KanbanNotification:
                 ))
                 self.clear_failures()
             except Exception as exc:
+                # //// Neoffice — see _DeadRecipient (#625).
+                if isinstance(exc, _DeadRecipient):
+                    logger.warning("kanban notifier: dropping subscription %s on %s at once: %s",
+                                   self.task_id, self.platform_str, exc)
+                    await self.unsub()
+                    self.clear_failures()
+                    return False
+                # //// END Neoffice ////
                 await self.delivery_failed(
                     "kanban notifier: send failed for %s on %s (attempt %d/%d): %s", (self.task_id, self.platform_str),
                     "kanban notifier: dropping subscription %s on %s after %d consecutive send failures", exc, False,

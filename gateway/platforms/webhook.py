@@ -243,6 +243,24 @@ def _neoffice_provider_delivery_id(route_name: str, payload: Any, delivery_id: s
 # //// END Neoffice ////
 
 
+
+# //// Neoffice — added (#625): the kind of a failure the central WhatsApp router answered.
+def _whatsapp_router_error_kind(status: int, body: str) -> str:
+    """not_found for a number the router cannot deliver to (a dead recipient), too_long for a
+    text over its 4096-character cap, forbidden for our own credentials (every recipient fails
+    alike), bad_format for another rejected request, transient otherwise."""
+    text = (body or "").lower()
+    if status in (404, 410) or (status == 400 and "phone" in text):
+        return "not_found"
+    if status == 413 or (status == 400 and "exceeds" in text):
+        return "too_long"
+    if status in (401, 403):
+        return "forbidden"
+    if status in (400, 422):
+        return "bad_format"
+    return "transient"
+# //// END Neoffice ////
+
 class WebhookAdapter(BasePlatformAdapter):
     """Generic webhook receiver that triggers agent runs from HTTP POSTs."""
 
@@ -1491,13 +1509,31 @@ class WebhookAdapter(BasePlatformAdapter):
                         resp.status,
                         body[:200],
                     )
+                    # //// Neoffice — say what kind of failure the router answered, so the
+                    # //// kanban notifier drops a dead number at once instead of retrying it
+                    # //// twelve times (#625). Only a number the router rejects is a dead
+                    # //// recipient: a 401/403 is our own key, true for every recipient.
                     return SendResult(
                         success=False,
                         error=f"whatsapp_router deliver {resp.status}",
+                        error_kind=_whatsapp_router_error_kind(resp.status, body),
                     )
+                    # //// END Neoffice ////
         except Exception as e:  # noqa: BLE001
-            logger.error("[webhook] whatsapp_router deliver error: %s", e)
-            return SendResult(success=False, error=str(e))
+            # //// Neoffice — an asyncio.TimeoutError has an empty str(): the log read
+            # //// "deliver error: " and the notifier "unknown error" (#625). Name it, and
+            # //// the 15 s budget when that is what ran out.
+            if str(e):
+                reason = f"{type(e).__name__}: {e}"
+            elif isinstance(e, asyncio.TimeoutError):
+                reason = "timed out after 15 s"
+            else:
+                reason = type(e).__name__
+            logger.error("[webhook] whatsapp_router deliver error: %s", reason)
+            return SendResult(
+                success=False, error=f"whatsapp_router deliver {reason}", error_kind="transient"
+            )
+            # //// END Neoffice ////
 
     async def _synthesize_voice_b64(self, text: str):
         """Synthesize *text* to base64 MP3 with edge-tts (NORA #30, vocal-out).

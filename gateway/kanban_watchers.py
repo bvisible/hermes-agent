@@ -28,6 +28,35 @@ from gateway.kanban_watchers_common import (
     logger,
 )
 from gateway.kanban_watchers_notifier import _KanbanNotification, _notifier_collect
+
+# //// Neoffice — added (#625): deliveries of one notifier tick, run concurrently.
+NOTIFIER_CONCURRENCY = 8
+
+
+async def _deliver_concurrently(runner, deliveries, platform_cls, sub_fail_counts) -> None:
+    """Deliver one tick's subscriptions at most NOTIFIER_CONCURRENCY destinations at a time.
+
+    Deliveries to the same destination (platform, chat, thread) stay in order, one after the
+    other; a delivery that raises is logged and never cancels the others."""
+    groups: dict = {}
+    for d in deliveries:
+        sub = d.get("sub") or {}
+        key = ((sub.get("platform") or "").lower(), sub.get("chat_id"), sub.get("thread_id") or "")
+        groups.setdefault(key, []).append(d)
+    gate = asyncio.Semaphore(NOTIFIER_CONCURRENCY)
+
+    async def run(group) -> None:
+        async with gate:
+            for d in group:
+                try:
+                    await _KanbanNotification(
+                        runner, d, platform_cls=platform_cls, sub_fail_counts=sub_fail_counts,
+                    ).deliver()
+                except Exception as exc:  # noqa: BLE001 — one delivery never stops the others
+                    logger.warning("kanban notifier: delivery failed: %s", exc)
+
+    await asyncio.gather(*(run(group) for group in groups.values()))
+# //// END Neoffice ////
 from gateway.kanban_watchers_dispatcher import (
     _KanbanDispatcher,
     _log_spawn_results,
@@ -282,10 +311,13 @@ class GatewayKanbanWatchersMixin:
                     _notifier_collect, self, _kb,
                     notifier_profile=notifier_profile, gc_due=_gc_due, gc_retention_days=_retention,
                 )
-                for d in deliveries:
-                    await _KanbanNotification(
-                        self, d, platform_cls=_Platform, sub_fail_counts=sub_fail_counts,
-                    ).deliver()
+                # //// Neoffice — upstream delivered every subscription one after the other:
+                # //// a recipient that hangs the WhatsApp router (15 s per attempt, 12
+                # //// attempts) delayed every result behind it, and on osiris a worker's
+                # //// answer never reached its user (#625). Deliveries now run concurrently,
+                # //// bounded, grouped by destination so one chat keeps its order.
+                await _deliver_concurrently(self, deliveries, _Platform, sub_fail_counts)
+                # //// END Neoffice ////
             except Exception as exc:
                 logger.warning("kanban notifier tick failed: %s", exc)
             # //// Neoffice — upstream: `await self._sleep_between_ticks(interval)`; see
