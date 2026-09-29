@@ -59,9 +59,9 @@ so "The VAT rate is 8.1%" is shared, except in a sentence about a margin or a pr
 
 What this costs, on purpose: a reference, an item code or a street number of 100 or more,
 a decimal that is not money ("version 2.1"), a date without its year ("31.12"), a time with
-no hour word ("at 8.30"), and a recorded choice that names an account with no account word
-before its number ("l'utilisateur retient 6000 - Loyer - ABC") are kept for the person who
-produced them instead of every colleague. Wrongly private costs recall; wrongly shared
+no hour word ("at 8.30") are kept for the person who produced them instead of every
+colleague. A recorded imputation choice is shared ("l'utilisateur retient 6000 - Loyer -
+ABC"): accounting self-learning is company knowledge. Wrongly private costs recall; wrongly shared
 cannot be taken back.
 
 The examples that pin the rule live in memory_privacy_vectors.json next to this file. The
@@ -162,6 +162,16 @@ _ACCOUNT = re.compile(
     rf"(?:\s[-\u2013]\s{_LABEL_WORD}(?:[ '\u2019&/-]{{1,3}}{_LABEL_WORD}){{0,6}}(?=\s*(?:[(\[.,;:!?\n]|$)))?",
     re.IGNORECASE,
 )
+# The account of an imputation choice, in the words our own code writes it (record_choice):
+# "l'utilisateur retient 6000 - Loyer - ABC", "NORA proposait 6100 - Entretien - ABC". The
+# ERPNext name is required: "l'utilisateur retient 6000 CHF" stays private. Accounting
+# self-learning is company knowledge (Jeremy, 2026-09-29), and pass 3 had kept it private.
+_CHOICE_ACCOUNT = re.compile(
+    r"\b(?:l['\u2019]utilisateur\s+retient|nora\s+proposait)[ \t]+"
+    r"(?<![\d.,'\u2019])\d{3,6}(?!\d|[.,'\u2019]\d)"
+    rf"\s[-\u2013]\s{_LABEL_WORD}(?:[ '\u2019&/-]{{1,3}}{_LABEL_WORD}){{0,6}}(?=\s*(?:[()\[.,;:!?\n\u2013\u2014]|$))",
+    re.IGNORECASE,
+)
 
 # A postal code is a postal code when a place name follows it ("1003 Lausanne") AND it
 # stands where an address does: first, after a comma or a parenthesis, after "CH-", or
@@ -211,6 +221,7 @@ _SHAPES = (
     (_TIME_BEFORE_WORD, _keep_second_group(_NUMBER_MARK)),
     (_PERCENT, _PERCENT_MARK),
     (_ACCOUNT, _ACCOUNT_MARK),
+    (_CHOICE_ACCOUNT, _ACCOUNT_MARK),
     (_POSTAL_CODE, _keep_first_group(_NUMBER_MARK)),
     (_YEAR, _keep_first_group(_NUMBER_MARK)),
 )

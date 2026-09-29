@@ -83,7 +83,8 @@
 		"compte 6000 - Loyer de 50",
 		"We open at 8.30",
 		"The books close on 31.12",
-		"Pour le compte de charge de Supplier X, l'utilisateur retient 6000 - Loyer - ABC (NORA proposait 6100 - Entretien - ABC — corrigé par un humain, prévaut sur l'historique)."
+		"l'utilisateur retient 6000 CHF pour le loyer",
+		"Pour le loyer, l'utilisateur retient 6000 - Loyer de 50 par mois"
 	],
 	"shared": [
 		"3 doors",
@@ -127,6 +128,8 @@
 		"Marie handles the supplier invoices",
 		"We bill in CHF",
 		"The main supplier is Fr. Muster AG",
-		"The report is sent monthly to 3 managers"
+		"The report is sent monthly to 3 managers",
+		"Pour le compte de charge de Supplier X, l'utilisateur retient 6000 - Loyer - ABC (NORA proposait 6100 - Entretien - ABC — corrigé par un humain, prévaut sur l'historique).",
+		"Pour le compte de charge de Café des Vergers Sàrl, l'utilisateur retient 6570 - Frais de repas - pri."
 	]
 }
