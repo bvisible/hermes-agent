@@ -30,6 +30,42 @@ def tool_may_have_side_effect(tool_name: str) -> bool:
 GUARDRAIL_REFUSAL_KEY = "guardrail_refusal"
 
 
+# //// Neoffice — added function (no upstream equivalent): the explicit success/failure status an MCP
+# //// server puts inside its JSON-in-``result`` envelope. Used by tool_guardrails and display.
+def mcp_result_failure(result: Any) -> bool | None:
+    """Classify explicit status inside MCP's JSON-in-``result`` envelope.
+
+    Argument rejections can be successful MCP transports but failed tool calls.
+    Only follow the renderer's envelope, never arbitrary business fields. Unknown
+    or oversized payloads retain the caller's existing classification behavior.
+    """
+    data = result
+    unwrapped = False
+    for _ in range(4):  # Outer payload plus at most three result envelopes.
+        if isinstance(data, str):
+            if len(data) > 65_536:
+                return None
+            try:
+                data = json.loads(data)
+            except (ValueError, RecursionError):
+                return None
+        if not isinstance(data, dict):
+            return None
+        if unwrapped:
+            if data.get(GUARDRAIL_REFUSAL_KEY) is True:
+                return False
+            if data.get("success") is True:
+                return False
+            if data.get("success") is False:
+                return True
+        if "result" not in data or not data.keys() <= {"result", "_meta", "structuredContent"}:
+            return None
+        data = data["result"]
+        unwrapped = True
+    return None
+# //// END Neoffice ////
+
+
 def is_guardrail_refusal(result: Any) -> bool:
     """Return True when ``result`` (JSON string or parsed dict) is a harness refusal."""
     data = result

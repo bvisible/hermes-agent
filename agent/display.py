@@ -17,7 +17,8 @@ from urllib.parse import urlsplit
 
 from utils import safe_json_loads
 from agent.redact import redact_sensitive_text
-from agent.tool_result_classification import file_mutation_result_landed, is_guardrail_refusal
+# //// Neoffice — mcp_result_failure added to the import (see _detect_tool_failure below).
+from agent.tool_result_classification import file_mutation_result_landed, is_guardrail_refusal, mcp_result_failure
 
 logger = logging.getLogger(__name__)
 
@@ -982,6 +983,13 @@ def _detect_tool_failure(tool_name: str, result: Any) -> tuple[bool, str]:
     # counting it would escalate refusals into ``repeated_exact_failure_block``.
     if is_guardrail_refusal(data):
         return False, ""
+    # //// Neoffice — an MCP call can succeed as a transport and fail as a tool: our Frappe MCP
+    # //// servers answer a rejected call with {"result": "{\"success\": false, ...}"}. Upstream read
+    # //// that as a success, so the display showed no error. Mirrors classify_tool_failure.
+    mcp_failed = mcp_result_failure(data)
+    if mcp_failed is not None:
+        return mcp_failed, " [error]" if mcp_failed else ""
+    # //// END Neoffice ////
 
     # A denied/timed-out approval carries one human sentence; show it instead of the model-facing
     # "BLOCKED: ... Do NOT retry" text (which stays in the JSON for the model).

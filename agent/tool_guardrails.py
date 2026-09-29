@@ -14,7 +14,8 @@ from dataclasses import asdict, dataclass, field, fields
 from typing import Any, Mapping
 
 from utils import safe_json_loads
-from agent.tool_result_classification import file_mutation_result_landed, is_guardrail_refusal
+# //// Neoffice — mcp_result_failure added to the import (see classify_tool_failure below).
+from agent.tool_result_classification import file_mutation_result_landed, is_guardrail_refusal, mcp_result_failure
 
 
 IDEMPOTENT_TOOL_NAMES = frozenset({
@@ -239,6 +240,13 @@ def classify_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str
     # fires the next, harder one. Mirrored in ``agent.display._detect_tool_failure``.
     if is_guardrail_refusal(result):
         return False, ""
+    # //// Neoffice — a rejected MCP call (success:false inside the result envelope) is a failure,
+    # //// so the repeated-failure warning and block also see a worker retrying the same bad call.
+    # //// Upstream counted it as a success and never stepped in (osiris, 2026-09-28).
+    mcp_failed = mcp_result_failure(result)
+    if mcp_failed is not None:
+        return mcp_failed, " [error]" if mcp_failed else ""
+    # //// END Neoffice ////
 
     if tool_name == "terminal":
         data = safe_json_loads(result)
