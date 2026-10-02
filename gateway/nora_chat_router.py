@@ -1173,7 +1173,10 @@ _ATELIER_HINT = (
     "{space}, scope={scope}) WITHOUT confirmed, never with it: the atelier shows your proposal. Tabs: add, hide, "
     "show, rename, first. The overview's widgets, by their title (nora_space_widgets gives them and the library "
     "of charts): add_widget, hide_widget, show_widget, size {{widget: S, M or L}}, first_widget; « mets en avant » "
-    "is first_widget, after add_widget when the chart is not there yet. Then say in ONE sentence what you "
+    # //// Neoffice — a space just made (« Composer avec Nora »): its activity, described in plain words
+    "is first_widget, after add_widget when the chart is not there yet. A space just made has no list yet: "
+    "their message describes the activity, so propose its lists (nora_space_suggest(space, query=<one key "
+    "word>), a word at a time) and a name (title). Then say in ONE sentence what you "
     "propose (« Je vous propose de … : gardez-le dans l'atelier si cela vous convient. »). Your space tools hold "
     "all you need: do NOT search the wiki or your memory, do NOT call kanban_create.]"
 )

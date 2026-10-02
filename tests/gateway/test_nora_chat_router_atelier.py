@@ -105,6 +105,7 @@ def test_what_nora_does_not_read_reaches_the_orchestrator_with_the_atelier_instr
     assert decision["routed"] is False and hint == R._ATELIER_HINT.format(**_ATELIER)
     assert "space=Commercial, scope=user" in hint and "« Ventes »" in hint
     assert "WITHOUT confirmed" in hint and "do NOT search the wiki" in hint
+    assert "A space just made has no list yet" in hint and "a word at a time" in hint
 
 
 def test_a_yes_in_a_fresh_atelier_thread_is_the_ateliers_not_the_canned_answer(monkeypatch):
