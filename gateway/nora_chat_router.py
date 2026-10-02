@@ -1043,6 +1043,65 @@ _NOTE_HINT = (
 # //// END Neoffice ////
 
 
+# //// Neoffice — composing a person's SPACE (its tabs, its name, its icon) is NORA's own
+# //// conversation (step 3 of the spaces composed with NORA, 02.10): her server holds the tools, and
+# //// a change is kept only after the person's yes to the bar shown (checked in code by nora). The
+# //// words of such a request name documents (« ajoute les bons de livraison à mon espace
+# //// Commercial ») and would send it to the pole of the document; recognised here, it goes to NORA
+# //// with _SPACE_HINT, and the conversation stays hers for 10 minutes (« oui », « et cache aussi
+# //// les prospects »). Never the customer portal (« espace client ») nor disk or storage space.
+_SPACE_NOUN_RE = re.compile(
+    r"\b(?:espaces?(?!\s+(?:clients?|disques?|de\s+stockage|publicitaires?|libres?))(?:\s+de\s+travail)?"
+    r"|workspaces?|barre\s+d['\u2019]onglets|(?:mes|tes|vos|nos)\s+onglets"
+    r"|arbeitsbereich\w*|spazio\s+di\s+lavoro|(?:my|this|the|a)\s+(?:work)?space)\b",
+    re.IGNORECASE,
+)
+_SPACE_VERB_RE = re.compile(
+    r"\b(?:r?ajout\w*|met[st]?|mettre|mettez|ret(?:ire|irer|irez)|enl[eè]v\w*|supprim\w*|cach\w*|masqu\w*"
+    r"|affich\w*|remet\w*|renomm\w*|appell?\w*|nomm\w*|chang\w*|modifi\w*|r[ée]organis\w*|organis\w*"
+    r"|compos\w*|cr[ée]\w*|personnalis\w*|configur\w*|d[ée]plac\w*|premi[eè]re?|d['\u2019]abord|ic[oô]nes?"
+    r"|propos\w*|sugg[eè]r\w*|hinzuf\w*|f[üu]g\w*|entfern\w*|ausblend\w*|umbenenn\w*|erstell\w*"
+    r"|aggiung\w*|rimuov\w*|nascond\w*|rinomin\w*|crea\w*|add|remove|hide|show|rename|create|customi[sz]e"
+    r"|reorder)\b",
+    re.IGNORECASE,
+)
+_PENDING_SPACE: dict = {}
+_PENDING_SPACE_TTL = 600  # seconds a space conversation stays NORA's
+
+
+def _is_space_request(msg: str) -> bool:
+    """A request to compose one of the person's spaces: a space named, and what to do with it."""
+    text = (msg or "").replace(chr(0x2019), "'")
+    return bool(_SPACE_NOUN_RE.search(text) and _SPACE_VERB_RE.search(text))
+
+
+def _continues_space(conversation_id: Optional[str], message: str) -> bool:
+    """A turn of a space conversation already under way: the yes, a refusal, a further change. Any
+    other turn ends it, and is routed as usual."""
+    if not conversation_id or conversation_id not in _PENDING_SPACE:
+        return False
+    started = _PENDING_SPACE.pop(conversation_id)
+    msg = (message or "").strip().replace(chr(0x2019), "'")
+    if _time_note.time() - started > _PENDING_SPACE_TTL or not msg or len(msg) > 200:
+        return False
+    return bool(
+        _CONFIRM_SEND_RE.search(msg)
+        or _NOTE_CANCEL_RE.match(msg)
+        or _SPACE_VERB_RE.search(msg)
+        or _SPACE_NOUN_RE.search(msg)
+    )
+
+
+_SPACE_HINT = (
+    "[Route: the person is composing one of their SPACES (tabs, name, icon). It is yours, with your "
+    "space tools: nora_spaces_list (which space), nora_space_suggest (what goes with it, and why), "
+    "nora_space_icons, then nora_space_compose WITHOUT confirmed: show the bar it returns and ask « Je "
+    "l'applique ? ». Only after their yes, the same changes with confirmed=true. Do NOT call "
+    "kanban_create. Never say the space changed unless nora_space_compose returned confirmed: true.]"
+)
+# //// END Neoffice ////
+
+
 _CAPABILITY_RE = re.compile(
     r"^\s*(?:est[-\s]ce\s+que\s+)?"
     r"(?:tu\s+(?:peux|sais|pourrais)|peux[-\s]tu|sais[-\s]tu|pourrais[-\s]tu|"
@@ -2059,10 +2118,23 @@ def route_chat_message(
     )
     # //// END Neoffice ////
 
+    # //// Neoffice — a SPACE composed with NORA is hers (step 3, 02.10), see _SPACE_HINT: the
+    # //// request, then the turns that follow it (the yes, a further change) for 10 minutes.
+    _space_turn = (
+        _offer is None
+        and not _note_request
+        and (_continues_space(conversation_id, message) or _is_space_request(message))
+    )
+    if _space_turn and conversation_id:
+        _PENDING_SPACE[conversation_id] = _time_note.time()
+    # //// END Neoffice ////
+
     # //// Neoffice — pure small talk is answered from a template: no classifier, no
     # fast-answer thread, no light-path completion (see _canned_smalltalk_reply).
-    _canned_text = (  # //// Neoffice — never for a note (#1040)
-        _canned_smalltalk_reply(message, language) if _offer is None and not _note_request else None
+    _canned_text = (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
+        _canned_smalltalk_reply(message, language)
+        if _offer is None and not _note_request and not _space_turn
+        else None
     )
     # //// END Neoffice ////
 
@@ -2077,7 +2149,11 @@ def route_chat_message(
     # //// Neoffice — a one-off reminder is an action nora sets in code (_route_reminder):
     # //// the read-only fast-answer engine has nothing to answer, so it is not asked.
     _one_off_reminder = _is_one_off_reminder(message)
-    if not _note_request and _asks_fast_answer(language, _canned_text, _one_off_reminder):  # //// Neoffice — #1040
+    if (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
+        not _note_request
+        and not _space_turn
+        and _asks_fast_answer(language, _canned_text, _one_off_reminder)
+    ):
         import concurrent.futures as _cf
 
         _fa_pool = _cf.ThreadPoolExecutor(max_workers=1)
@@ -2094,6 +2170,8 @@ def route_chat_message(
         category = "DIRECT"  # //// Neoffice — canned small talk, classifier skipped ////
     elif _note_request:
         category = "DIRECT"  # //// Neoffice — a note, written in code (#1040), classifier skipped ////
+    elif _space_turn:
+        category = "DIRECT"  # //// Neoffice — a space, NORA's own conversation (step 3), classifier skipped ////
     else:
         category = classify(
             message,
@@ -2125,6 +2203,7 @@ def route_chat_message(
         category == "DIRECT"
         and not _canned_text
         and not _note_request  # //// Neoffice — a note on a job page is a note (#1040)
+        and not _space_turn  # //// Neoffice — a space composed on a job page is a space (step 3)
         and _page_project(page_context)
         and not _DIRECT_RE.match((message or "").strip())
         and not _CAPABILITY_RE.match((message or "").strip())
@@ -2152,6 +2231,11 @@ def route_chat_message(
         del _conv_film[:-_CONV_HISTORY_TURNS]
         # //// END Neoffice ////
     if category == "DIRECT":
+        # //// Neoffice — a space is NORA's own conversation, with its instruction (step 3).
+        if _space_turn:
+            return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
+                    "agent_hint": _SPACE_HINT}
+        # //// END Neoffice ////
         # //// Neoffice — a note is written in code first, see _route_note (#1040).
         if _note_request:
             _note = _route_note(message, chat_user, deliver_extra, conversation_id, follow_up=_note_follow_up)
