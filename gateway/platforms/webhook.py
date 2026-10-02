@@ -1186,6 +1186,12 @@ class WebhookAdapter(BasePlatformAdapter):
                             str((payload or {}).get("phone") or "").strip()
                             or str(session_chat_id or "")
                         ),
+                        # //// Neoffice — whether NORA already replied in this thread, read by
+                        # //// send_chat from nora's chat log: a yes in a fresh thread confirms
+                        # //// nothing (#1065). Absent or not a bool = unknown, routed as before.
+                        nora_spoke=(
+                            payload.get("nora_spoke") if isinstance(payload.get("nora_spoke"), bool) else None
+                        ),
                     )
                     if _decision.get("routed"):
                         logger.info(

@@ -162,6 +162,52 @@ _BARE_YES_RULE = (
 # //// END Neoffice ////
 
 
+# //// Neoffice — a yes in a thread where NORA has said nothing yet confirms nothing (#1065).
+# //// The agent's session is kept per PERSON, the film per thread: a fresh Quick Chat thread
+# //// opened on « Oui, vas-y. », and the orchestrator found in its session a proposal from
+# //// another thread of the morning and handed it to a pole. Fresh is known only when nora
+# //// says so (`nora_spoke`, read from its chat log, which outlives a gateway restart) and this
+# //// gateway's film agrees. Unknown (WhatsApp, an older nora): routed as before.
+_NOTHING_PROPOSED = {
+    "fr": "Je n'ai rien en attente de votre accord dans cette conversation, je n'ai donc rien fait. "
+          "Que puis-je faire pour vous ?",
+    "de": "In diesem Gespräch wartet nichts auf Ihre Zustimmung, ich habe also nichts ausgeführt. "
+          "Was kann ich für Sie tun?",
+    "it": "In questa conversazione non c'è nulla in attesa del suo consenso, quindi non ho fatto nulla. "
+          "Cosa posso fare per lei?",
+    "en": "Nothing in this conversation is waiting for your approval, so I haven't done anything. "
+          "What can I do for you?",
+}
+# A message that opens on a yes (« Oui, fais-le », « ok go »): in a fresh thread it points at nothing.
+_YES_HEAD_RE = re.compile(
+    r"^\s*(?:oui|ouais|ok(?:ay)?|d['\u2019]?accord|bien\s+s[uû]r|vas[- ]?y|allez[- ]?y|volontiers|parfait"
+    r"|go|yes|yeah|yep|sure|ja|jawohl|gerne|klar|s[iì]|certo|va\s+bene)\b",
+    re.IGNORECASE,
+)
+_FRESH_THREAD_HINT = (
+    "[This conversation is NEW: NORA has proposed nothing in it yet. A yes, an « ok » or a « do it » "
+    "here confirms nothing: never carry out a proposal, an action or a task from another "
+    "conversation of this person, nor one recalled from memory. Ask what they want.]"
+)
+
+
+def _thread_is_fresh(conversation_id: Optional[str], nora_spoke: Optional[bool]) -> bool:
+    """True only when it is KNOWN that NORA has said nothing yet in this thread."""
+    if not conversation_id or nora_spoke is not False:
+        return False
+    return not any(line.startswith("NORA: ") for line in _CONV_HISTORY.get(conversation_id) or [])
+
+
+def _nothing_proposed_reply(message: str, language: Optional[str]) -> Optional[str]:
+    """The answer to a bare yes (« oui », « Oui, vas-y. », « ok ») in a fresh thread, else None.
+    « Merci » alone is small talk, not a yes: it keeps its canned reply."""
+    msg = (message or "").strip()
+    if not (_NOTE_BARE_ACK_RE.match(msg) and _YES_HEAD_RE.match(msg)):
+        return None
+    return _NOTHING_PROPOSED.get(_norm_lang(language)) or _NOTHING_PROPOSED["fr"]
+# //// END Neoffice ////
+
+
 def note_nora_reply(conversation_id: Optional[str], text: Optional[str]) -> None:
     """Record NORA's own delivered reply into the conversation film.
 
@@ -2143,6 +2189,7 @@ def route_chat_message(
     language: Optional[str] = None,  # //// Neoffice — user's response language (multilingual) ////
     chat_phone: Optional[str] = None,  # //// Neoffice — phone, to match a pending briefing offer ////
     page_context: Optional[dict] = None,  # //// Neoffice — the desk page the user is on (job panel) ////
+    nora_spoke: Optional[bool] = None,  # //// Neoffice — NORA already replied in this thread (nora's chat log), #1065 ////
 ) -> dict:
     """Classify *message* and, when it is a business request, create the kanban task
     in code + subscribe the notifier. Returns a decision dict::
@@ -2201,10 +2248,20 @@ def route_chat_message(
         _PENDING_SPACE[conversation_id] = _time_note.time()
     # //// END Neoffice ////
 
+    # //// Neoffice — a yes in a thread where NORA has said nothing confirms nothing, see
+    # //// _NOTHING_PROPOSED (#1065): a bare one is answered in code, any other gets a rule.
+    _fresh_thread = (
+        _offer is None and not _note_request and not _space_turn
+        and _thread_is_fresh(conversation_id, nora_spoke)
+    )
+    _fresh_yes = _fresh_thread and bool(_YES_HEAD_RE.match((message or "").strip()))
+    _nothing_to_confirm = _nothing_proposed_reply(message, language) if _fresh_thread else None
+    # //// END Neoffice ////
+
     # //// Neoffice — pure small talk is answered from a template: no classifier, no
     # fast-answer thread, no light-path completion (see _canned_smalltalk_reply).
     _canned_text = (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
-        _canned_smalltalk_reply(message, language)
+        (_nothing_to_confirm or _canned_smalltalk_reply(message, language))  # //// Neoffice — #1065
         if _offer is None and not _note_request and not _space_turn
         else None
     )
@@ -2371,7 +2428,9 @@ def route_chat_message(
             )
             note_nora_reply(conversation_id, _canned_text)
             logger.info(
-                "nora_chat_router: SMALLTALK canned (no LLM, %d chars) delivered=%s",
+                "nora_chat_router: %s (no LLM, %d chars) delivered=%s",
+                "a yes in a fresh thread confirms nothing (#1065)" if _nothing_to_confirm  # //// Neoffice
+                else "SMALLTALK canned",
                 len(_canned_text), _cn_delivered,
             )
             return {
@@ -2416,9 +2475,12 @@ def route_chat_message(
             except Exception as _lp_exc:  # noqa: BLE001 — degrade to the agent path
                 logger.warning("nora_chat_router: smalltalk light path failed → agent: %s", _lp_exc)
         # //// END Neoffice ////
-        # //// Neoffice — the orchestrator gets the reminder instruction, see _ONE_OFF_REMINDER_HINT.
+        # //// Neoffice — the orchestrator gets the reminder instruction, see _ONE_OFF_REMINDER_HINT,
+        # //// and a yes in a fresh thread its rule, see _FRESH_THREAD_HINT (#1065).
+        _direct_hints = [h for h in (_ONE_OFF_REMINDER_HINT if _one_off_reminder else None,
+                                     _FRESH_THREAD_HINT if _fresh_yes else None) if h]
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
-                "agent_hint": _ONE_OFF_REMINDER_HINT if _one_off_reminder else None}
+                "agent_hint": "\n".join(_direct_hints) or None}  # //// Neoffice — #1065
 
     # RECURRENT — a recurring "do this every X" request. Not a one-shot pole task: create
     # a scheduled task in code (deterministic, user-scoped) via the nora task_router and
@@ -2579,6 +2641,8 @@ def route_chat_message(
                     "context (a bare name = a customer to filter by).]"
                     f"\n\n{message}"
                 )
+            elif _fresh_yes:  # //// Neoffice — a yes in a fresh thread points at nothing (#1065)
+                _body = f"{_FRESH_THREAD_HINT}\n\n{message}"
             # //// Neoffice — the job the user is looking at (docked job panel, 05.09). The
             # desk sends its page context with every message; without it a worker asked
             # about « ce chantier » invented a job number (RT445566, live on osiris).
