@@ -1146,6 +1146,40 @@ def _continues_space(conversation_id: Optional[str], message: str) -> str:  # //
     return "answer" if asked else ""  # //// Neoffice — only the answer to nora's question
 
 
+# //// Neoffice — the ATELIER (the theme's full screen to compose a space, 02.10). Its NORA box sends every
+# //// message with the page context {atelier: {space, label, scope}}, and all of it is about that space,
+# //// whatever its words: « Masque les abonnements, je ne m'en sers pas » went to the Support pole, which
+# //// answered that it could not hide a module. nora reads it in code and only PROPOSES (a dry run the
+# //// atelier shows, kept or undone change by change there); what nora does not read goes to the
+# //// orchestrator with _ATELIER_HINT.
+def _atelier_of(page_context: Optional[dict]) -> Optional[dict]:
+    """The space and level the atelier composes, from the page context; None outside the atelier."""
+    atelier = page_context.get("atelier") if isinstance(page_context, dict) else None
+    if not isinstance(atelier, dict):
+        return None
+    space = str(atelier.get("space") or "").strip()
+    if not space or len(space) > 140:
+        return None
+    return {
+        "space": space,
+        "label": (str(atelier.get("label") or "").strip() or space)[:140],
+        "scope": (str(atelier.get("scope") or "").strip() or "user")[:160],
+    }
+
+
+_ATELIER_HINT = (
+    "[Route: the person writes from the ATELIER of their space « {label} » (space={space}, scope={scope}): they "
+    "compose it on screen, keep or undo each change there, then save. Propose with nora_space_compose(space="
+    "{space}, scope={scope}) WITHOUT confirmed, never with it: the atelier shows your proposal. Tabs: add, hide, "
+    "show, rename, first. The overview's widgets, by their title (nora_space_widgets gives them and the library "
+    "of charts): add_widget, hide_widget, show_widget, size {{widget: S, M or L}}, first_widget; « mets en avant » "
+    "is first_widget, after add_widget when the chart is not there yet. Then say in ONE sentence what you "
+    "propose (« Je vous propose de … : gardez-le dans l'atelier si cela vous convient. »). Your space tools hold "
+    "all you need: do NOT search the wiki or your memory, do NOT call kanban_create.]"
+)
+# //// END Neoffice ////
+
+
 # //// Neoffice — a plain space request is read in code by nora (space_route.route_space, 02.10):
 # //// given the tools and the instruction, the orchestrator read « Ajoute les bons de livraison à mon
 # //// espace Commercial » as a wiki question, searched it twenty times and was stopped by the guard
@@ -1178,7 +1212,8 @@ def _route_space(
     req = urllib.request.Request(
         cb.replace(_DELIVER, _ROUTE),
         data=_json.dumps({"user": user, "message": message, "conversation_id": cid,
-                          "follow_up": bool(follow_up), "page_route": page_route or ""}).encode(),
+                          "follow_up": bool(follow_up), "page_route": page_route or "",
+                          "atelier": _atelier_of(page_context)}).encode(),  # //// Neoffice — see _atelier_of
         method="POST", headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
     )
     try:
@@ -1197,8 +1232,9 @@ def _route_space(
         if len(_SPACE_ASKED) > _LAST_ROUTE_MAX:
             _SPACE_ASKED.clear()
         _SPACE_ASKED.add(conversation_id)
-    logger.info("nora_chat_router: space %s read in code (asked=%s, applied=%s), ack_delivered=%s",
-                data.get("space"), bool(data.get("asked")), bool(data.get("applied")), delivered)
+    logger.info("nora_chat_router: space %s read in code (asked=%s, applied=%s, proposed=%s), ack_delivered=%s",
+                data.get("space"), bool(data.get("asked")), bool(data.get("applied")),
+                bool(data.get("proposed")), delivered)  # //// Neoffice — proposed: the atelier's dry run
     return {"routed": True, "category": "DIRECT", "ack": data["ack"], "task_id": None,
             "space": data.get("space"), "asked": bool(data.get("asked")),
             "applied": bool(data.get("applied")), "ack_delivered": delivered}
@@ -2236,12 +2272,16 @@ def route_chat_message(
     # //// Neoffice — a SPACE composed with NORA is hers (step 3, 02.10), see _SPACE_HINT: the
     # //// request, then the turns that follow it (the yes, a further change) for 10 minutes.
     _space_follow = _continues_space(conversation_id, message) if _offer is None and not _note_request else ""
-    _space_turn = bool(_space_follow) or (_offer is None and not _note_request and _is_space_request(message))
+    # //// Neoffice — from the atelier, every turn is about its space, see _atelier_of
+    _atelier = _atelier_of(page_context) if _offer is None and not _note_request else None
+    _space_turn = bool(_atelier) or bool(_space_follow) or (
+        _offer is None and not _note_request and _is_space_request(message)
+    )
     _space_routed: dict = {}
     if _space_turn:
         _space_routed = _route_space(message, chat_user, deliver_extra, conversation_id,
                                      follow_up=bool(_space_follow), page_context=page_context)
-        if not _space_routed.get("routed") and _space_follow == "answer":
+        if not _space_routed.get("routed") and _space_follow == "answer" and not _atelier:  # //// Neoffice
             # //// Neoffice — it answered nothing nora asked (« combien de factures ? »): routed as usual
             _space_turn = False
     if _space_turn and conversation_id:
@@ -2366,7 +2406,7 @@ def route_chat_message(
                 note_nora_reply(conversation_id, _space_routed["ack"])
                 return _space_routed
             return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
-                    "agent_hint": _SPACE_HINT}
+                    "agent_hint": _ATELIER_HINT.format(**_atelier) if _atelier else _SPACE_HINT}  # //// Neoffice
         # //// END Neoffice ////
         # //// Neoffice — a note is written in code first, see _route_note (#1040).
         if _note_request:
