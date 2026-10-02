@@ -1092,12 +1092,14 @@ def _continues_space(conversation_id: Optional[str], message: str) -> bool:
     )
 
 
-_SPACE_HINT = (
+_SPACE_HINT = (  # //// Neoffice — the question is one the capability bench recognises
     "[Route: the person is composing one of their SPACES (tabs, name, icon). It is yours, with your "
     "space tools: nora_spaces_list (which space), nora_space_suggest (what goes with it, and why), "
-    "nora_space_icons, then nora_space_compose WITHOUT confirmed: show the bar it returns and ask « Je "
-    "l'applique ? ». Only after their yes, the same changes with confirmed=true. Do NOT call "
-    "kanban_create. Never say the space changed unless nora_space_compose returned confirmed: true.]"
+    "nora_space_icons, then nora_space_compose WITHOUT confirmed: show the bar it returns and ask "
+    "« Voulez-vous que je l'applique ? ». Only after their yes, the same changes with confirmed=true. A "
+    "trade for the whole company (nora_space_trades) is for its administrator only, the same way, saying "
+    "it changes every space for everyone. Do NOT call kanban_create. Never say a space changed unless "
+    "the call returned confirmed: true.]"
 )
 # //// END Neoffice ////
 
