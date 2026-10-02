@@ -1066,6 +1066,9 @@ _SPACE_VERB_RE = re.compile(
     re.IGNORECASE,
 )
 _PENDING_SPACE: dict = {}
+# //// Neoffice — conversations where nora asked a question about a space (the bar shown, which space):
+# //// their next turn goes to nora whatever its words (« Commercial », « oui »).
+_SPACE_ASKED: set = set()
 _PENDING_SPACE_TTL = 600  # seconds a space conversation stays NORA's
 
 
@@ -1075,26 +1078,89 @@ def _is_space_request(msg: str) -> bool:
     return bool(_SPACE_NOUN_RE.search(text) and _SPACE_VERB_RE.search(text))
 
 
-def _continues_space(conversation_id: Optional[str], message: str) -> bool:
-    """A turn of a space conversation already under way: the yes, a refusal, a further change. Any
-    other turn ends it, and is routed as usual."""
+def _continues_space(conversation_id: Optional[str], message: str) -> str:  # //// Neoffice — says why (02.10)
+    """Why a turn belongs to a space conversation already under way: "words" (the yes, a refusal, a
+    further change), "answer" (it only answers the question nora asked: « Commercial »), or "" (it
+    does not: any other turn ends the conversation, and is routed as usual)."""
     if not conversation_id or conversation_id not in _PENDING_SPACE:
-        return False
+        return ""  # //// Neoffice — no space conversation under way
     started = _PENDING_SPACE.pop(conversation_id)
+    asked = conversation_id in _SPACE_ASKED  # //// Neoffice — nora asked a question about it
+    _SPACE_ASKED.discard(conversation_id)
     msg = (message or "").strip().replace(chr(0x2019), "'")
     if _time_note.time() - started > _PENDING_SPACE_TTL or not msg or len(msg) > 200:
-        return False
-    return bool(
+        return ""  # //// Neoffice — expired, empty or a whole new request
+    if (  # //// Neoffice — the yes, a refusal, a further change
         _CONFIRM_SEND_RE.search(msg)
         or _NOTE_CANCEL_RE.match(msg)
         or _SPACE_VERB_RE.search(msg)
         or _SPACE_NOUN_RE.search(msg)
+    ):
+        return "words"
+    return "answer" if asked else ""  # //// Neoffice — only the answer to nora's question
+
+
+# //// Neoffice — a plain space request is read in code by nora (space_route.route_space, 02.10):
+# //// given the tools and the instruction, the orchestrator read « Ajoute les bons de livraison à mon
+# //// espace Commercial » as a wiki question, searched it twenty times and was stopped by the guard
+# //// (osiris, 13:47). nora reads it, shows the bar with « Voulez-vous que je l'applique ? », and keeps
+# //// it on the person's « oui », forwarded here as their next turn. Same desk callback, token and
+# //// reply envelope as _route_note; what nora does not read goes to the orchestrator.
+def _route_space(
+    message: str,
+    chat_user: Optional[str],
+    deliver_extra: Optional[dict],
+    conversation_id: Optional[str],
+    follow_up: bool = False,
+    page_context: Optional[dict] = None,
+) -> dict:
+    extra = deliver_extra or {}
+    cb = (extra.get("callback_url") or "").strip()
+    token = (extra.get("callback_token") or "").strip()
+    user = (chat_user or "").strip()
+    _DELIVER = "nora.api.v2.hermes_callback.deliver"
+    _ROUTE = "nora.api.v2.space_route.route_space"
+    declined = {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
+    if not (cb and token and user) or _DELIVER not in cb:
+        return declined
+    import json as _json
+    import urllib.request
+
+    # //// Neoffice — the space on screen helps nora find the one meant (« ajoute … à mon espace »)
+    cid = (extra.get("conversation_id") or conversation_id or "").strip()
+    page_route = (page_context or {}).get("route") if isinstance(page_context, dict) else None
+    req = urllib.request.Request(
+        cb.replace(_DELIVER, _ROUTE),
+        data=_json.dumps({"user": user, "message": message, "conversation_id": cid,
+                          "follow_up": bool(follow_up), "page_route": page_route or ""}).encode(),
+        method="POST", headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
     )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = _json.loads(resp.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001  //// Neoffice — nora unreachable: the orchestrator
+        logger.warning("nora_chat_router: space POST failed → agent fallback: %s", exc)
+        return declined
+    if isinstance(data, dict) and isinstance(data.get("message"), dict):
+        data = data["message"]  # a whitelisted Frappe method answers {"message": {...}}
+    if not isinstance(data, dict) or not data.get("ok") or not data.get("ack"):
+        logger.info("nora_chat_router: space not read in code (%s) → agent", (data or {}).get("error"))
+        return declined
+    delivered = _post_ack_to_callback(data["ack"], deliver_extra)
+    if conversation_id and data.get("asked"):
+        if len(_SPACE_ASKED) > _LAST_ROUTE_MAX:
+            _SPACE_ASKED.clear()
+        _SPACE_ASKED.add(conversation_id)
+    logger.info("nora_chat_router: space %s read in code (asked=%s, applied=%s), ack_delivered=%s",
+                data.get("space"), bool(data.get("asked")), bool(data.get("applied")), delivered)
+    return {"routed": True, "category": "DIRECT", "ack": data["ack"], "task_id": None,
+            "space": data.get("space"), "asked": bool(data.get("asked")),
+            "applied": bool(data.get("applied")), "ack_delivered": delivered}
 
 
-_SPACE_HINT = (  # //// Neoffice — the question is one the capability bench recognises
+_SPACE_HINT = (  # //// Neoffice — the question is one the capability bench recognises; no wiki (13:47)
     "[Route: the person is composing one of their SPACES (tabs, name, icon). It is yours, with your "
-    "space tools: nora_spaces_list (which space), nora_space_suggest (what goes with it, and why), "
+    "space tools, which hold all you need: do NOT search the wiki or your memory for it. nora_spaces_list (which space), nora_space_suggest (what goes with it, and why), "
     "nora_space_icons, then nora_space_compose WITHOUT confirmed: show the bar it returns and ask "
     "« Voulez-vous que je l'applique ? ». Only after their yes, the same changes with confirmed=true. A "
     "trade for the whole company (nora_space_trades) is for its administrator only, the same way, saying "
@@ -2122,11 +2188,15 @@ def route_chat_message(
 
     # //// Neoffice — a SPACE composed with NORA is hers (step 3, 02.10), see _SPACE_HINT: the
     # //// request, then the turns that follow it (the yes, a further change) for 10 minutes.
-    _space_turn = (
-        _offer is None
-        and not _note_request
-        and (_continues_space(conversation_id, message) or _is_space_request(message))
-    )
+    _space_follow = _continues_space(conversation_id, message) if _offer is None and not _note_request else ""
+    _space_turn = bool(_space_follow) or (_offer is None and not _note_request and _is_space_request(message))
+    _space_routed: dict = {}
+    if _space_turn:
+        _space_routed = _route_space(message, chat_user, deliver_extra, conversation_id,
+                                     follow_up=bool(_space_follow), page_context=page_context)
+        if not _space_routed.get("routed") and _space_follow == "answer":
+            # //// Neoffice — it answered nothing nora asked (« combien de factures ? »): routed as usual
+            _space_turn = False
     if _space_turn and conversation_id:
         _PENDING_SPACE[conversation_id] = _time_note.time()
     # //// END Neoffice ////
@@ -2235,6 +2305,9 @@ def route_chat_message(
     if category == "DIRECT":
         # //// Neoffice — a space is NORA's own conversation, with its instruction (step 3).
         if _space_turn:
+            if _space_routed.get("routed"):  # //// Neoffice — read in code by nora, see _route_space
+                note_nora_reply(conversation_id, _space_routed["ack"])
+                return _space_routed
             return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                     "agent_hint": _SPACE_HINT}
         # //// END Neoffice ////

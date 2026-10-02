@@ -6,6 +6,8 @@ Her server holds the space tools, and nora keeps a change only after the person'
 the words of the request name documents and would send it to their pole. The turns that follow it (the
 yes, a further change) stay hers for ten minutes; any other turn ends the conversation.
 """
+import io
+import json
 import time
 
 import pytest
@@ -45,10 +47,10 @@ def test_these_are_not_space_requests(message):
 
 @pytest.fixture(autouse=True)
 def fresh_state():
-    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY):
+    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED):
         d.clear()
     yield
-    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY):
+    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED):
         d.clear()
 
 
@@ -92,10 +94,102 @@ def test_another_question_ends_the_space_conversation(monkeypatch):
 
 def test_the_conversation_does_not_stay_hers_forever():
     R._PENDING_SPACE["conv-space"] = time.time() - R._PENDING_SPACE_TTL - 1
-    assert R._continues_space("conv-space", "Oui") is False
+    assert R._continues_space("conv-space", "Oui") == ""
 
 
 def test_a_note_about_a_space_is_a_note():
     assert R._is_note_request("Crée une note : réorganiser mon espace Commercial lundi")
     decision = _route("Crée une note : réorganiser mon espace Commercial lundi")
     assert decision.get("agent_hint") != R._SPACE_HINT
+
+
+# ── read in code by nora (space_route.route_space), the answer delivered to the desk ─────────────────
+
+_CB = "https://erp.example.test/api/method/nora.api.v2.hermes_callback.deliver"
+_EXTRA = {"callback_url": _CB, "callback_token": "tok", "conversation_id": "conv-space"}
+_BAR = "Votre espace « Commercial » serait ainsi : Devis · Livraisons (ajouté).\nVoulez-vous que je l'applique ?"
+
+
+class _Http:
+    """Stands in for urllib.request.urlopen; records every POST and answers per URL suffix."""
+
+    def __init__(self, answers):
+        self.answers, self.calls = answers, []
+
+    def __call__(self, req, timeout=None):
+        self.calls.append((req.full_url, json.loads(req.data.decode())))
+        answer = next((a for suffix, a in self.answers.items() if req.full_url.endswith(suffix)), None)
+        return _Resp(io.BytesIO(json.dumps(answer or {}).encode()))
+
+
+class _Resp:
+    def __init__(self, buf):
+        self._buf = buf
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def read(self):
+        return self._buf.getvalue()
+
+
+def _nora(answer):
+    return _Http({"space_route.route_space": {"message": answer}, "hermes_callback.deliver": {"message": "ok"}})
+
+
+def _route_with(http, monkeypatch, message, call_llm_fn=_no_llm):
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", http)
+    return _route(message, call_llm_fn=call_llm_fn, extra=_EXTRA)
+
+
+def test_a_plain_request_is_read_by_nora_and_its_bar_delivered(monkeypatch):
+    http = _nora({"ok": True, "asked": True, "space": "Commercial", "ack": _BAR})
+    decision = _route_with(http, monkeypatch, "Ajoute les bons de livraison à mon espace Commercial")
+    assert decision["routed"] is True and decision["ack"] == _BAR and decision["asked"] is True
+    (url, body), (ack_url, ack_body) = http.calls
+    assert url.endswith("nora.api.v2.space_route.route_space") and body["follow_up"] is False
+    assert ack_url == _CB and ack_body == {"conversation_id": "conv-space", "text": _BAR}
+    assert "conv-space" in R._SPACE_ASKED and "conv-space" in R._PENDING_SPACE
+
+
+def test_the_yes_goes_back_to_nora_as_a_follow_up(monkeypatch):
+    _route_with(_nora({"ok": True, "asked": True, "space": "Commercial", "ack": _BAR}), monkeypatch,
+                "Ajoute les bons de livraison à mon espace Commercial")
+    done = "C'est fait : votre espace « Commercial » montre maintenant Devis · Livraisons (ajouté)."
+    http = _nora({"ok": True, "applied": True, "space": "Commercial", "ack": done})
+    decision = _route_with(http, monkeypatch, "Oui, vas-y.")
+    assert decision["routed"] is True and decision["applied"] is True
+    assert http.calls[0][1]["follow_up"] is True and http.calls[0][1]["message"] == "Oui, vas-y."
+    assert "conv-space" not in R._SPACE_ASKED
+
+
+def test_the_answer_to_which_space_goes_to_nora(monkeypatch):
+    _route_with(_nora({"ok": True, "asked": True, "ack": "Dans quel espace … ?"}), monkeypatch,
+                "Ajoute les bons de livraison à mon espace")
+    http = _nora({"ok": True, "asked": True, "space": "Commercial", "ack": _BAR})
+    decision = _route_with(http, monkeypatch, "Commercial")
+    assert decision["routed"] is True and http.calls[0][1]["follow_up"] is True
+
+
+def test_what_nora_does_not_read_after_its_question_is_routed_as_usual(monkeypatch):
+    _route_with(_nora({"ok": True, "asked": True, "space": "Commercial", "ack": _BAR}), monkeypatch,
+                "Ajoute les bons de livraison à mon espace Commercial")
+    asked = []
+    monkeypatch.setattr(R, "classify", lambda message, **kw: asked.append(message) or "DIRECT")
+    monkeypatch.setattr(R, "_asks_fast_answer", lambda *a, **k: False)
+    decision = _route_with(_nora({"ok": False, "error": "not read"}), monkeypatch,
+                           "Combien de factures avons-nous émises en septembre")
+    assert asked == ["Combien de factures avons-nous émises en septembre"]
+    assert decision.get("agent_hint") != R._SPACE_HINT
+
+
+def test_a_request_nora_does_not_read_goes_to_the_orchestrator_with_its_instruction(monkeypatch):
+    http = _nora({"ok": False, "error": "not read"})
+    decision = _route_with(http, monkeypatch, "Change l'icône de mon espace Commercial en voiture")
+    assert decision["routed"] is False and decision["agent_hint"] == R._SPACE_HINT
+    assert "do NOT search the wiki" in R._SPACE_HINT and len(http.calls) == 1
