@@ -168,6 +168,14 @@ def test_a_refusal_or_a_question_is_not_the_note(monkeypatch, reply):
     assert "conv-note" not in R._PENDING_NOTE
 
 
+@pytest.mark.parametrize("ack", ("Oui", "Oui, vas-y.", "ok", "D'accord, merci", "Ja, bitte", "Yes please"))
+def test_a_bare_acknowledgment_is_not_the_note_and_the_question_stays_open(ack):
+    R._PENDING_NOTE["conv-note"] = time.time()
+    assert R._take_pending_note("conv-note", ack) is False
+    assert "conv-note" in R._PENDING_NOTE
+    assert R._take_pending_note("conv-note", "Rappeler Dupont pour le devis") is True
+
+
 def test_the_question_does_not_stay_open_forever():
     R._PENDING_NOTE["conv-note"] = time.time() - R._PENDING_NOTE_TTL - 1
     assert R._take_pending_note("conv-note", "Rappeler Dupont pour le devis") is False

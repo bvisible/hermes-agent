@@ -1004,6 +1004,15 @@ _NOTE_CANCEL_RE = re.compile(
     r"|nein\b|nichts\b|vergiss|niente\b|lascia\s+perdere|annulla\b|never\s*mind|cancel\b|nothing\b)",
     re.IGNORECASE,
 )
+# //// Neoffice — a bare acknowledgment (« oui », « ok », « d'accord ») says nothing about WHAT to
+# //// note: the question stays open for the sentence that does. NORA Live hands a bare « oui » to the
+# //// pole that asked last, and it became a note reading « Oui ».
+_NOTE_BARE_ACK_RE = re.compile(
+    r"^\s*(?:(?:oui|ouais|ok(?:ay)?|d['\u2019]accord|bien\s+s[uû]r|vas[- ]y|allez[- ]y|volontiers|merci"
+    r"|yes|yeah|yep|sure|please|thanks|ja|jawohl|gerne|klar|danke|bitte|s[iì]|certo|va\s+bene|grazie)"
+    r"[\s,.!]*)+$",
+    re.IGNORECASE,
+)
 
 
 def _take_pending_note(conversation_id: Optional[str], message: str) -> bool:
@@ -1015,6 +1024,9 @@ def _take_pending_note(conversation_id: Optional[str], message: str) -> bool:
     if asked_at is None or _time_note.time() - asked_at > _PENDING_NOTE_TTL:
         return False
     msg = (message or "").strip()
+    if _NOTE_BARE_ACK_RE.match(msg):  # //// Neoffice — nothing said yet: the question stays open
+        _PENDING_NOTE[conversation_id] = asked_at
+        return False
     if not msg or _NOTE_CANCEL_RE.match(msg) or msg.endswith("?"):
         return False
     return not (_is_note_request(msg) or _is_one_off_reminder(msg) or _RECUR_RE.search(msg))
