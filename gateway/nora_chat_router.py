@@ -905,6 +905,132 @@ _ONE_OFF_REMINDER_HINT = (
 # //// END Neoffice ////
 
 
+# //// Neoffice — a NOTE for the person asking is written in code by nora (notes.route_note,
+# //// #1040). « Crée-moi une note : … pour le chantier … » reached the projet pole (the word
+# //// « chantier »), whose only note tool writes a project's diary and needs a project the
+# //// account could not read; « Prends note : … » reached the orchestrator, which answered
+# //// « C'est noté » with nothing written. No pole held a tool for a free note. The words of a
+# //// note request are unambiguous, so the code routes it, like a one-off reminder. They are
+# //// nora's own patterns (nora/api/v2/notes.py): tests/gateway/note_request_vectors.json is
+# //// shared with nora byte for byte, so the two sides read the same requests.
+_NOT_A_NOTE_RE = re.compile(
+	r"\bnotes?\s+(?:de\s+frais|de\s+cr[ée]dit|de\s+d[ée]bit|de\s+livraison|d['\u2019]honoraires?)"
+	r"|\b(?:credit|debit|delivery|expense)\s+notes?\b|\bexpense\s+claims?\b"
+	r"|\bgutschrift\w*|\blieferschein\w*|\bspesen\w*"
+	r"|\bnot[ae]\s+(?:di\s+)?(?:credito|debito|spese)\b",
+	re.IGNORECASE,
+)
+
+# What may open the request before its command: NORA's name, a greeting, politeness, and
+# « can you … » in each language (« Nora, peux-tu me créer une note : … »).
+_NOTE_PREFIX = (
+	r"^\s*(?:(?:nora|bonjour|salut|hello|hallo|hi|ciao)\b[\s,!:.]*)?"
+	r"(?:(?:s['\u2019]il\s+(?:te|vous)\s+pla[iî]t|stp|svp|bitte|per\s+favore|please)\b[\s,!:.]*)?"
+	r"(?P<ask>(?:est[- ]ce\s+que\s+)?(?:tu\s+(?:peux|pourrais)|peux[- ]tu|pourrais[- ]tu|vous\s+pouvez|"
+	r"pouvez[- ]vous|pourriez[- ]vous|kannst\s+du|k[öo]nnen\s+sie|k[öo]nntest\s+du|puoi|potresti|"
+	r"pu[òo]|can\s+you|could\s+you|would\s+you|will\s+you)\s+(?:me\s+|m['\u2019]|mir\s+|uns\s+|mi\s+|ci\s+)?)?"
+)
+
+# The command itself, at the start (after _NOTE_PREFIX). What follows it is the note.
+_NOTE_COMMANDS = (
+	# fr — « crée-moi une note », « fais une petite note », « ouvre une nouvelle note »
+	r"(?:cr[ée]e[rz]?|fai(?:s|t|re|tes)|ajout(?:e|er|ez)|r[ée]dig(?:e|er|ez)|[ée]cri(?:s|re|vez)|"
+	r"prend(?:s|re)|prenez|met(?:s|tre|tez)|enregistr(?:e|er|ez)|gard(?:e|er|ez)|ouvr(?:e|ir|ez))"
+	r"(?:[- ](?:moi|nous))?\s+(?:une|la|cette|ma)\s+(?:(?:petite|nouvelle|courte|br[eè]ve)\s+)?note\b"
+	r"(?:\s+(?:pour\s+(?:moi|nous)|dans\s+mes\s+notes))?",
+	# fr — « prends note », « prends ça en note », « note-moi que », « note bien que »
+	r"(?:prend(?:s|re)|prenez|prenons)\s+(?:(?:[çc]a|cela|ceci)\s+)?en\s+note\b",
+	r"(?:prend(?:s|re)|prenez|prenons)\s+note\b",
+	r"note[rz]?(?:[- ](?:moi|nous))?(?:\s+bien)?"
+	r"(?=\s*(?::|que\b|qu['\u2019]|de\b|d['\u2019]|pour\b|sur\b|concernant\b|[àa]\s+propos\b))",
+	# fr — « nouvelle note : », « une note : », « note : »
+	r"(?:une\s+)?(?:nouvelle\s+)?note\s*(?=:)|(?:une\s+)?nouvelle\s+note\b",
+	# de — « erstelle mir eine Notiz », « leg eine neue Notiz an », « notiere: », « schreib dir auf »
+	r"(?:erstell(?:e|en)?|mach(?:e|en)?|schreib(?:e|en)?|leg(?:e|en)?|notier(?:e|en)?)"
+	r"\s+(?:mir\s+|uns\s+|dir\s+)?(?:eine|die|ne)\s+(?:(?:neue|kurze|kleine)\s+)?notiz\b(?:\s+an\b)?",
+	r"notier(?:e|en)?(?:\s+(?:dir|mir|uns))?(?=\s*(?::|,?\s*dass\b))",
+	r"schreib(?:e)?\s+(?:dir|mir|uns)\s+auf\b",
+	r"(?:neue\s+)?notiz\s*(?=:)|neue\s+notiz\b",
+	# it — « creami una nota », « prendi nota », « annota che », « nuova nota : »
+	r"(?:crea(?:mi|re)?|fa(?:i|mmi)|scriv(?:i|imi|ere)|prendi|aggiungi|apri)"
+	r"\s+(?:una|la)\s+(?:(?:nuova|breve|piccola)\s+)?nota\b",
+	r"prend(?:i|ere)\s+nota\b",
+	r"annota(?:re|mi)?(?=\s*(?::|che\b))",
+	r"(?:nuova\s+)?nota\s*(?=:)|nuova\s+nota\b",
+	# en — « create a note », « take a note », « take note that », « note that », « new note: »
+	r"(?:create|make|take|add|write|start|open)\s+(?:me\s+|us\s+)?(?:a|the|an)\s+(?:(?:new|quick|short|little)\s+)?note\b",
+	r"take\s+note\b",
+	r"jot\s+(?:this\s+|that\s+|it\s+)?down\b",
+	r"note\s+(?:that|down)\b",
+	r"(?:new\s+)?note\s*(?=:)|new\s+note\b",
+)
+_NOTE_COMMAND_RE = re.compile(_NOTE_PREFIX + r"(?:" + "|".join(_NOTE_COMMANDS) + r")", re.IGNORECASE)
+
+# A command that closes the request, the note coming first: « …, note-le », « … mets ça
+# dans mes notes », « …, jot it down ».
+_NOTE_TRAILING_RE = re.compile(
+	r"[\s,;:.—\u2013-]*(?:(?:peux-tu\s+|tu\s+peux\s+|pouvez-vous\s+)?"
+	r"(?:(?:note[rz]?|prends|prenez|garde[rz]?)[- ](?:le|la|les|[çc]a|cela|ceci)(?:\s+en\s+note)?"
+	r"|(?:mets|mettez|ajoute[rz]?|garde[rz]?)[- ](?:le|la|les|[çc]a|cela|ceci)\s+(?:dans|[àa])\s+mes\s+notes"
+	r"|notier(?:e)?\s+(?:das|es|dir\s+das)|annotal[oa]"
+	r"|note\s+(?:it|this|that)(?:\s+down)?|jot\s+(?:it|this|that)\s+down|add\s+(?:it|this|that)\s+to\s+my\s+notes))"
+	r"\s*[.!]*\s*$",
+	re.IGNORECASE,
+)
+
+# « … dans mes notes » anywhere: the note is whatever surrounds it.
+_INTO_MY_NOTES_RE = re.compile(
+	r"\b(?:dans|[àa])\s+mes\s+notes\b|\bin\s+meine\s+notizen\b|\bnelle\s+mie\s+note\b|\b(?:to|in)\s+my\s+notes\b",
+	re.IGNORECASE,
+)
+
+
+def _is_note_request(msg: str) -> bool:
+    """A request to write a note: never an expense, credit, delivery or fee note, never a reminder
+    at a moment (« note-moi de rappeler X vendredi » is a one-off reminder)."""
+    text = msg or ""
+    if _NOT_A_NOTE_RE.search(text) or _is_one_off_reminder(text):
+        return False
+    return bool(_NOTE_COMMAND_RE.search(text) or _NOTE_TRAILING_RE.search(text) or _INTO_MY_NOTES_RE.search(text))
+
+
+# « Que voulez-vous que je note ? »: the next message of the conversation is the note itself.
+import time as _time_note
+
+_PENDING_NOTE: dict = {}
+_PENDING_NOTE_TTL = 600  # seconds the question stays open
+_NOTE_CANCEL_RE = re.compile(
+    r"^\s*(?:non\b|nan\b|laisse[rz]?\s+tomber|annule[rz]?\b|rien\b|oublie[rz]?\b|pas\s+maintenant|no\b"
+    r"|nein\b|nichts\b|vergiss|niente\b|lascia\s+perdere|annulla\b|never\s*mind|cancel\b|nothing\b)",
+    re.IGNORECASE,
+)
+
+
+def _take_pending_note(conversation_id: Optional[str], message: str) -> bool:
+    """True when this message answers NORA's « Que voulez-vous que je note ? »: it is the note.
+    The question is consumed either way: a refusal, a question or a request of its own is not."""
+    if not conversation_id:
+        return False
+    asked_at = _PENDING_NOTE.pop(conversation_id, None)
+    if asked_at is None or _time_note.time() - asked_at > _PENDING_NOTE_TTL:
+        return False
+    msg = (message or "").strip()
+    if not msg or _NOTE_CANCEL_RE.match(msg) or msg.endswith("?"):
+        return False
+    return not (_is_note_request(msg) or _is_one_off_reminder(msg) or _RECUR_RE.search(msg))
+
+
+# Handed to the orchestrator when nora could not write the note in code (no desk callback,
+# nora declined or did not answer): it holds nora_note_create.
+_NOTE_HINT = (
+    "[Route: the person asked to write a NOTE in their Neoffice notes. Call nora_note_create "
+    "yourself, now (text=the note in their own words, user and conversation_id as given); do NOT "
+    "call kanban_create. Then say back its ack. If the call fails, say so: never answer that it is "
+    "noted when nothing was written.]"
+)
+# //// END Neoffice ////
+
+
 _CAPABILITY_RE = re.compile(
     r"^\s*(?:est[-\s]ce\s+que\s+)?"
     r"(?:tu\s+(?:peux|sais|pourrais)|peux[-\s]tu|sais[-\s]tu|pourrais[-\s]tu|"
@@ -1544,6 +1670,60 @@ def _route_reminder(message: str, chat_user: Optional[str], deliver_extra: Optio
 # //// END Neoffice ////
 
 
+# //// Neoffice — a note is WRITTEN IN CODE by nora (notes.route_note, #1040), over the desk
+# //// callback and token of _route_reminder. nora reads the note out of the request, writes it as
+# //// the person and answers; with nothing to note it asks what to note, and the next message of
+# //// the conversation comes back here as the note (follow_up). Declined or failed → routed=False
+# //// and the orchestrator gets _NOTE_HINT (zero regression).
+def _route_note(
+    message: str,
+    chat_user: Optional[str],
+    deliver_extra: Optional[dict],
+    conversation_id: Optional[str],
+    follow_up: bool = False,
+) -> dict:
+    extra = deliver_extra or {}
+    cb = (extra.get("callback_url") or "").strip()
+    token = (extra.get("callback_token") or "").strip()
+    user = (chat_user or "").strip()
+    _DELIVER = "nora.api.v2.hermes_callback.deliver"
+    _ROUTE = "nora.api.v2.notes.route_note"
+    declined = {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
+    if not (cb and token and user) or _DELIVER not in cb:
+        return declined
+    import json as _json
+    import urllib.request
+
+    cid = (extra.get("conversation_id") or conversation_id or "").strip()
+    req = urllib.request.Request(
+        cb.replace(_DELIVER, _ROUTE),
+        data=_json.dumps({"user": user, "message": message, "conversation_id": cid,
+                          "follow_up": bool(follow_up)}).encode(),
+        method="POST", headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = _json.loads(resp.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("nora_chat_router: note POST failed → agent fallback: %s", exc)
+        return declined
+    if isinstance(data, dict) and isinstance(data.get("message"), dict):
+        data = data["message"]  # a whitelisted Frappe method answers {"message": {...}}
+    if not isinstance(data, dict) or not data.get("ok") or not data.get("ack"):
+        logger.info("nora_chat_router: note declined (%s) → agent fallback", (data or {}).get("error"))
+        return declined
+    delivered = _post_ack_to_callback(data["ack"], deliver_extra)
+    if data.get("asked") and conversation_id:
+        if len(_PENDING_NOTE) > _LAST_ROUTE_MAX:
+            _PENDING_NOTE.clear()
+        _PENDING_NOTE[conversation_id] = _time_note.time()
+    logger.info("nora_chat_router: note %s written in code (asked=%s), ack_delivered=%s",
+                data.get("note"), bool(data.get("asked")), delivered)
+    return {"routed": True, "category": "DIRECT", "ack": data["ack"], "task_id": None,
+            "note": data.get("note"), "asked": bool(data.get("asked")), "ack_delivered": delivered}
+# //// END Neoffice ////
+
+
 # //// Neoffice — an EMPLOYEE's record is rh's, not a client's (27.09, #843). « <Prénom Nom> a
 # //// déménagé : sa nouvelle adresse est … Mets sa fiche à jour » matches the contact rules
 # //// word for word and reached ventes, which searched clients and suppliers seventeen times
@@ -1852,9 +2032,26 @@ def route_chat_message(
                 _consume_pending_offer(chat_phone)
     # //// END Neoffice ////
 
+    # //// Neoffice — a note for the person asking is written by nora in code (_route_note,
+    # //// #1040). Decided before small talk, the fast-answer engine and the classifier: the word
+    # //// « chantier » sent « crée une note … » to the projet pole, and neither a job page nor the
+    # //// pole the voice suggests may take it. A conversation already on the projet pole keeps
+    # //// it when no job page is open: that worker knows the job, and files the note on its diary.
+    _note_follow_up = _offer is None and _take_pending_note(conversation_id, message)
+    _note_request = _offer is None and (
+        _note_follow_up
+        or (
+            _is_note_request(message)
+            and not (prior and prior.get("pole") == "projet" and not _page_project(page_context))
+        )
+    )
+    # //// END Neoffice ////
+
     # //// Neoffice — pure small talk is answered from a template: no classifier, no
     # fast-answer thread, no light-path completion (see _canned_smalltalk_reply).
-    _canned_text = _canned_smalltalk_reply(message, language) if _offer is None else None
+    _canned_text = (  # //// Neoffice — never for a note (#1040)
+        _canned_smalltalk_reply(message, language) if _offer is None and not _note_request else None
+    )
     # //// END Neoffice ////
 
     # //// Neoffice — PARALLEL classify + fast-answer. They were serial (two
@@ -1868,7 +2065,7 @@ def route_chat_message(
     # //// Neoffice — a one-off reminder is an action nora sets in code (_route_reminder):
     # //// the read-only fast-answer engine has nothing to answer, so it is not asked.
     _one_off_reminder = _is_one_off_reminder(message)
-    if _asks_fast_answer(language, _canned_text, _one_off_reminder):
+    if not _note_request and _asks_fast_answer(language, _canned_text, _one_off_reminder):  # //// Neoffice — #1040
         import concurrent.futures as _cf
 
         _fa_pool = _cf.ThreadPoolExecutor(max_workers=1)
@@ -1883,6 +2080,8 @@ def route_chat_message(
         category = _offer["pole"]  # //// Neoffice — pole fixed by the accepted offer ////
     elif _canned_text:
         category = "DIRECT"  # //// Neoffice — canned small talk, classifier skipped ////
+    elif _note_request:
+        category = "DIRECT"  # //// Neoffice — a note, written in code (#1040), classifier skipped ////
     else:
         category = classify(
             message,
@@ -1913,6 +2112,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and not _canned_text
+        and not _note_request  # //// Neoffice — a note on a job page is a note (#1040)
         and _page_project(page_context)
         and not _DIRECT_RE.match((message or "").strip())
         and not _CAPABILITY_RE.match((message or "").strip())
@@ -1940,6 +2140,15 @@ def route_chat_message(
         del _conv_film[:-_CONV_HISTORY_TURNS]
         # //// END Neoffice ////
     if category == "DIRECT":
+        # //// Neoffice — a note is written in code first, see _route_note (#1040).
+        if _note_request:
+            _note = _route_note(message, chat_user, deliver_extra, conversation_id, follow_up=_note_follow_up)
+            if _note.get("routed"):
+                note_nora_reply(conversation_id, _note["ack"])
+                return _note
+            return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
+                    "agent_hint": _NOTE_HINT}
+        # //// END Neoffice ////
         # //// Neoffice — a one-off reminder is set in code first, see _route_reminder.
         # //// Declined or failed: straight to the orchestrator with the instruction,
         # //// which can ask for the moment or call nora_reminder_create itself.
