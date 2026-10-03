@@ -840,6 +840,99 @@ def _neoffice_account_guard_rejection(
 # //// END Neoffice ////
 
 
+# //// Neoffice — a change only PREVIEWED is not a change made (capability bench, night of 03.10). nora's
+# //// two-step tools (frappe_party_contact_update, …) answer a first call with each value before and
+# //// after and "confirmed": false — nothing written — then wait for the person's yes. A sales worker
+# //// handed that preview to kanban_complete as « son adresse est passée de … à … La fiche client est
+# //// à jour. », and the ERP still held the old address. When the last two-step result of this worker
+# //// is a preview with changes, the handoff must show them and ask; it may not say they are done.
+_NEOFFICE_SAYS_DONE = (
+    r"\best\s+(?:d[ée]sormais\s+|maintenant\s+)?(?:[àa]\s+jour|pass[ée]e?|modifi[ée]e?|chang[ée]e?|"
+    r"enregistr[ée]e?|mise?\s+[àa]\s+jour)\b"
+    r"|\b(?:a|ont)\s+(?:bien\s+)?[ée]t[ée]\s+(?:modifi|mis|chang|enregistr|remplac)"
+    r"|\bc['\u2019]est\s+fait\b"
+    r"|\bj['\u2019]ai\s+(?:bien\s+)?(?:modifi[ée]|mis\s+[àa]\s+jour|chang[ée]|enregistr[ée]|remplac[ée])"
+    r"|\b(?:is|are)\s+now\b|\bha(?:s|ve)\s+been\s+(?:updated|changed|saved|replaced)\b"
+    r"|\bwurde[n]?\s+(?:ge[äa]ndert|aktualisiert)\b|\b[èe]\s+stat[oaie]\s+(?:aggiornat|modificat)"
+)
+
+
+def _neoffice_results(content: Any) -> list:
+    """The JSON results a tool row holds: a plain result, nora's {"result": "<json>"} envelope, or each
+    entry of a tool_call batch (#710), possibly inside the untrusted-result envelope."""
+    text = str(content or "")
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return []
+    try:
+        payload = json.loads(text[start:end + 1])
+    except ValueError:
+        return []
+    found: list = []
+
+    def take(value: Any) -> None:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except ValueError:
+                return
+        if not isinstance(value, dict):
+            return
+        if "confirmed" not in value and isinstance(value.get("result"), (str, dict)):
+            take(value["result"])
+        else:
+            found.append(value)
+
+    if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+        for entry in payload["results"]:
+            if isinstance(entry, dict) and "response" in entry:
+                take(entry["response"])
+    else:
+        take(payload)
+    return found
+
+
+def _neoffice_pending_preview(session_id: Optional[str]) -> Optional[list]:
+    """The changes of this worker's LAST two-step result when it was only a preview (confirmed false, with
+    changes), else None. A later confirmed result clears it. Read-only; any failure means "no evidence"."""
+    if not session_id:
+        return None
+    try:
+        from hermes_state import SessionDB
+
+        with SessionDB(read_only=True) as db:
+            rows = db.get_messages(session_id, include_inactive=True)
+    except Exception:  # noqa: BLE001
+        return None
+    pending = None
+    for row in rows:
+        if row.get("role") != "tool":
+            continue
+        for result in _neoffice_results(row.get("content")):
+            if "confirmed" not in result:
+                continue
+            changes = result.get("changes")
+            pending = changes if result.get("confirmed") is False and isinstance(changes, list) and changes else None
+    return pending
+
+
+def _neoffice_preview_guard_rejection(session_id: Optional[str], handoff: str) -> Optional[str]:
+    """Rejection text when the handoff says done what was only previewed, else None."""
+    import re
+
+    if not _neoffice_pending_preview(session_id):
+        return None
+    if "?" in handoff and not re.search(_NEOFFICE_SAYS_DONE, handoff, re.IGNORECASE):
+        return None  # the preview shown, and the question asked: the right handoff
+    return (
+        "kanban_complete blocked: your last change was only a PREVIEW (confirmed=false): NOTHING was "
+        "written. Do not say it was done. Retry kanban_complete with each value before and after and the "
+        "question « Voulez-vous que je l'applique ? »: the person's yes comes back as a new turn, which "
+        "calls the tool again with confirmed=true. The task is still in-flight."
+    )
+# //// END Neoffice ////
+
+
 @_kanban_handler("kanban_complete")
 def _handle_complete(args: dict, **kw) -> str:
     """Mark the current task done with a structured handoff."""
@@ -887,6 +980,13 @@ def _handle_complete(args: dict, **kw) -> str:
         _neoffice_rejection = _neoffice_account_guard_rejection(
             kb, task, tid, args.get("board"), kw.get("session_id"))
         if _neoffice_rejection is not None:
+            return tool_error(_neoffice_rejection)
+        # //// END Neoffice ////
+        # //// Neoffice — a preview is not a change made, see _neoffice_preview_guard_rejection.
+        _neoffice_rejection = _neoffice_preview_guard_rejection(
+            kw.get("session_id"), f"{summary or ''}\n{result or ''}")
+        if _neoffice_rejection is not None:
+            logger.warning("kanban_complete refused for %s: a preview handed off as done", tid)
             return tool_error(_neoffice_rejection)
         # //// END Neoffice ////
         _goal_gate("kanban_complete", task, tid, (summary or result or "").strip())
