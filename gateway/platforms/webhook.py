@@ -1192,6 +1192,9 @@ class WebhookAdapter(BasePlatformAdapter):
                         nora_spoke=(
                             payload.get("nora_spoke") if isinstance(payload.get("nora_spoke"), bool) else None
                         ),
+                        # //// Neoffice — a request for help, read in code by nora's help_intent
+                        # //// (« comment faire… », « aide-moi… »): never left to DIRECT (#1174).
+                        help_request=("ask" if payload.get("help_request") == "ask" else None),
                     )
                     if _decision.get("routed"):
                         logger.info(

@@ -2229,6 +2229,7 @@ def route_chat_message(
     chat_phone: Optional[str] = None,  # //// Neoffice — phone, to match a pending briefing offer ////
     page_context: Optional[dict] = None,  # //// Neoffice — the desk page the user is on (job panel) ////
     nora_spoke: Optional[bool] = None,  # //// Neoffice — NORA already replied in this thread (nora's chat log), #1065 ////
+    help_request: Optional[str] = None,  # //// Neoffice — nora read a request for help in code (« ask »), #1174 ////
 ) -> dict:
     """Classify *message* and, when it is a business request, create the kanban task
     in code + subscribe the notifier. Returns a decision dict::
@@ -2382,6 +2383,22 @@ def route_chat_message(
     ):
         logger.info("nora_chat_router: DIRECT → projet (job page %s)", _page_project(page_context))
         category = "projet"
+    # //// END Neoffice ////
+    # //// Neoffice — a request for help is never DIRECT (#1174). nora reads it in code
+    # //// (help_intent.read_help_request: « comment faire une note de crédit ? », « aide-moi à saisir… »)
+    # //// and says so in the message. The capability rule of the classifier sent such a question to DIRECT,
+    # //// as one « answered in a sentence »: the orchestrator then searched its doctrine wiki, which does
+    # //// not hold the user manual, 29 model calls in 204 s, and answered that it could not finish (all
+    # //// three on osiris over 60 days). The support pole owns help with using Neoffice and answered the
+    # //// same question in 19 s. A pole the classifier chose is kept (« comment faire un devis » → ventes),
+    # //// and so are the answers settled in code (small talk, a note, a space).
+    if (
+        category == "DIRECT"
+        and help_request == "ask"
+        and not (_canned_text or _note_request or _space_turn)
+    ):
+        logger.info("nora_chat_router: DIRECT → support (a request for help, read by nora)")
+        category = "support"
     # //// END Neoffice ////
     category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
