@@ -1,3 +1,4 @@
+# //// Neoffice — added file (no upstream equivalent): a voice request keeps its priority through the ERP worker.
 """Voice metadata survives the real SQLite notification path without promoting text.
 
 Place this test under tests/agent in the candidate export and invoke the canonical

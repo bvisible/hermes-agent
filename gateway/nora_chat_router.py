@@ -1742,6 +1742,8 @@ def build_ack(pole: str, language: Optional[str] = None) -> str:
     # //// END Neoffice ////
 
 
+# //// Neoffice — page_context added: the voice source of the request rides in the notify subscription's
+# //// delivery_metadata, so the ERP worker that answers it keeps the voice priority (-10) instead of 0.
 def _add_notify_sub(notify_db, conn, *, conversation_id: Optional[str] = None,
                     page_context: Optional[dict] = None, **kw) -> None:
     """Subscribe the notifier so the worker's terminal result comes back to THIS chat.
@@ -1751,11 +1753,13 @@ def _add_notify_sub(notify_db, conn, *, conversation_id: Optional[str] = None,
     needed: ``webhook.send`` reads ``metadata["conversation_id"]`` to reach the right
     desk thread. Before v2026.9.7 we carried a bespoke ``conversation_id`` column here.
     """
+    # //// Neoffice — the metadata is built for every subscription (not only a desk one): it also carries
+    # //// the allowlisted voice source below.
     metadata = dict(kw.pop("delivery_metadata", None) or {})
     if conversation_id:
         metadata.setdefault("conversation_id", conversation_id)
-    # The worker cannot recover voice origin from its prose prompt. Persist only
-    # the existing voice-source allowlist, never an arbitrary client priority.
+    # //// Neoffice — the worker cannot recover the voice origin from its prose prompt. Persist only the
+    # //// existing voice-source allowlist, never an arbitrary client priority.
     pc = page_context if isinstance(page_context, dict) else {}
     source = str(pc.get("source") or "").strip()
     metadata["neoffice_request_source"] = source if source in VOICE_SOURCES else ""
@@ -2816,7 +2820,7 @@ def route_chat_message(
                 user_id=user_id or None,
                 notifier_profile=notifier_profile,
                 conversation_id=_unified_cid,
-                page_context=page_context,
+                page_context=page_context,  # //// Neoffice — carries the voice source (see _add_notify_sub)
             )
             # //// Neoffice — wake the dispatcher NOW: without the poke the new
             # task waited for the next periodic tick (0..interval s of dead
