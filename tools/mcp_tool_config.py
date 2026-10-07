@@ -303,6 +303,10 @@ def _interpolate_env_vars(value):
             # //// booked under a customer's. Resolving here rather than widening
             # //// _SAFE_ENV_KEYS keeps it OPT-IN: only a server whose own config asks for
             # //// the var receives it, and a third-party server still gets nothing.
+            # //// 07.10 (#1282): not enough for the TASK. _build_safe_env then scrubs every
+            # //// KANBAN_ENV_KEYS name from a worker's child (upstream b578261584, 07.09), so
+            # //// HERMES_KANBAN_TASK interpolated here never reached the server. The pole
+            # //// configs pass a copy as NEOFFICE_KANBAN_TASK, which the scrub leaves.
             if _val == m.group(0) and _name.startswith("HERMES_"):
                 _val = os.environ.get(_name) or m.group(0)
             return _val
