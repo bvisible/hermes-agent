@@ -32,7 +32,9 @@ logger = logging.getLogger(__name__)
 
 _ROLE_RE = re.compile(
     r"\b(le|la|notre|un|une|du|des|aux?)\s+(sp[ée]cialistes?|services?|collègues?|experts?)\b"
-    r"[\s`'\"*_:.\-]*(?:de\s+(?:la\s+)?)?[\s`'\"*_:.\-]*"
+    # //// Neoffice — « des ventes », « du support », « de l'analyse » too (07.10): only « de (la) »
+    # //// was read, so « le spécialiste des ventes » escaped this rule.
+    r"[\s`'\"*_:.\-]*(?:(?:de|des|du)\s+(?:la\s+|l['’]\s*)?|d['’]\s*)?[\s`'\"*_:.\-]*"
     # //// Neoffice — `analyse` and `projet` added (20.09). Without them the phrase
     # //// escapes THIS rule and meets _SPECIALIST_RE below, which replaces the bare
     # //// word: « Le spécialiste projet va… » came out « Le équipe projet va… ».
@@ -42,7 +44,23 @@ _ROLE_RE = re.compile(
     r"|analyses?|projets?)\b[`'\"*]*",
     re.IGNORECASE,
 )
-_SPECIALIST_RE = re.compile(r"\bsp[ée]cialistes?\b", re.IGNORECASE)
+# //// Neoffice — « spécialiste » is replaced only where it stands for the machinery (07.10, #1294).
+# //// This rule replaced every occurrence: a candidate's « brevet fédéral de spécialiste en finance
+# //// et comptabilité » reached the HR desk as « brevet fédéral de équipe en finance ». A specialist
+# //// OF something (en, de, du, des, d', RH, IT, avec brevet) is a profession or a diploma and stays
+# //// as written. The machinery's word comes with its determiner, which is replaced with it:
+# //// « le spécialiste va traiter… » came out « le équipe va traiter… ».
+_SPECIALIST_RE = re.compile(
+    r"\b(?:(le|la|un|une|du|au|notre|votre|ce|cette|les|des|aux|nos|vos|ces)\s+)?sp[ée]cialistes?\b"
+    r"(?!\s+(?:en|de|des|du|d['’]|rh|it|avec)\b)",
+    re.IGNORECASE,
+)
+_SPECIALIST_TEAM = {
+    "du": "de l'équipe", "des": "de l'équipe", "au": "à l'équipe", "aux": "à l'équipe",
+    "notre": "notre équipe", "nos": "notre équipe", "votre": "votre équipe", "vos": "votre équipe",
+    "ce": "cette équipe", "cette": "cette équipe", "ces": "cette équipe",
+}
+# //// END Neoffice ////
 _KANBAN_TASK_RE = re.compile(r"\bt[âa]ches?\s+kanban\b", re.IGNORECASE)
 _INTERNALS_RE = re.compile(r"`?\b(kanban|mem0|hermes|olares|mcp|worker|board)\w*\b`?", re.IGNORECASE)
 _SPACES_RE = re.compile(r"[ \t]{2,}")
@@ -294,7 +312,17 @@ def strip_internal_mechanics(text: str, lang=None) -> str:
         return "L'équipe" if opens else "l'équipe"
 
     text = _ROLE_RE.sub(_team, text)
-    text = _SPECIALIST_RE.sub("équipe", text)
+
+    # //// Neoffice — see _SPECIALIST_RE above (07.10): the determiner goes with the word, and the
+    # //// phrase takes the case of where it lands, like _team.
+    def _specialist(match, source=text):
+        phrase = _SPECIALIST_TEAM.get((match.group(1) or "").lower(), "l'équipe")
+        head = source[: match.start()]
+        opens = not head.strip() or head.rstrip(" \t").endswith("\n") or head.rstrip()[-1] in ".!?•-*"
+        return phrase[0].upper() + phrase[1:] if opens else phrase
+
+    text = _SPECIALIST_RE.sub(_specialist, text)
+    # //// END Neoffice ////
     # //// Neoffice — « demande », not « ta tâche » (20.09). The machinery says
     # //// « Votre tâche kanban est terminée » and the replacement turned it into
     # //// « Votre ta tâche est terminée » — a determiner already stands in front of

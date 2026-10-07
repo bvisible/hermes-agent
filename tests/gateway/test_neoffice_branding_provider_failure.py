@@ -375,3 +375,30 @@ def test_a_real_answer_is_left_alone(answer):
 
     assert strip_internal_mechanics(answer) == answer
 # //// END Neoffice ////
+
+
+# //// Neoffice — added 07.10 (#1294). « spécialiste » was replaced everywhere: a candidate's
+# //// « brevet fédéral de spécialiste en finance et comptabilité » reached the HR desk as
+# //// « brevet fédéral de équipe en finance ». A profession or a diploma stays as written; the
+# //// machinery's word is replaced together with its determiner.
+@pytest.mark.parametrize("text", (
+    "Elle détient le brevet fédéral de spécialiste en finance et comptabilité (2021).",
+    "Spécialiste en ressources humaines avec brevet fédéral",
+    "Spécialiste RH avec brevet fédéral, 8 ans d'expérience.",
+    "Il est spécialiste de la logistique et des transports.",
+    "Nous cherchons un spécialiste IT pour le support.",
+))
+def test_a_profession_or_a_diploma_named_specialist_is_kept(text):
+    assert strip_internal_mechanics(text) == text
+
+
+@pytest.mark.parametrize("text, expected", (
+    ("Notre spécialiste va vous répondre.", "Notre équipe va vous répondre."),
+    ("Je transmets votre demande au spécialiste.", "Je transmets votre demande à l'équipe."),
+    ("Le spécialiste va traiter votre demande.", "L'équipe va traiter votre demande."),
+    ("Le spécialiste des ventes va vous répondre.", "L'équipe va vous répondre."),
+    ("Je transmets : le spécialiste du support vous rappellera.", "Je transmets : l'équipe vous rappellera."),
+))
+def test_the_machinery_specialist_becomes_the_team_with_its_determiner(text, expected):
+    assert strip_internal_mechanics(text) == expected
+# //// END Neoffice ////
