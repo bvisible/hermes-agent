@@ -225,3 +225,66 @@ def test_a_message_with_no_cadence_is_still_recovered_to_a_pole(monkeypatch):
     decision = _route_recurrent_with(http, monkeypatch, "ok crée un rappel pour les impayés")
 
     assert not decision.get("agent_hint")
+
+
+# //// Neoffice — a bare « rappel(s) » is a PAYMENT reminder first (#1268, 07.10). Asked
+# //// aloud on the dev instance right after a sales question: « Ok. Est-ce qu'il y a des
+# //// rappels à faire ? » reached the sales pole. No rule knew « rappel » without « de
+# //// paiement / de facture », and the go-ahead guard took the leading « Ok. » for the
+# //// confirmation of a proposal and kept the previous pole.
+@pytest.mark.parametrize("message", (
+    "Est-ce qu'il y a des rappels à faire ?",
+    "Combien de rappels à envoyer ?",
+    "Quels rappels dois-je faire aujourd'hui ?",
+    "Y a-t-il des rappels en attente ?",
+    "Montre-moi les rappels",
+    "Gibt es Mahnungen zu versenden?",
+    "Ci sono solleciti da inviare?",
+    "Are there any payment reminders to send?",
+))
+def test_a_bare_reminder_is_a_payment_reminder(message):
+    assert _fast_path(message, prior=None) == "compta"
+
+
+def test_the_observed_turn_after_a_sales_answer_reaches_compta():
+    assert _fast_path("Ok. Est-ce qu'il y a des rappels à faire ?", prior={"pole": "ventes"}) == "compta"
+
+
+@pytest.mark.parametrize("message", (
+    "Est-ce que j'ai des rappels dans mon agenda ?",
+    "Mme Favre a laissé une demande de rappel",
+    "Un rappel pour la réunion de l'équipe",
+    "Note le rappel téléphonique de Monsieur Duc",
+))
+def test_a_calendar_or_phone_reminder_is_not_a_payment_reminder(message):
+    assert _fast_path(message, prior=None) != "compta"
+
+
+def test_a_reminder_about_a_quotation_is_a_sales_follow_up():
+    assert _fast_path("Envoie un rappel pour le devis de Martin", prior=None) == "ventes"
+
+
+@pytest.mark.parametrize("message", (
+    "Ok. Quelles sont les factures en retard ?",
+    "D'accord, est-ce qu'on a des commandes à livrer ?",
+    "Ok, combien de clients actifs ?",
+))
+def test_a_question_after_ok_is_not_a_go_ahead(message):
+    # New intent: no explicit rule names a pole here, so the classifier decides,
+    # with the conversation in hand, instead of the previous pole by default.
+    assert _fast_path(message, prior={"pole": "ventes"}) is None
+
+
+@pytest.mark.parametrize("message", (
+    "oui, envoie-le",
+    "Ok, vas-y",
+    "c'est bon, quand tu veux",
+    "Ok, est-ce qu'on peut l'envoyer ?",
+))
+def test_a_real_go_ahead_still_stays_on_the_previous_pole(message):
+    assert _fast_path(message, prior={"pole": "ventes"}) == "ventes"
+
+
+def test_a_personal_reminder_after_ok_is_still_a_reminder():
+    assert _fast_path("Ok, ajoute un rappel demain à 10h", prior={"pole": "compta"}) == "DIRECT"
+# //// END Neoffice ////

@@ -550,6 +550,17 @@ _CONTACT_FACT_RE = re.compile(
 )
 # //// END Neoffice ////
 
+# //// Neoffice — the bare « rappel(s) » rule of the table below (#1268): the noun, never
+# //// the verb, unless the message is about a calendar or a phone callback.
+_BARE_REMINDER_RE = re.compile(
+    r"^(?![\s\S]*\b(?:agenda|calendrier|rendez[- ]vous|rdv|r[ée]unions?|[ée]v[ée]nements?|"
+    r"anniversaires?|t[ée]l[ée]phon\w*|demandes?\s+de\s+rappel)\b)"
+    r"[\s\S]*(?:\brappels?\b|\bmahnung(?:en)?\b|\bzahlungserinnerung(?:en)?\b|\bsollecit[io]\b|"
+    r"\bdunnings?\b|\bpayment\s+reminders?\b)",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
 
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
@@ -609,9 +620,11 @@ _FAST_PATH_RULES = (
     # //// carries. The dunning rule below sent « relance le devis de Martin » to compta,
     # //// whose reminders are for INVOICES (capability bench, 24.09). The job rule above
     # //// still wins for « relance le devis du chantier ».
+    # //// « un rappel pour le devis » too (#1268, 07.10): the bare-reminder rule below
+    # //// sends a lone « rappel » to compta, and a quotation is not an invoice.
     (
         re.compile(
-            r"(?=.*\brelanc\w*\b)(?=.*\b(?:devis|offres?|quotations?|DEVIS-\d+)\b)",
+            r"(?=.*\b(?:relanc\w*|rappels?)\b)(?=.*\b(?:devis|offres?|quotations?|DEVIS-\d+)\b)",
             re.IGNORECASE,
         ),
         "ventes",
@@ -644,6 +657,19 @@ _FAST_PATH_RULES = (
     # live). Placed ABOVE the generic compta rule (which matches "impayé" but not "relance"); a
     # plain "combien d'impayés ?" still hits compta below. grep "//// Neoffice".
     (re.compile(r"rappel[s]?\s+de\s+(paiement|facture)|lettre[s]?\s+de\s+relance|\brelanc\w*|\bDUNN-\w+", re.IGNORECASE), "compta"),
+    # //// END Neoffice ////
+    # //// Neoffice — a BARE « rappel(s) » is a payment reminder too (#1268, 07.10). Asked
+    # //// aloud on the dev instance right after a sales question, « Ok. Est-ce qu'il y a des
+    # //// rappels à faire ? » reached the sales pole: the rule above wants « rappel DE
+    # //// paiement / DE facture », so a lone « rappels » matched nothing. In an ERP a
+    # //// « rappel » is first the reminder of an unpaid invoice (Jérémy: « quand on parle de
+    # //// rappel, on parle de rappel de facture, avant tout »), and so are « Mahnung » and
+    # //// « sollecito ». The noun only: « rappelle-moi … » / « rappeler » (remind me, call
+    # //// back) are verbs and never match. Left to the classifier: a calendar reminder
+    # //// (agenda, réunion, rendez-vous, événement) and a phone callback (demande de
+    # //// rappel, rappel téléphonique). A one-off « ajoute un rappel demain à 10 h » is
+    # //// settled before this table (_is_one_off_reminder) and goes to NORA.
+    (_BARE_REMINDER_RE, "compta"),
     # //// END Neoffice ////
     # //// Neoffice — SENDING/WRITING an email routes DETERMINISTICALLY to support, the ONLY
     # pole with the email tools (send_email/confirm_send_email/modify_email_draft live in
@@ -1296,6 +1322,23 @@ _CONFIRM_SEND_RE = re.compile(
     re.IGNORECASE,
 )
 
+# //// Neoffice — a QUESTION asking for information is new intent, never a go-ahead (#1268).
+# //// « Ok. Est-ce qu'il y a des rappels à faire ? » matched _CONFIRM_SEND_RE on its « Ok »
+# //// and stayed on the previous pole (sales, from the page), where a worker took 35 s. A
+# //// confirmation answers a proposal (« oui, envoie », « vas-y », « est-ce qu'on peut
+# //// l'envoyer ? »); « is there », « how many », « which » ask for something new, and the
+# //// classifier reads them with the conversation in hand. A wh-word counts only with a
+# //// question mark: « c'est bon, quand tu veux » is a go-ahead.
+_INFO_QUESTION_RE = re.compile(
+    r"\b(?:est[- ]ce\s+qu['’]?\s*(?:il|on)\s+(?:y\s+a|a)\b|y\s+a[- ]t[- ]il\b|is\s+there\b|are\s+there\b|"
+    r"gibt\s+es\b|ci\s+sono\b)"
+    r"|(?=[^?]*\?)\b(?:combien|quel(?:le)?s?|lesquel(?:le)?s|o[uù]\s+en\s+(?:est|sont)|pourquoi|quand|"
+    r"how\s+(?:many|much)|which|what|why|when|wie\s*viele?|welche[mnrs]?|warum|wann|quant[ie]|quale|"
+    r"quali|perch[ée]|quando)\b",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
 
 def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     """Unambiguous keyword → pole/'DIRECT' without an LLM call; else None (→ LLM classify).
@@ -1321,6 +1364,11 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         and len(msg) <= 80
         and _CONFIRM_SEND_RE.search(msg)
         and not _RECUR_RE.search(msg)
+        # //// Neoffice — a question for information, or a personal reminder to set, is
+        # //// not the confirmation of a proposal (#1268): see _INFO_QUESTION_RE.
+        and not _INFO_QUESTION_RE.search(msg)
+        and not _is_one_off_reminder(msg)
+        # //// END Neoffice ////
     ):
         _kw_pole = next((p for rx, p in _FAST_PATH_RULES if rx.search(msg)), None)
         if _kw_pole in (None, prior["pole"]):
