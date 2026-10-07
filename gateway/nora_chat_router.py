@@ -550,6 +550,36 @@ _CONTACT_FACT_RE = re.compile(
 )
 # //// END Neoffice ////
 
+# //// Neoffice — VALIDATING a document goes to a pole that can validate it (07.10). In a
+# //// colleague's demonstration the sales pole drafted an invoice and offered « Voulez-vous que
+# //// je la valide et que je lui envoie un email ? »; the yes named the mail, so the e-mail rule
+# //// below sent it to support, which holds no tool to validate a document, and support answered
+# //// that it could not. The document poles (ventes, compta, projet) hold frappe_document_submit
+# //// and ventes holds send_email too. Purchase-side and payment documents go to compta.
+_VALIDATE_VERB_RE = re.compile(
+    r"\b(?:valide[rsz]?|validez|validons|soumet[st]?|soumettre|soumettez|comptabilise[rz]?)\b",
+    re.IGNORECASE,
+)
+_VALIDATE_PURCHASE_RE = re.compile(
+    r"(?=[\s\S]*\b(?:valide[rsz]?|validez|validons|soumet[st]?|soumettre|soumettez|comptabilise[rz]?)\b)"
+    r"(?=[\s\S]*\b(?:fournisseurs?|achats?|paiements?|encaissements?|r[èe]glements?|ACC-PAY-[\w-]+|"
+    r"ACC-PINV-[\w-]+)\b)",
+    re.IGNORECASE,
+)
+_VALIDATE_DOCUMENT_RE = re.compile(
+    r"(?=[\s\S]*\b(?:valide[rsz]?|validez|validons|soumet[st]?|soumettre|soumettez|comptabilise[rz]?)\b)"
+    r"(?=[\s\S]*\b(?:factur\w*|devis|offres?|commandes?|bons?\s+de\s+(?:livraison|commande)|avoirs?|"
+    r"FA-\d[\w-]*|DEVIS-\d[\w-]*|BC-\d[\w-]*|BL-\d[\w-]*)\b)",
+    re.IGNORECASE,
+)
+_DOCUMENT_POLES = frozenset({"ventes", "compta", "projet"})
+
+
+def _validation_stays(msg: str, prior_pole: Optional[str], rule_pole: Optional[str]) -> bool:
+    """A validation the e-mail rule would send to support stays with the document pole that offered it."""
+    return rule_pole == "support" and prior_pole in _DOCUMENT_POLES and bool(_VALIDATE_VERB_RE.search(msg or ""))
+# //// END Neoffice ////
+
 # //// Neoffice — the bare « rappel(s) » rule of the table below (#1268): the noun, never
 # //// the verb, unless the message is about a calendar or a phone callback.
 _BARE_REMINDER_RE = re.compile(
@@ -670,6 +700,12 @@ _FAST_PATH_RULES = (
     # //// rappel, rappel téléphonique). A one-off « ajoute un rappel demain à 10 h » is
     # //// settled before this table (_is_one_off_reminder) and goes to NORA.
     (_BARE_REMINDER_RE, "compta"),
+    # //// END Neoffice ////
+    # //// Neoffice — validating a document, see _VALIDATE_DOCUMENT_RE (07.10). Above the e-mail
+    # //// rule, so « valide la facture et envoie-la par mail » reaches a pole that can validate it;
+    # //// below the reminder rules, so « valide le rappel » stays compta's (frappe_dunning_send).
+    (_VALIDATE_PURCHASE_RE, "compta"),
+    (_VALIDATE_DOCUMENT_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — SENDING/WRITING an email routes DETERMINISTICALLY to support, the ONLY
     # pole with the email tools (send_email/confirm_send_email/modify_email_draft live in
@@ -1371,7 +1407,8 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         # //// END Neoffice ////
     ):
         _kw_pole = next((p for rx, p in _FAST_PATH_RULES if rx.search(msg)), None)
-        if _kw_pole in (None, prior["pole"]):
+        # //// Neoffice — « tu peux la valider puis envoyer le mail » (07.10): see _validation_stays.
+        if _kw_pole in (None, prior["pole"]) or _validation_stays(msg, prior["pole"], _kw_pole):
             return prior["pole"]
     # //// END Neoffice ////
     # //// Neoffice — a capability question is META, whatever the conversation context.
@@ -1408,6 +1445,14 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     if prior and prior.get("pole"):
         if not _RECUR_RE.search(msg):
             _explicit = _keyword_pole(msg)
+            # //// Neoffice — a validation with its mail, asked at length (07.10): see _validation_stays.
+            if _validation_stays(msg, prior.get("pole"), _explicit):
+                logger.info(
+                    "nora_chat_router: validating a document stays on %s (the e-mail rule said support)",
+                    prior.get("pole"),
+                )
+                return prior["pole"]
+            # //// END Neoffice ////
             if _explicit:
                 logger.info(
                     "nora_chat_router: follow-up matched an explicit rule → %s "
