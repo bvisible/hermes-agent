@@ -366,6 +366,11 @@ _CLASSIFIER_SYSTEM = (
     "fiches de paie), certificats de salaire, fin d'année, employés, contrats, "
     "absences, fins de période d'essai, permis de travail.\n"
     # //// END Neoffice ////
+    # //// Neoffice — recruitment (07.10, maintenance#1294): the rh pole lists and reads the
+    # //// applications hrms receives on the job page. « offre » alone is still a quotation.
+    "  Et le RECRUTEMENT : offres d'emploi publiées sur le site, candidatures reçues, "
+    "candidats, leur dossier et les questions d'entretien (« qui a postulé ? »).\n"
+    # //// END Neoffice ////
     # //// Neoffice — Swiss HR/payroll doctrine questions need the rh worker's
     # curated wiki (RAG-rh-suisse, wired 2026-08-21): rates and obligations are
     # knowledge questions, not chit-chat, and must not fall to 'direct'.
@@ -395,7 +400,9 @@ _CLASSIFIER_SYSTEM = (
     "que le nouveau message est une PRÉCISION/SUITE (un nom seul, « ceux de … », « et pour … », "
     "un filtre, un pronom comme « les siens »), garde le MÊME pôle X. Un nom de personne dans un "
     "contexte ventes/devis ou compta/factures est un CLIENT, PAS un sujet RH (rh = congés, paie, "
-    "employés internes uniquement)."
+    # //// Neoffice — and the candidates of a recruitment (07.10).
+    "employés internes et candidats à un poste uniquement)."
+    # //// END Neoffice ////
 )
 
 # A classifier reply token → canonical pole (or "DIRECT"). We accept the bare key.
@@ -580,6 +587,29 @@ def _validation_stays(msg: str, prior_pole: Optional[str], rule_pole: Optional[s
     return rule_pole == "support" and prior_pole in _DOCUMENT_POLES and bool(_VALIDATE_VERB_RE.search(msg or ""))
 # //// END Neoffice ////
 
+# //// Neoffice — « oui, relance-la » after the rh pole offered to read an application again stays
+# //// with rh (07.10, maintenance#1294). The dunning rule's \brelanc would send that yes to compta,
+# //// which holds no application. Only when nothing names a collection: « relance les clients »,
+# //// « relance la facture de Martin » still reach compta.
+_RELANCE_RE = re.compile(r"\brelanc\w*", re.IGNORECASE)
+_COLLECTION_OBJECT_RE = re.compile(
+    r"\b(?:factur\w*|paiements?|impay\w*|d[ée]biteurs?|clients?|montants?|DUNN-\w+|FA-\d[\w-]*)\b"
+    r"|\brappels?\s+de\s+(?:paiement|facture)\b",
+    re.IGNORECASE,
+)
+
+
+def _rh_relance_stays(msg: str, prior_pole: Optional[str], rule_pole: Optional[str]) -> bool:
+    """A « relance » answering the rh pole's own offer stays with rh, unless it names a collection."""
+    msg = msg or ""
+    return (
+        prior_pole == "rh"
+        and rule_pole == "compta"
+        and bool(_RELANCE_RE.search(msg))
+        and not _COLLECTION_OBJECT_RE.search(msg)
+    )
+# //// END Neoffice ////
+
 # //// Neoffice — the bare « rappel(s) » rule of the table below (#1268): the noun, never
 # //// the verb, unless the message is about a calendar or a phone callback.
 _BARE_REMINDER_RE = re.compile(
@@ -591,9 +621,61 @@ _BARE_REMINDER_RE = re.compile(
 )
 # //// END Neoffice ////
 
+# //// Neoffice — recruitment is rh's (07.10, maintenance#1294). hrms gains a job page whose
+# //// applications the model reads (summary, scores, what is missing, interview questions), and
+# //// the rh pole the tools to list and read them. Without a rule, « Relance la lecture de cette
+# //// candidature » reached compta (the dunning rule's \brelanc), « crée une offre d'emploi pour un
+# //// chef de chantier » and « fixe un rendez-vous avec la candidate » reached projet (the job
+# //// rules that run before the table), and « l'offre de chef de projet » reached projet too (the
+# //// quotation-of-a-job rule). So it is tested before all of them, below the chart rule only.
+# //// « offre » alone is a QUOTATION in Swiss French: it counts here only as a job word (offre
+# //// d'emploi, de stage), next to « critères », or as an advert published on the website, never a
+# //// shop's « offre spéciale / du mois », and never « une offre pour la refonte du site ».
+# //// Left out: a tender (« dossier de candidature » for a public contract is a sale), and a
+# //// message that asks to SEND a mail, which keeps reaching the e-mail rule: support holds the
+# //// mail tools, rh holds none.
+_PROMO_OFFER = (
+    r"(?![^.!?]{0,25}?\b(?:sp[ée]ciale?s?|promo\w*|du\s+(?:jour|mois|moment)|"
+    r"de\s+(?:no[eë]l|saison|bienvenue|lancement)|exclusive?s?|limit[ée]e?s?)\b)"
+)
+_RECRUITMENT_RE = re.compile(
+    r"^(?![\s\S]*\b(?:appels?\s+d['’]\s*offres?|soumissions?|march[ée]s?\s+publics?|adjudications?|"
+    r"ausschreibung(?:en)?|bandi|bando|appalt\w*|tenders?)\b)"
+    r"(?!(?=[\s\S]*\b(?:e-?mails?|mails?|courriels?)\b)"
+    r"(?=[\s\S]*\b(?:envoi\w*|envoy\w*|[ée]cri[rstvez]\w*|r[ée]dig\w*|transmet\w*|send\w*|writ\w*|"
+    r"draft\w*|schreib\w*|schick\w*|scriv\w*|invi[ao]\w*)\b))"
+    r"[\s\S]*?(?:"
+    # French
+    r"\bcandidat(?:e|es|s)?\b|\bcandidatures?\b|\brecrut\w*|\bpostul\w*|\bembauch\w*"
+    r"|\boffres?\s+(?:d['’]\s*emplois?|de\s+(?:stage|poste))\b|\bannonces?\s+d['’]\s*emplois?\b"
+    r"|\bpostes?\s+(?:[àa]\s+pourvoir|vacants?|ouverts?)\b|\blettres?\s+de\s+motivation\b"
+    r"|\b(?:le|son|sa|ses|leur|leurs|ce|du|des|les|mon|ton|un|une)\s+(?:cvs?|curriculum)\b"
+    r"|\bentretiens?\s+d['’]\s*embauche\b|\bquestions?\b[^.!?]{0,60}?\b(?:en\s+|d['’]\s*)entretiens?\b"
+    r"|\bcrit[èe]res?\b[^.!?]{0,60}?\boffres?\b"
+    r"|\b(?:publi\w*|d[ée]publi\w*|(?:mets|mettez|mettre)\s+en\s+ligne)\b[^.!?]{0,60}?\boffres?\b" + _PROMO_OFFER
+    + r"|\boffres?\b" + _PROMO_OFFER + r"[^.!?]{0,60}?\b(?:publi[ée]e?s?|en\s+ligne)\b"
+    r"|\b(?:retir\w*|enl[èe]v\w*)\b[^.!?]{0,60}?\boffres?\b" + _PROMO_OFFER
+    + r"[^.!?]{0,60}?\b(?:du|de\s+(?:notre|mon|ce)|sur\s+(?:le|notre))\s+site\b"
+    # German
+    r"|\bbewerb\w*|\bstellen(?:angebot|ausschreibung|anzeige|inserat)\w*|\boffene[nr]?\s+stellen?\b"
+    r"|\bvorstellungsgespr[äa]ch\w*|\blebenslauf\w*|\brekrut\w*|\bkandidat(?:in|innen|en)?\b"
+    # Italian
+    r"|\bcandidat[aoi]\b|\bofferte?\s+di\s+lavoro\b|\bannunci?o?\s+di\s+lavoro\b"
+    r"|\bposizion[ei]\s+apert[ae]\b|\bcolloqui?o?\s+di\s+lavoro\b|\breclut\w*"
+    # English
+    r"|\bjob\s+(?:applications?|openings?|postings?|offers?|ads?|adverts?|interviews?)\b|\bapplicants?\b"
+    r"|\bvacanc(?:y|ies)\b|\brecruit\w*|\bhiring\b|\binterview\s+questions?\b|\bcover\s+letters?\b"
+    r")",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
 
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
+    # //// Neoffice — recruitment, see _RECRUITMENT_RE (07.10). Here so the go-ahead guard sees it too.
+    (_RECRUITMENT_RE, "rh"),
+    # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
     # //// reached support, which has no such tool: tool_search five times (bench, 24.09).
@@ -920,6 +1002,12 @@ _DIRECT_RE = re.compile(
 # //// and the user would get the guard's English text instead of an answer.
 # //// Change them together with DOMAIN_WRITES, never one without the other.
 def _keyword_pole(msg: str) -> Optional[str]:
+    # //// Neoffice — recruitment before the three job rules (07.10, see _RECRUITMENT_RE): to them
+    # //// « fixe un rendez-vous avec la candidate » is a visit and « crée une offre d'emploi pour un
+    # //// chef de chantier » a job order. The table still decides, so a chart goes to analyse.
+    if _RECRUITMENT_RE.search(msg):
+        return next(pole for rx, pole in _FAST_PATH_RULES if rx.search(msg))
+    # //// END Neoffice ////
     if _APPOINTMENT_RE.search(msg):
         logger.info("nora_chat_router: booking a visit → projet (keyword rules skipped)")
         return "projet"
@@ -1408,7 +1496,12 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     ):
         _kw_pole = next((p for rx, p in _FAST_PATH_RULES if rx.search(msg)), None)
         # //// Neoffice — « tu peux la valider puis envoyer le mail » (07.10): see _validation_stays.
-        if _kw_pole in (None, prior["pole"]) or _validation_stays(msg, prior["pole"], _kw_pole):
+        # //// « oui, relance-la » after an rh offer (07.10): see _rh_relance_stays.
+        if (
+            _kw_pole in (None, prior["pole"])
+            or _validation_stays(msg, prior["pole"], _kw_pole)
+            or _rh_relance_stays(msg, prior["pole"], _kw_pole)
+        ):
             return prior["pole"]
     # //// END Neoffice ////
     # //// Neoffice — a capability question is META, whatever the conversation context.
@@ -1451,6 +1544,11 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
                     "nora_chat_router: validating a document stays on %s (the e-mail rule said support)",
                     prior.get("pole"),
                 )
+                return prior["pole"]
+            # //// END Neoffice ////
+            # //// Neoffice — a « relance » answering an rh offer, asked at length (07.10): see _rh_relance_stays.
+            if _rh_relance_stays(msg, prior.get("pole"), _explicit):
+                logger.info("nora_chat_router: a relance answering an rh offer stays on rh (the dunning rule said compta)")
                 return prior["pole"]
             # //// END Neoffice ////
             if _explicit:
@@ -1661,6 +1759,10 @@ _DOCTYPE_POLES = {
     "Sales Invoice": "compta", "Purchase Invoice": "compta", "Payment Entry": "compta",
     "Journal Entry": "compta", "Purchase Order": "compta", "Supplier": "compta", "Dunning": "compta",
     "Employee": "rh", "Leave Application": "rh", "Expense Claim": "rh", "Salary Slip": "rh",
+    # //// Neoffice — recruitment's documents (07.10, see _RECRUITMENT_RE).
+    "Job Applicant": "rh", "Job Opening": "rh", "Job Offer": "rh", "Job Requisition": "rh",
+    "Interview": "rh", "Interview Feedback": "rh", "Employee Referral": "rh", "Appointment Letter": "rh",
+    "Staffing Plan": "rh",
     "Project": "projet", "Task": "projet", "Timesheet": "projet",
     "Issue": "support", "HD Ticket": "support",
 }

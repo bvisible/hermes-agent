@@ -207,7 +207,8 @@ def test_the_job_poles_own_questions_are_deterministic(message):
     ("message", "pole"),
     (
         # The plural + question shape is the discriminator; these have neither.
-        ("recrute un ouvrier pour le chantier", None),
+        # //// Neoffice — recruiting is rh's by its own rule since 07.10 (_RECRUITMENT_RE); never projet.
+        ("recrute un ouvrier pour le chantier", "rh"),
         ("crée un client Jean Dupont", None),
         ("quels employés sont disponibles ?", None),
         # And the neighbours the job rules sit next to keep their own routes.
