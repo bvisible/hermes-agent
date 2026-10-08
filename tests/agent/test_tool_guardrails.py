@@ -479,7 +479,11 @@ def test_execute_code_replay_streak_notice_fires_on_warn_only_desktop_config():
     # #124072: on an interactive surface hard stops are off, so the appended notice is
     # the only signal the model gets. 186 no-op print("...") cells whose results differed
     # only in kernel.execution_count / duration_seconds produced zero notices.
-    controller = ToolCallGuardrailController(ToolCallGuardrailConfig.from_mapping({}, platform="desktop"))
+    # //// Neoffice — hard stops are ON by default in our fork (hard_stop_enabled, see the config);
+    # //// a warn-only surface is the explicit opt-out this test is about.
+    controller = ToolCallGuardrailController(
+        ToolCallGuardrailConfig.from_mapping({"hard_stop_enabled": False}, platform="desktop"))
+    # //// END Neoffice ////
     args = {"code": 'print("...")'}
 
     def result(n):

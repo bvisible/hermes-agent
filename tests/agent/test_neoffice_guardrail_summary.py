@@ -103,6 +103,8 @@ def one_response(monkeypatch):
             _build_api_kwargs=lambda msgs: {"model": "nora", "messages": msgs, "tools": [{"type": "function"}],
                                             "tool_choice": "auto"},
             _ensure_primary_openai_client=lambda reason: SimpleNamespace(),
+        # v0.21.6 hands agent._interruptible_api_call to _managed_summary_call (replaced below).
+        _interruptible_api_call=lambda kwargs: None,
             _get_transport=lambda: SimpleNamespace(normalize_response=lambda raw: state["response"]),
         )
         seen = []
@@ -202,6 +204,8 @@ def upstream_attempt(monkeypatch):
         api_mode="chat_completions",
         _build_api_kwargs=lambda msgs: {"model": "nora", "messages": msgs, "tools": [{"type": "function"}]},
         _ensure_primary_openai_client=lambda reason: SimpleNamespace(),
+        # v0.21.6 hands agent._interruptible_api_call to _managed_summary_call (replaced below).
+        _interruptible_api_call=lambda kwargs: None,
         _get_transport=lambda: SimpleNamespace(normalize_response=lambda raw, **kw: state["response"]),
     )
     monkeypatch.setattr(cch, "sanitize_outbound_kwargs", lambda agent, kwargs: None)

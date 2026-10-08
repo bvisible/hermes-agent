@@ -250,7 +250,8 @@ def _pending(context):
     event = _webhook_event(PROBE if context else QUESTION, context)
     return SimpleNamespace(
         source=event.source, message_id="delivery-2", channel_prompt=None, message_type=None,
-        internal=False, metadata={}, raw_message=event.raw_message, text=event.text)
+        internal=False, metadata={}, raw_message=event.raw_message, text=event.text,
+        reply_expected=None)  # v0.21.6 MessageEvent field, None by default
 
 
 @pytest.mark.asyncio

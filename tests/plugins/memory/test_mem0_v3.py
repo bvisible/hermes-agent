@@ -127,7 +127,10 @@ class TestMem0V3Internal:
         call = backend.captured[0]
         assert call[2]["user_id"] == "u123"
         assert call[2]["agent_id"] == "hermes"
-        assert call[2]["infer"] is True
+        # //// Neoffice — per-turn capture stores the RAW turn (infer=False); the nightly
+        # //// consolidation extracts the durable facts. See sync_turn.
+        assert call[2]["infer"] is False
+        # //// END Neoffice ////
 
 
 class TestSyncTurnTruncation:
@@ -150,18 +153,22 @@ class TestSyncTurnTruncation:
 
         class SmallContextBackend(FakeBackend):
             def add(self, messages, **kwargs):
-                if any(len(m["content"]) > mem0_plugin._SYNC_MSG_MAX_CHARS for m in messages):
+                # //// Neoffice — our raw capture is capped at sync_max_chars (default 8000), not at
+                # //// _SYNC_MSG_MAX_CHARS: the embedder was measured to take 20 000 characters.
+                if any(len(m["content"]) > 8000 for m in messages):
                     raise RuntimeError("HTTP 500: embedding input exceeds model context")
                 return super().add(messages, **kwargs)
 
         backend = SmallContextBackend()
         provider = self._make_provider(monkeypatch, backend)
-        provider.sync_turn("Short question?", "".join(f"Fact {i}. " for i in range(200)), session_id="s1")
+        # //// Neoffice — a statement: our filler filter keeps a bare question out of memory.
+        provider.sync_turn("Our main supplier is Martin SA.", "".join(f"Fact {i}. " for i in range(2000)),
+                           session_id="s1")
         provider._sync_thread.join(timeout=2)
         assert len(backend.captured) == 1
         sent = backend.captured[0][1]
-        assert sent[0]["content"] == "Short question?"  # under the cap: untouched
-        assert len(sent[1]["content"]) <= mem0_plugin._SYNC_MSG_MAX_CHARS and sent[1]["content"].endswith(".")
+        assert sent[0]["content"] == "Our main supplier is Martin SA."  # under the cap: untouched
+        assert len(sent[1]["content"]) <= 8000 and sent[1]["content"].endswith(".")  # //// Neoffice — our cap
         assert provider._consecutive_failures == 0
 
     def test_the_boundary_kept_is_the_last_one_in_the_window_whatever_its_script(self):
@@ -196,7 +203,8 @@ class TestSyncTurnTruncation:
         (tmp_path / "mem0.json").write_text('{"sync_max_chars": 3000}')
         backend = FakeBackend()
         provider = self._make_provider(monkeypatch, backend)
-        provider.sync_turn("hi", "Long answer. " * 200, session_id="s1")  # 2600 chars
+        # //// Neoffice — not « hi »: our filler filter keeps a greeting out of memory.
+        provider.sync_turn("Our office moved to Lausanne.", "Long answer. " * 200, session_id="s1")  # 2600 chars
         provider._sync_thread.join(timeout=2)
         assert backend.captured[0][1][1]["content"] == "Long answer. " * 200
 
@@ -222,12 +230,12 @@ class TestMem0Prefetch:
         backend = FakeBackend(search_results=[{"id": "m1", "memory": "user prefers dark mode"}])
         provider = self._make_provider(backend)
         result = provider.prefetch("what theme do I like?")
-        kind, query, opts = backend.captured[0]
-        assert kind == "search"
-        assert query == "what theme do I like?"
-        assert opts["filters"] == {"user_id": "u123"}
-        assert opts["top_k"] == 10
-        assert opts["rerank"] is False
+        # //// Neoffice — the prefetch reads the person's bucket, then the shared company bucket.
+        searches = [c for c in backend.captured if c[0] == "search"]
+        assert [c[1] for c in searches] == ["what theme do I like?"] * 2
+        assert [c[2]["filters"] for c in searches] == [{"user_id": "u123"}, {"user_id": "company"}]
+        assert all(c[2]["top_k"] == 10 for c in searches)
+        # //// END Neoffice ////
         assert "## Mem0 Memory" in result
         assert "user prefers dark mode" in result
 
@@ -239,7 +247,8 @@ class TestMem0Prefetch:
         provider._prefetch_thread.join(timeout=1)
         result = provider.prefetch("where do I live?")
         assert "lives in Berlin" in result
-        assert len([c for c in backend.captured if c[0] == "search"]) == 1
+        # //// Neoffice — one prefetch = two searches: the person's bucket and the company bucket.
+        assert len([c for c in backend.captured if c[0] == "search"]) == 2
 
     def test_slow_prefetch_returns_quickly(self, monkeypatch):
         entered = threading.Event()
@@ -477,8 +486,14 @@ class TestCreateBackendRouting:
                 pass
 
         monkeypatch.setattr("plugins.memory.mem0._backend.OSSBackend", OB)
+        # //// Neoffice — the OSS backend is a process singleton behind a lock (_LockedBackend):
+        # //// start from an empty cache, then look through the proxy.
+        monkeypatch.setattr(mem0_plugin, "_OSS_BACKEND_SINGLETON", {})
         provider = self._provider(monkeypatch, mode="oss", host="http://sh:8888")
-        assert isinstance(provider._create_backend(), OB)
+        backend = provider._create_backend()
+        assert isinstance(backend, mem0_plugin._LockedBackend)
+        assert isinstance(backend.__dict__["_backend"], OB)
+        # //// END Neoffice ////
 
     def test_prompt_label_matches_routing_when_oss_and_host_both_set(self, monkeypatch):
         # system_prompt_block must mirror _create_backend precedence: with both

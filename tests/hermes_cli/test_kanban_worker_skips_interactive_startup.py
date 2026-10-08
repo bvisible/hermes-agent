@@ -41,20 +41,21 @@ def test_a_person_still_gets_the_banner_prefetch(monkeypatch):
 
 
 def test_a_worker_is_not_shown_the_fleet_restart_hint(monkeypatch):
+    # v0.21.6 moved the hint into main_install_repair._recover_update_debts_on_startup, and the
+    # guard moved with it.
     import hermes_cli.update_cmd_fleet as fleet
+    import hermes_cli.update_pause_record as pause_record
+    from hermes_cli import main_install_repair
 
     calls = []
     monkeypatch.setattr(fleet, "_warn_pending_fleet_restart_on_startup", lambda: calls.append("hint"))
-    monkeypatch.setattr(main_mod, "_recover_from_interrupted_install", lambda: None)
+    monkeypatch.setattr(pause_record, "recover", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["hermes", "chat", "-q", "x"])
     for task, expected in (("t_test", []), (None, ["hint"])):
         calls.clear()
         if task:
             monkeypatch.setenv("HERMES_KANBAN_TASK", task)
         else:
             monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
-        monkeypatch.setattr(sys, "argv", ["hermes", "--version"])
-        try:
-            main_mod.main()
-        except SystemExit:
-            pass
+        main_install_repair._recover_update_debts_on_startup()
         assert calls == expected
