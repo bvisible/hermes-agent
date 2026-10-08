@@ -420,10 +420,16 @@ class TestDoctorMemoryProviderSection:
 
     def test_catalog_provider_not_installed_names_install_command(self, monkeypatch, tmp_path):
         # mem0 left core for the plugin catalog: a home still configured for it gets the exact command.
-        out = self._run_doctor_and_capture(monkeypatch, tmp_path, provider="mem0")
+        # //// Neoffice — our fork keeps mem0 in-tree (plugins/memory/mem0 carries our scoping and
+        # //// capture blocks), so the doctor finds it. The same contract is checked with honcho,
+        # //// which left core and stays catalog-only here too; upstream used mem0.
+        out = self._run_doctor_and_capture(monkeypatch, tmp_path / "honcho", provider="honcho")
         section = out.split("Memory Provider", 1)[1][:600]
         assert "Built-in memory active" not in out
-        assert "mem0 plugin not found" in section and "plugins install mem0" in section
+        assert "honcho plugin not found" in section and "plugins install honcho" in section
+        mem0_out = self._run_doctor_and_capture(monkeypatch, tmp_path / "mem0", provider="mem0")
+        assert "mem0 plugin not found" not in mem0_out.split("Memory Provider", 1)[1][:600]
+        # //// END Neoffice ////
 
     @pytest.mark.parametrize("memory_enabled", [False, True])
     def test_stale_builtin_files_reported_only_when_store_enabled(
