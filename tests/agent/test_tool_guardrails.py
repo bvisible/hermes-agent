@@ -71,40 +71,23 @@ def test_gateway_platform_defaults_to_hard_stop_without_changing_interactive_def
     telegram_cfg = ToolCallGuardrailConfig.from_mapping({}, platform="telegram")
     cron_cfg = ToolCallGuardrailConfig.from_mapping({}, platform="cron")
 
-    # //// Neoffice — our fork turns hard stops ON by default everywhere (ToolCallGuardrailConfig:
-    # //// kanban workers run as platform "cli", which upstream counts as attended). Upstream
-    # //// asserted False for the interactive platforms.
-    assert all(cfg.hard_stop_enabled is True for cfg in interactive_configs)
+    assert all(cfg.hard_stop_enabled is False for cfg in interactive_configs)
     assert telegram_cfg.hard_stop_enabled is True
     assert cron_cfg.hard_stop_enabled is True
-    # //// END Neoffice ////
 
 
 def test_non_interactive_hard_stop_can_be_disabled_explicitly():
-    # //// Neoffice — with our default hard_stop_enabled=True, turning off the non-interactive
-    # //// flag alone keeps the hard stop; both flags must be off to disable it.
-    only_flag = ToolCallGuardrailConfig.from_mapping(
+    cfg = ToolCallGuardrailConfig.from_mapping(
         {"non_interactive_hard_stop_enabled": False},
         platform="telegram",
     )
-    assert only_flag.hard_stop_enabled is True
-    cfg = ToolCallGuardrailConfig.from_mapping(
-        {"non_interactive_hard_stop_enabled": False, "hard_stop_enabled": False},
-        platform="telegram",
-    )
-    # //// END Neoffice ////
 
     assert cfg.hard_stop_enabled is False
     assert cfg.non_interactive_hard_stop_enabled is False
 
 
 def test_default_repeated_identical_failed_call_warns_without_blocking():
-    # //// Neoffice — the warn-only path needs hard stops off explicitly in our fork (default ON);
-    # //// the default's blocking is covered by the hard-stop tests below.
-    controller = ToolCallGuardrailController(
-        ToolCallGuardrailConfig(hard_stop_enabled=False, non_interactive_hard_stop_enabled=False)
-    )
-    # //// END Neoffice ////
+    controller = ToolCallGuardrailController()
     args = {"query": "same"}
 
     decisions = []
@@ -375,12 +358,9 @@ def test_browser_retry_after_action_is_not_a_replay():
 
 
 def test_supervised_task_platforms_keep_warning_only_default():
-    # //// Neoffice — our fork's default is hard stop ON on every platform, supervised ones included
-    # //// (kanban workers are spawned as "cli"). Upstream asserted False here.
     for platform in ("subagent", "api_server", "cli"):
         cfg = ToolCallGuardrailConfig.from_mapping({}, platform=platform)
-        assert cfg.hard_stop_enabled is True, platform
-    # //// END Neoffice ////
+        assert cfg.hard_stop_enabled is False, platform
     for platform in ("telegram", "discord", "cron", "kanban"):
         cfg = ToolCallGuardrailConfig.from_mapping({}, platform=platform)
         assert cfg.hard_stop_enabled is True, platform
@@ -479,11 +459,7 @@ def test_execute_code_replay_streak_notice_fires_on_warn_only_desktop_config():
     # #124072: on an interactive surface hard stops are off, so the appended notice is
     # the only signal the model gets. 186 no-op print("...") cells whose results differed
     # only in kernel.execution_count / duration_seconds produced zero notices.
-    # //// Neoffice — hard stops are ON by default in our fork (hard_stop_enabled, see the config);
-    # //// a warn-only surface is the explicit opt-out this test is about.
-    controller = ToolCallGuardrailController(
-        ToolCallGuardrailConfig.from_mapping({"hard_stop_enabled": False}, platform="desktop"))
-    # //// END Neoffice ////
+    controller = ToolCallGuardrailController(ToolCallGuardrailConfig.from_mapping({}, platform="desktop"))
     args = {"code": 'print("...")'}
 
     def result(n):
