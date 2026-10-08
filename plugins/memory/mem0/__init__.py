@@ -1019,10 +1019,19 @@ class Mem0MemoryProvider(MemoryProvider):
             self._company_id if scope == "company" else self._user_id
         )
         metadata = {**_neoffice_write_metadata(self), **(extra_metadata or {})}
+        # //// Neoffice — the scrub upstream applies to every other write since v0.21.6 (#115104).
+        # //// memory_retain reaches the provider outside MemoryManager, so a key pasted into a chat
+        # //// and lifted into a fact by the nightly consolidation was archived, and recalled into
+        # //// later prompts, as is. Fails closed like upstream: a fact the scrub could not read is
+        # //// not stored, and the short count keeps NORA's row pending.
+        from agent.memory_manager import _redact_for_provider
+        from agent.redact import REDACTION_UNAVAILABLE
+
+        facts = _redact_for_provider([fact for fact in facts or [] if isinstance(fact, str)])
         stored = 0
         for fact in facts:
             text = (fact or "").strip()
-            if not text:
+            if not text or text == REDACTION_UNAVAILABLE:
                 continue
             try:
                 self._backend.add(
