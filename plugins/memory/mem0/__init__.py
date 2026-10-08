@@ -225,7 +225,11 @@ _RECALL_QUESTION_RE = re.compile(
     # //// Neoffice — "Comment je m'appelle ?" is the user TESTING recall, not
     # stating a fact; storing it teaches the model its own question back.
     r"comment\s+je\s+m'appelle|qui\s+suis[-\s]je|comment\s+(?:je\s+)?m'appelais|"
-    r"tu\s+sais\s+(?:qui|comment)\s+je|what's\s+my\s+name|who\s+am\s+i"
+    r"tu\s+sais\s+(?:qui|comment)\s+je|what's\s+my\s+name|who\s+am\s+i|"
+    # //// Neoffice — « Comment s'appelle notre fiduciaire ? » asks NORA to name something she
+    # //// knows; it was stored as a memory on osiris on 08.10. A sentence that GIVES the name
+    # //// does not end on a question mark, which the call site requires.
+    r"comment\s+s'appell(?:e|ent)|what(?:'s|\s+is)\s+the\s+name\s+of"
     r")",
     re.IGNORECASE,
 )
@@ -263,6 +267,27 @@ _RECALL_AFTER_LEAD_IN_RE = re.compile(
     r"^[^\d?]{1,24}?[,:\u2014-]\s+(?=\S)" + _RECALL_QUESTION_RE.pattern.lstrip("^\\s*"),
     re.IGNORECASE,
 )
+# //// END Neoffice ////
+
+
+# //// Neoffice — one key per FACT, not per stored copy (08.10). The per-turn capture stores
+# //// NORA's answer whole, so each time she restates a recalled fact it is stored again: on
+# //// osiris the same sentence sat up to four times in one bucket, and every copy took one of
+# //// the ten lines the prefetch injects. Same text once case and punctuation are folded.
+def _neoffice_fact_key(text: Optional[str]) -> str:
+    return re.sub(r"\W+", " ", str(text or "").casefold()).strip()
+
+
+def _neoffice_distinct_facts(items: list) -> list:
+    """Keep the first (best-ranked) item of each fact; items without text pass through."""
+    seen, out = set(), []
+    for item in items or []:
+        key = _neoffice_fact_key(item.get("memory"))
+        if key and key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 # //// END Neoffice ////
 
 
@@ -709,6 +734,14 @@ class Mem0MemoryProvider(MemoryProvider):
                 lambda: self._merged_search(backend, query, top_k=10, rerank=True),
                 logger.debug, "Mem0 prefetch failed: %s")
             # //// END Neoffice ////
+            # //// Neoffice — one line per fact (see _neoffice_distinct_facts), the prefetch only:
+            # //// mem0_search and mem0_list keep every copy, so a correction reaches them all.
+            # //// What was recalled is kept for sync_turn, which then does not store NORA's
+            # //// restatement of it a second time.
+            results = _neoffice_distinct_facts(results)
+            self._neoffice_recalled = frozenset(
+                _neoffice_fact_key(r.get("memory")) for r in results if r.get("memory"))
+            # //// END Neoffice ////
             # //// Neoffice — a company fact says how often it was heard (#958, _neoffice_heard_label)
             lines = [_neoffice_recall_line(r) for r in (results or []) if r.get("memory")]
             # //// END Neoffice ////
@@ -789,6 +822,12 @@ class Mem0MemoryProvider(MemoryProvider):
                 # re-prefill (7-8s) on EVERY request instead of ~0.2s. Keeping filler
                 # out is therefore both a memory-quality AND a latency fix.
                 kept = [m for m in messages if not _is_low_value_for_memory(m["content"])]
+                # //// Neoffice — NORA's answer that only restates a fact recalled for this turn
+                # //// is not a new memory: storing it again is how the duplicates grew (08.10).
+                recalled = getattr(self, "_neoffice_recalled", frozenset())
+                kept = [m for m in kept if not (m["role"] == "assistant"
+                                                 and _neoffice_fact_key(m["content"]) in recalled)]
+                # //// END Neoffice ////
                 if not kept:
                     return  # nothing worth remembering in this turn
                 # Cap pathological turns (a pasted document) — NOT with upstream's 450-char

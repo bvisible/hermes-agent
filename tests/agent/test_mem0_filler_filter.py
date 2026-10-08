@@ -265,4 +265,20 @@ def test_a_bare_go_ahead_or_a_question_about_the_assistant_is_not_memorised(text
 )
 def test_a_go_ahead_that_carries_something_is_kept(text):
     assert is_low_value(text) is False, f"a fact would be lost: {text!r}"
+
+
+@pytest.mark.parametrize("text", [
+    "Comment s'appelle notre fiduciaire ?", "Comment s'appellent nos fournisseurs de ciment ?",
+    "What is the name of our accountant?",
+])
+def test_asking_for_a_name_is_a_recall_question(text):
+    assert is_low_value(text) is True, f"recall question would be stored: {text!r}"
+
+
+@pytest.mark.parametrize("text", [
+    "Notre fiduciaire s'appelle Fiduciaire Exemple SA.",
+    "Comment s'appelle notre fiduciaire ? Fiduciaire Exemple SA, note-le.",
+])
+def test_giving_a_name_is_kept(text):
+    assert is_low_value(text) is False, f"a fact would be lost: {text!r}"
 # //// END Neoffice ////
