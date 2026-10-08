@@ -169,7 +169,9 @@ _ACK_OPENING_RE = re.compile(
     r"noted\b|you're\s+welcome|how\s+can\s+i\s+help|hello\b|hi\b|thanks\b|thank\s+you|"
     # //// Neoffice — sign-offs observed polluting the osiris store.
     r"[àa]\s+(?:tout\s+[àa]\s+l'heure|bient[ôo]t|demain|plus\s+tard)|"
-    r"bonne\s+(?:journ[ée]e|soir[ée]e|nuit)|au\s+revoir|bye\b|see\s+you|good\s+(?:bye|night)"
+    r"bonne\s+(?:journ[ée]e|soir[ée]e|nuit)|au\s+revoir|bye\b|see\s+you|good\s+(?:bye|night)|"
+    # //// Neoffice — « De rien, Jeremy. », read out of the osiris store on 08.10.
+    r"de\s+rien\b"
     r")",
     re.IGNORECASE,
 )
@@ -181,10 +183,25 @@ _ACK_OPENING_RE = re.compile(
 # ARE the whole message: "Oui, c'est Romande Énergie notre fournisseur
 # d'électricité" is exactly the fact we exist to keep. Hence the anchored match
 # — an opening-prefix rule silently deleted both of those in testing.
+# //// Neoffice — a bare go-ahead or greeting is a bare acknowledgement too (08.10). Read out
+# //// of the osiris store that day, each stored whole and recalled later as knowledge:
+# //// « Oui, vas-y. », « Yo ». A bare « Oui, vas-y. » is also exactly the confirmation a later
+# //// turn must never borrow (#740). Still the WHOLE message: up to three of these words and
+# //// nothing else, so « Oui, vas-y, envoie le devis à Dupont SA » is kept.
+_BARE_WORD = (
+    r"(?:oui|non|ouais|ouaip|yep|yes|no|si|voil[àa]|exact|exactement|"
+    r"tout\s+[àa]\s+fait|c'est\s+(?:[çc]a|bon|clair|parti)|super|g[ée]nial|nickel|top|"
+    r"ok(?:ay)?|d'accord|vas-y|allez-y|go|fais-le|faites-le|yo|coucou|hey)"
+)
 _BARE_ACK_RE = re.compile(
-    r"^\s*(?:oui|non|ouais|ouaip|yep|yes|no|si|voil[àa]|exact|exactement|"
-    r"tout\s+[àa]\s+fait|c'est\s+(?:[çc]a|bon|clair)|super|g[ée]nial|nickel|top)"
-    r"[\s!.…]*$",
+    rf"^\s*{_BARE_WORD}(?:[\s,!.…]+{_BARE_WORD}){{0,2}}[\s!.…]*$",
+    re.IGNORECASE,
+)
+# //// Neoffice — a question about the assistant itself says nothing about the person or the
+# //// company (« qui est tu ? », osiris store, 08.10). Whole message only, like the rule above.
+_ABOUT_THE_ASSISTANT_RE = re.compile(
+    r"^\s*(?:qui\s+(?:es|est|[êe]tes)[-\s](?:tu|vous)|(?:tu\s+es|t'es|vous\s+[êe]tes)\s+qui"
+    r"|who\s+are\s+you|what\s+are\s+you)\s*[?!.…]*\s*$",
     re.IGNORECASE,
 )
 # //// END Neoffice ////
@@ -285,7 +302,7 @@ def _is_low_value_for_memory(text: Optional[str]) -> bool:
         return True
     # //// Neoffice — a bare "Oui." carries nothing; "Oui, c'est Romande Énergie"
     # carries everything. Only the anchored form is dropped.
-    if _BARE_ACK_RE.match(stripped):
+    if _BARE_ACK_RE.match(stripped) or _ABOUT_THE_ASSISTANT_RE.match(stripped):
         return True
     # //// END Neoffice ////
     if len(stripped) > _MEMORY_FILLER_MAX_LEN:

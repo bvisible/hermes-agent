@@ -236,3 +236,33 @@ def test_a_courtesy_opening_does_not_save_a_recall_question(text):
 )
 def test_the_lead_in_rule_takes_nothing_else(text):
     assert not is_low_value(text), f"real content would be dropped: {text!r}"
+
+
+# //// Neoffice — added 08.10, read out of the osiris store that day: a bare go-ahead, a greeting
+# //// the vocabulary lacked, a « de rien » and a question about the assistant itself, each stored
+# //// whole and recalled later as knowledge. A bare « Oui, vas-y. » is also the confirmation a
+# //// later turn must never borrow (#740). Whole messages only, as for « Oui. ».
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Oui, vas-y.", "Oui vas-y", "Ok, go", "Allez-y !", "C'est parti", "Yo", "Coucou !",
+        "De rien, Jeremy.", "qui est tu ?", "Qui es-tu ?", "Tu es qui ?", "Who are you?",
+    ],
+)
+def test_a_bare_go_ahead_or_a_question_about_the_assistant_is_not_memorised(text):
+    assert is_low_value(text) is True, f"noise would be stored: {text!r}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Oui, vas-y, envoie le devis à Dupont SA",
+        "Oui, vas-y avec la facture de 1 200 CHF",
+        "Go pour le chantier de Lausanne lundi",
+        "Qui est le fournisseur du ciment ?",
+        "Yo, le fournisseur du ciment a changé : c'est Ciments Exemple SA maintenant",
+    ],
+)
+def test_a_go_ahead_that_carries_something_is_kept(text):
+    assert is_low_value(text) is False, f"a fact would be lost: {text!r}"
+# //// END Neoffice ////
