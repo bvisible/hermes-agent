@@ -1,3 +1,4 @@
+# //// Neoffice — added file (no upstream equivalent).
 """Neoffice — the order of the tool list decides the whole fleet's prefix cache.
 
 The engine's template renders the TOOLS FIRST, then the system text, so the tool list

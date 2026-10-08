@@ -1,3 +1,4 @@
+# //// Neoffice — added file (no upstream equivalent).
 """A tripped circuit breaker must reach the user's desk (tracker #246).
 
 A request routed to a pole crashed three times on the provider; the dispatcher

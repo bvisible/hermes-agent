@@ -1,3 +1,4 @@
+# //// Neoffice — added file (no upstream equivalent).
 """Neoffice — an announced, self-resolving unavailability gets its own budget.
 
 A provider that ANSWERS "retry after 5s" is telling us it is alive and busy. One that

@@ -1,3 +1,4 @@
+# //// Neoffice — added file (no upstream equivalent).
 """Neoffice regression tests for safe accounting clarification delivery."""
 
 import runpy

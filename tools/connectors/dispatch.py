@@ -37,22 +37,22 @@ def dispatch_connector_batch(calls, ids, *, user_task, enabled_tools,
     if any(not is_mcp_tool_name((call or {}).get("name")) for _, call in partition.local):
         from tools.tool_search_validation import local_batch_error
         return tool_error(local_batch_error(calls))
-    jobs = sorted([(plan.position, "remote", plan) for plan in partition.remote]
+    jobs = sorted([(plan.position, "remote", plan) for plan in partition.remote]  # //// #710
                   + [(position, "mcp", call) for position, call in partition.local], key=lambda job: job[0])
     entries = list(partition.errors)
-    for offset, (position, kind, job) in enumerate(jobs):
+    for offset, (position, kind, job) in enumerate(jobs):  # //// #710
         if is_interrupted():
             # Check before every entry so /stop prevents unstarted remote side effects.
-            left = jobs[offset:]
+            left = jobs[offset:]  # //// #710
             entries.extend(fill_remote_failure(
                 [j for _, k, j in left if k == "remote"], "Stopped by the user before this call was made.",
                 code="INTERRUPTED"))
-            entries.extend({"index": p, "name": j.get("name"),
+            entries.extend({"index": p, "name": j.get("name"),  # //// #710
                             "error": {"code": "INTERRUPTED",
                                       "message": "Stopped by the user before this call was made."}}
                            for p, k, j in left if k == "mcp")
             break
-        if kind == "remote":
+        if kind == "remote":  # //// #710
             name, fn_name, fn_args = job.name, job.name, job.arguments
         else:
             name = job.get("name")
@@ -60,7 +60,7 @@ def dispatch_connector_batch(calls, ids, *, user_task, enabled_tools,
             fn_args = {"calls": [{"name": name, "arguments": dict(job.get("arguments") or {})}]}
         # Each entry must run its own policy and middleware.
         payload = handle_function_call(
-            fn_name, fn_args, **asdict(ids), user_task=user_task,
+            fn_name, fn_args, **asdict(ids), user_task=user_task,  # //// #710
             enabled_tools=enabled_tools, tool_request_middleware_trace=list(middleware_trace),
             skip_pre_tool_call_hook=False, skip_tool_request_middleware=False,
             skip_tool_execution_middleware=False,
@@ -70,7 +70,7 @@ def dispatch_connector_batch(calls, ids, *, user_task, enabled_tools,
             value = json.loads(payload) if isinstance(payload, str) else payload
         except ValueError:
             value = payload
-        entry = {"index": position, "name": name}
+        entry = {"index": position, "name": name}  # //// #710
         if isinstance(value, dict) and "error" in value:
             error = value["error"]
             entry["error"] = error if isinstance(error, dict) else {"code": "TOOL_ERROR", "message": str(error)}

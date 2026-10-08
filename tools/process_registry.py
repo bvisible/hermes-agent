@@ -292,6 +292,7 @@ def _systemd_run_user_scope_available() -> bool:
 
                 binary = shutil.which("systemd-run")
                 if binary:
+                    # //// Neoffice — one probe per bound: a probe that timed out is retried longer.
                     for bound in _SYSTEMD_SCOPE_PROBE_TIMEOUTS:
                         # Unique unit avoids collisions; the timeout bounds D-Bus.
                         probe_unit = f"hermes-probe-scope-{os.getpid()}-{uuid.uuid4().hex[:8]}"

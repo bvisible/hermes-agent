@@ -1,3 +1,4 @@
+# //// Neoffice — added file (no upstream equivalent).
 """Neoffice — the provider-error dump must record the response HEADERS.
 
 This dump is the only forensic record of a provider error. It captured the status

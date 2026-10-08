@@ -1,3 +1,4 @@
+# //// Neoffice — added file (no upstream equivalent).
 """A Hermes runtime var declared by a server's own config reaches that server.
 
 A stdio MCP server gets a FILTERED environment (`_build_safe_env` keeps PATH,

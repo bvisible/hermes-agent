@@ -1,3 +1,4 @@
+# //// Neoffice — added file (no upstream equivalent).
 """Unit tests for the kanban worker no-progress / narration-loop breaker.
 
 Covers the two PURE pieces of the breaker (agent/conversation_loop.py):

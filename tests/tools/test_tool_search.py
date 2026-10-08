@@ -65,6 +65,7 @@ class TestConfigParsing:
         assert cfg.enabled == "auto"
 
 
+    # //// Neoffice — #114578 backport.
     def test_eager_list_parsed(self):
         from tools.tool_search import ToolSearchConfig
         cfg = ToolSearchConfig.from_raw({"eager": ["mcp_notes_fetch", " ", "mcp_docs_read "]})
@@ -98,6 +99,7 @@ class TestClassification:
                 f"Core tool '{core_name}' must NEVER be deferrable"
             )
 
+    # //// Neoffice — #114578 backport.
     def test_eager_tools_never_defer(self, monkeypatch):
         """A tool named in tools.tool_search.eager stays loaded; other MCP tools still defer."""
         import tools.tool_search as tool_search

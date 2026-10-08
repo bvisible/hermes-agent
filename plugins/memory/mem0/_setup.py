@@ -1,3 +1,5 @@
+# //// Neoffice — added file (kept): upstream removed plugins/memory/mem0 from core in v0.21.6 (781334eea4b);
+# //// NORA's in-tree memory provider still imports it. Drop with the provider.
 """Setup wizard for Mem0 plugin — interactive and flag-based modes."""
 
 from __future__ import annotations

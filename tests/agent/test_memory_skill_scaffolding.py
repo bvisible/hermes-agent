@@ -10,12 +10,12 @@ See: agent.skill_commands.extract_user_instruction_from_skill_message and
 MemoryManager._strip_skill_scaffolding.
 """
 
-from agent.memory_manager import MemoryManager, _unwrap_nora_route_prompt
+from agent.memory_manager import MemoryManager, _unwrap_nora_route_prompt  # //// Neoffice
 from agent.memory_provider import MemoryProvider
 from agent.skill_commands import extract_user_instruction_from_skill_message
 
 
-# Real NORA gateway route-prompt wrappers (shape pulled from Osiris
+# //// Neoffice — real NORA gateway route-prompt wrappers (shape pulled from Osiris
 # nora_mem0.json + the live config.yaml / webhook_subscriptions.json templates).
 # The agent receives these WRAPPED strings as the "user message"; memory must
 # store only the quoted user message, never the datetime + orchestrator/SOUL

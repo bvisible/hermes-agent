@@ -1543,6 +1543,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
     from agent.opencode_affinity import merge_session_affinity_headers
 
     kwargs = _build_api_kwargs_for_mode(agent, api_messages, tools_for_api)
+    # //// Neoffice — kept in a variable: neoffice_request_priority below extends it.
     kwargs = merge_session_affinity_headers(
         kwargs,
         getattr(agent, "provider", None),

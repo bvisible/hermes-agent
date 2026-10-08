@@ -8,7 +8,7 @@ silently drops tools); bridge calls route through ``model_tools.handle_function_
 
 from __future__ import annotations
 
-import dataclasses
+import dataclasses  # //// Neoffice — #114578 backport: dataclasses.replace below
 import functools
 import json
 import logging
@@ -82,7 +82,7 @@ class ToolSearchConfig:
                 "(e.g. [todo_list, computer_use]; [] keeps every tool eager) - "
                 "using the curated default set.", defer_raw)
             defer_raw = None
-        eager_raw = raw.get("eager")
+        eager_raw = raw.get("eager")  # //// #114578
         return cls(
             enabled=_tri_state(raw.get("enabled", "auto")),
             threshold_pct=max(0.0, min(100.0, _safe_float(raw.get("threshold_pct"), 5.0))),
@@ -93,7 +93,7 @@ class ToolSearchConfig:
             listing_max_tokens=_clamped_int(raw.get("listing_max_tokens"), 4000, 200, 60000),
             defer_tools=(frozenset(str(n).strip() for n in defer_raw if str(n).strip())
                          if isinstance(defer_raw, (list, tuple, set)) else None),
-            eager_tools=(frozenset(str(n).strip() for n in eager_raw if str(n).strip())
+            eager_tools=(frozenset(str(n).strip() for n in eager_raw if str(n).strip())  # //// #114578
                          if isinstance(eager_raw, (list, tuple, set)) else frozenset()))
 
 
@@ -126,10 +126,10 @@ def _config_from_loader(loader_name: str) -> ToolSearchConfig:
     """Tool-search config via ``hermes_cli.config.<loader_name>`` (defaults on any failure)."""
     try:
         import hermes_cli.config as _cfg_mod
-        raw = getattr(_cfg_mod, loader_name)() or {}
+        raw = getattr(_cfg_mod, loader_name)() or {}  # //// #114578: mcp_servers is read too
         tools_cfg = raw.get("tools")
         tools_cfg = tools_cfg if isinstance(tools_cfg, dict) else {}
-        config = ToolSearchConfig.from_raw(tools_cfg.get("tool_search"))
+        config = ToolSearchConfig.from_raw(tools_cfg.get("tool_search"))  # //// #114578
         eager_servers = _eager_mcp_toolsets(raw.get("mcp_servers"))
         if eager_servers:
             config = dataclasses.replace(config, eager_tools=config.eager_tools | eager_servers)
@@ -154,6 +154,7 @@ load_config = functools.partial(_config_from_loader, "load_config")
 load_config_readonly = functools.partial(_config_from_loader, "load_config_readonly")  # no copy
 
 
+# //// Neoffice — #114578 backport: the pinned names, read like the rest of the config.
 def _eager_tool_names() -> frozenset:
     try:
         return load_config_readonly().eager_tools
@@ -189,6 +190,7 @@ def is_deferrable_tool_name(name: str, defer_tools: Optional[frozenset] = None) 
     whole toolset (``tools.tool_search.eager`` / ``mcp_servers.<name>.defer: false``)."""
     if name in BRIDGE_TOOL_NAMES:
         return False
+    # //// Neoffice — #114578: a tool pinned eager, by name or by its toolset, never defers.
     toolset = _registry_toolset(name)  # None (unregistered/malformed) never defers
     eager = _eager_tool_names()
     if name in eager or (toolset is not None and toolset in eager):
@@ -197,6 +199,7 @@ def is_deferrable_tool_name(name: str, defer_tools: Optional[frozenset] = None) 
         return True
     if name in _core_tool_names():
         return False
+    # //// #114578: the toolset is read at the top, before the eager check.
     return toolset is not None and (
         toolset.startswith("mcp-") or toolset not in _DIRECT_SURFACE_TOOLSETS)
 
