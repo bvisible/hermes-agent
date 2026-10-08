@@ -1423,6 +1423,30 @@ def _persisted_session_id(session_id: Optional[str]) -> Optional[str]:
         state.close()
 
 
+# //// Neoffice — a task the ORCHESTRATOR creates from a person's chat (platform webhook: the desk,
+# //// WhatsApp) carries the reply directive NORA's pre-router puts on its own tasks (08.10). Without
+# //// it the pole's worker answered in its SOUL's French: « How many open quotes does <a client>
+# //// have? » was handed on by the router, the orchestrator created the task, and the answer came
+# //// back in French (capability bench, 07.10). A worker's own child task (dispatcher-owned), a
+# //// chat the router never saw and every other platform keep their body as it is.
+def _neoffice_chat_task_body(body: Any, creator_task_id: Optional[str]) -> Any:
+    if creator_task_id:
+        return body
+    try:
+        from gateway.session_context import get_session_env
+        if get_session_env("HERMES_SESSION_PLATFORM", "") != "webhook":
+            return body
+        from gateway.nora_chat_router import REPLY_DIRECTIVE_MARK, chat_reply_directive
+        directive = chat_reply_directive(get_session_env("HERMES_SESSION_CHAT_ID", ""))
+    except Exception as exc:  # bookkeeping must never fail kanban_create
+        logger.debug("reply directive skipped: %r", exc)
+        return body
+    if not directive or REPLY_DIRECTIVE_MARK in str(body or ""):
+        return body
+    return f"{body}\n\n{directive}" if body else directive
+# //// END Neoffice ////
+
+
 @_kanban_handler("kanban_create")
 def _handle_create(args: dict, **kw) -> str:
     """Create a (child) task; orchestrator workers use this to fan out."""
@@ -1462,6 +1486,10 @@ def _handle_create(args: dict, **kw) -> str:
         if project_id is None and workspace_kind is None and workspace_path is None:
             if self_task is not None and self_task.project_id:
                 project_id, project_source_task_id = self_task.project_id, self_task.id
+        # //// Neoffice — a task the orchestrator creates from a person's chat says which language
+        # //// to reply in, see _neoffice_chat_task_body.
+        args = {**args, "body": _neoffice_chat_task_body(args.get("body"), self_tid)}
+        # //// END Neoffice ////
         new_tid = kb.create_task(
             conn, title=str(title).strip(), body=args.get("body"), assignee=str(assignee),
             parents=tuple(parents), tenant=args.get("tenant") or os.environ.get("HERMES_TENANT"),

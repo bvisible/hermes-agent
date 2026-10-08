@@ -124,6 +124,48 @@ def _norm_lang(language: Optional[str]) -> str:
 _LAST_ROUTE: dict = {}
 _LAST_ROUTE_MAX = 1000  # bound the dict; cleared wholesale when exceeded (cheap, rare)
 
+# //// Neoffice — the reply directive a worker reads at the back of its task, built in ONE place for
+# //// the two ways a chat task is born: by this router, or by the orchestrator's kanban_create when
+# //// the router hands a message on (tools/kanban_tools.py reads it through chat_reply_directive).
+# //// The router's tasks carried it; the orchestrator's carried none, so the pole's worker fell back
+# //// to its French SOUL: « How many open quotes does <a client> have? » came back in French
+# //// (capability bench, 07.10). ALWAYS carried, French included (2026-06-18: a cold model drifts
+# //// to English without it). The partner guard rides with it (2026-08-21, osiris: a worker asked to
+# //// « order ten » picked a real customer nobody had named and created a sales order and an
+# //// invoice in his name; guessing a partner fabricates documents, asking costs one turn).
+_WORKER_LANGUAGE_NAMES = {"fr": "French", "de": "German", "it": "Italian", "en": "English"}
+REPLY_DIRECTIVE_MARK = "[Reply to the user in "
+# The language each chat's person last wrote in, keyed by the session chat id: the id the
+# orchestrator's kanban_create reads back from its session (HERMES_SESSION_CHAT_ID).
+_CHAT_LANGUAGE: dict = {}
+
+
+def worker_reply_directive(language: Optional[str]) -> str:
+    lang = _norm_lang(language)
+    return (
+        f"{REPLY_DIRECTIVE_MARK}{_WORKER_LANGUAGE_NAMES.get(lang, lang)}. Do not reply in any "
+        "other language. If a document you are about to create needs a "
+        "business partner (customer or supplier) and NO partner is named in "
+        "the request or the conversation context, do NOT pick one yourself — "
+        "ask the user which partner to use (kanban_block kind=needs_input) "
+        "and STOP.]"
+    )
+
+
+def remember_chat_language(session_chat_id: Optional[str], language: Optional[str]) -> None:
+    if not session_chat_id:
+        return
+    if len(_CHAT_LANGUAGE) > _LAST_ROUTE_MAX:
+        _CHAT_LANGUAGE.clear()
+    _CHAT_LANGUAGE[session_chat_id] = _norm_lang(language)
+
+
+def chat_reply_directive(session_chat_id: Optional[str]) -> Optional[str]:
+    """The directive for a task created from this chat; None when no message of it came through here."""
+    lang = _CHAT_LANGUAGE.get(session_chat_id or "")
+    return worker_reply_directive(lang) if lang else None
+# //// END Neoffice ////
+
 # //// Neoffice — rolling per-conversation history of recent turns (the "film").
 # A ROUTED worker runs as a FRESH, session-less kanban task: it sees ONLY the current
 # message, so a MULTI-STEP request loses its thread (build a subscription → give the
@@ -386,7 +428,13 @@ _CLASSIFIER_SYSTEM = (
     "Réponds 'direct' UNIQUEMENT si le message est une salutation, un remerciement, du "
     "bavardage, une question sur Nora elle-même, ou une demande à laquelle on répond en "
     "une phrase SANS consulter les données métier. En cas de doute entre un pôle et "
-    "'direct' pour une vraie demande métier, choisis le pôle.\n\n"
+    "'direct' pour une vraie demande métier, choisis le pôle.\n"
+    # //// Neoffice — an English business question came back 'direct' (capability bench, 07.10:
+    # //// « How many open quotes does <a client> have … ? »): the rules above are written in French.
+    "La langue du message ne change rien : une demande en anglais, en allemand ou en italien "
+    "suit exactement les mêmes règles (« How many open quotes … ? », « Wie viele offene "
+    "Rechnungen … ? » vont à leur pôle, jamais à 'direct').\n\n"
+    # //// END Neoffice ////
     "CAPACITÉ vs DEMANDE — distingue deux formulations proches :\n"
     "- Le message demande ce que Nora SAIT FAIRE, sans donnée ni information à chercher "
     "(« est-ce que tu peux créer un client ? », « tu sais gérer les devis ? », "
@@ -660,7 +708,9 @@ _RECRUITMENT_RE = re.compile(
     r"|\bbewerb\w*|\bstellen(?:angebot|ausschreibung|anzeige|inserat)\w*|\boffene[nr]?\s+stellen?\b"
     r"|\bvorstellungsgespr[äa]ch\w*|\blebenslauf\w*|\brekrut\w*|\bkandidat(?:in|innen|en)?\b"
     # Italian
-    r"|\bcandidat[aoi]\b|\bofferte?\s+di\s+lavoro\b|\bannunci?o?\s+di\s+lavoro\b"
+    # //// Neoffice — « offerta » too (08.10): `offerte?` read the plural only, so « un'offerta di
+    # //// lavoro » matched nothing here and reached the sales rule for an Italian quotation.
+    r"|\bcandidat[aoi]\b|\boffert[ae]\s+di\s+lavoro\b|\bannunci?o?\s+di\s+lavoro\b"
     r"|\bposizion[ei]\s+apert[ae]\b|\bcolloqui?o?\s+di\s+lavoro\b|\breclut\w*"
     # English
     r"|\bjob\s+(?:applications?|openings?|postings?|offers?|ads?|adverts?|interviews?)\b|\bapplicants?\b"
@@ -671,8 +721,45 @@ _RECRUITMENT_RE = re.compile(
 # //// END Neoffice ////
 
 
+# //// Neoffice — a chart asked for in the fleet's three other languages (08.10). The French rule
+# //// at the top of the table knows « graphique » and « tableau de bord », nothing else; these words
+# //// went to the classifier, which picks analyse. Needed since the sales-document rule below: « show
+# //// the open quotes as a chart » would otherwise reach ventes. « chart of accounts » is the ledger.
+_FOREIGN_CHART_RE = re.compile(
+    r"\bcharts?\b(?!\s+of\s+accounts?)|\bgraphs?\b|\bdashboards?\b|diagramm\w*"
+    r"|\bgrafik(?:en)?\b|\bgrafic[oi]\b",
+    re.IGNORECASE,
+)
+
+# //// Neoffice — sales documents named in the fleet's three other languages (08.10), the
+# //// counterpart of the French « devis / commande client » rule. « How many open quotes does <a
+# //// client> have, and what is their total amount? » matched no rule, the classifier answered
+# //// 'direct', and the orchestrator handed it on without the person's language: the answer came
+# //// back in French, in 15.7 s where the French question takes 7 (capability bench, 07.10).
+# //// Nouns only, like the French rule; « orders » alone stays with the classifier (a purchase
+# //// order is not a customer's). Two cases are left to the classifier, as before:
+# ////   · a job named in the message (« the quote for the construction site »): projet's;
+# ////   · a short question about what NORA can do (« can you make quotes? »), the case
+# ////     _CAPABILITY_RE answers in French — unless it asks to be told or shown something.
+_FOREIGN_SALES_DOCUMENT_RE = re.compile(
+    r"^(?![\s\S]*\b(?:construction\s+sites?|job\s+sites?|baustell\w*|cantier[ei]|chantiers?|PROJ-\d+)\b)"
+    r"(?!\s*(?:can|could)\s+you\b(?![^?]*\b(?:tell|show|give|list|find|send)\s+(?:me|us)\b)[^?0-9@]{0,90}\?\s*$)"
+    r"(?!\s*(?:kannst\s+du|k[öo]nnen\s+sie|k[öo]nntest\s+du)\b(?![^?]*\b(?:mir|uns)\b)[^?0-9@]{0,90}\?\s*$)"
+    r"(?!\s*(?:puoi|pu[òo]|potresti|potrebbe)\b(?![^?]*\b(?:dirmi|mostrarmi|darmi|elencarmi|mi)\b)"
+    r"[^?0-9@]{0,90}\?\s*$)"
+    r"[\s\S]*?(?:\bquot(?:e|es|ation|ations)\b|\b(?:sales|customer)\s+orders?\b"
+    r"|\bangebot(?:e|en|s)?\b|\bofferten?\b|\bkundenauftr[äa]g\w*"
+    r"|\bpreventiv[oi]\b|\bofferta\b(?!\s+di\s+lavoro)|\bordin[ei]\s+(?:de[il]\s+|di\s+)?client[ei]\b)",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
+    # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
+    (_FOREIGN_CHART_RE, "analyse"),
+    # //// END Neoffice ////
     # //// Neoffice — recruitment, see _RECRUITMENT_RE (07.10). Here so the go-ahead guard sees it too.
     (_RECRUITMENT_RE, "rh"),
     # //// END Neoffice ////
@@ -956,6 +1043,9 @@ _FAST_PATH_RULES = (
     ),
     # //// END Neoffice ////
     (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
+    # //// Neoffice — the same documents in English, German and Italian, see _FOREIGN_SALES_DOCUMENT_RE.
+    (_FOREIGN_SALES_DOCUMENT_RE, "ventes"),
+    # //// END Neoffice ////
     # //// Neoffice — expense claims, salary certificates and source tax go to rh
     # (2026-09-23): the pole now holds the tools to file, list and decide an expense
     # claim and the payroll recaps. « note de frais » used to fall to the classifier,
@@ -2444,6 +2534,10 @@ def route_chat_message(
     ``routed=False`` (category ``DIRECT`` or any creation failure) means the caller
     MUST proceed with the normal agent dispatch — the message is never dropped.
     """
+    # //// Neoffice — first, so a message handed on to the orchestrator still tells its task the
+    # //// person's language (see worker_reply_directive).
+    remember_chat_language(session_chat_id, language)
+    # //// END Neoffice ////
     prior = _LAST_ROUTE.get(conversation_id) if conversation_id else None
 
     # //// Neoffice — briefing CTA continuity. On the FIRST inbound after an out-of-band
@@ -2951,26 +3045,10 @@ def route_chat_message(
             # cold model drifts to English without an explicit per-task directive (observed
             # 2026-06-18: fr user got an English worker summary). Deterministic beats hoping the
             # SOUL holds — the directive is one line at the BACK of the body (cache-safe, the
-            # user turn is always last). grep "//// Neoffice".
-            _wlang = _norm_lang(language)
-            _lang_full = {"fr": "French", "de": "German", "it": "Italian", "en": "English"}.get(
-                _wlang, _wlang
-            )
-            # //// Neoffice — partner guard (2026-08-21, osiris): a worker asked to
-            # "order ten" of an item picked a REAL customer (ce client) out of the
-            # database — never named in the thread — and created a sales order AND an
-            # uninvited invoice in his name. Guessing a business partner fabricates
-            # documents in a real person's name; asking costs one turn. Carried on
-            # every task body (all readers are kanban workers; DIRECT chat never
-            # routes here). grep "//// Neoffice".
-            _body = (
-                f"{_body}\n\n[Reply to the user in {_lang_full}. Do not reply in any "
-                "other language. If a document you are about to create needs a "
-                "business partner (customer or supplier) and NO partner is named in "
-                "the request or the conversation context, do NOT pick one yourself — "
-                "ask the user which partner to use (kanban_block kind=needs_input) "
-                "and STOP.]"
-            )
+            # user turn is always last). With it, the partner guard. Both are built by
+            # worker_reply_directive, shared with the orchestrator's kanban_create (08.10).
+            # grep "//// Neoffice".
+            _body = f"{_body}\n\n{worker_reply_directive(language)}"
             # //// END Neoffice ////
             # //// Neoffice — asked aloud, see voice_answer_hint. At the back of the body with the
             # //// language directive: both say how to reply, not what to do.
