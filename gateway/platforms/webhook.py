@@ -495,6 +495,27 @@ class WebhookAdapter(BasePlatformAdapter):
         logger.warning("[webhook] Unknown deliver type: %s", deliver_type)
         return SendResult(success=False, error=f"Unknown deliver type: {deliver_type}")
 
+    # //// Neoffice — interim status bubbles never reach NORA's customer chats (08.10).
+    # //// Upstream counts the webhook platform as a programmatic surface and passes every
+    # //// status callback through raw ("⏳ Retrying in 2.9s (attempt 1/3)...", fallback
+    # //// notices, compression chatter). Our nora and whatsapp_router deliveries end in a
+    # //// customer's chat, where such a bubble read as NORA's reply: the desk Quick Chat took
+    # //// it for the final answer and stopped polling, and the worker's answer, 70 s later,
+    # //// was never shown (a client instance, 2026-09-01, inference engine 503). The filter
+    # //// lived in gateway/run.py::_prepare_gateway_status_message, for every webhook route;
+    # //// it now drops only what a customer chat would receive, and every other route keeps
+    # //// upstream's raw status, sent the way upstream sends it (plain send). The chat has
+    # //// its own "thinking" indicator; the reply or the failure notice is all it needs.
+    async def send_or_update_status(self, chat_id: str, status_key: str, content: str,
+                                    metadata: Optional[Dict[str, Any]] = None) -> SendResult:
+        # A status carries thread metadata only, never the conversation_id that lets send()
+        # rebuild an expired delivery: without delivery info it is logged, as upstream does.
+        if (self._delivery_info.get(chat_id) or {}).get("deliver") in ("nora", "whatsapp_router"):
+            logger.debug("[webhook] %s status for %s kept out of a customer chat", status_key, chat_id)
+            return SendResult(success=True)
+        return await self.send(chat_id, content, metadata=metadata)
+    # //// END Neoffice ////
+
     def _prune_delivery_info(self, now: float) -> None:
         """Drop delivery_info entries older than the idempotency TTL (bounds the dict by ``rate_limit * TTL``
         even when runs never produce a final response)."""
