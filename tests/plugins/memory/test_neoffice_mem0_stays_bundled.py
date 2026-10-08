@@ -7,8 +7,14 @@ provider is not found. Our copy carries NORA's memory (company scope, raw captur
 ownership checks, filler filter), so it stays in the fork. Merging v0.21.6 deleted four of its files
 WITHOUT a conflict (we had never modified them): _setup, _oss_providers, _openai_llm and plugin.yaml,
 and every test still passed because they use a fake backend. These pin the whole provider.
+
+The mem0ai library itself left upstream's dependencies with the provider: provision.sh installs it
+where NORA runs, upstream's test environment does not. So every module is checked present here,
+the one that imports mem0ai is imported only where the library is, and the gate (det/64) imports
+the whole provider in the gateway venv.
 """
 import importlib
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -26,8 +32,18 @@ def test_mem0_resolves_to_the_bundled_copy():
     assert (found / "plugin.yaml").exists()
 
 
+NEEDS_MEM0AI = ("plugins.memory.mem0._openai_llm",)
+
+
+@pytest.mark.parametrize("module", MODULES)
+def test_every_module_of_the_provider_is_present(module):
+    assert importlib.util.find_spec(module) is not None
+
+
 @pytest.mark.parametrize("module", MODULES)
 def test_every_module_of_the_provider_imports(module):
+    if module in NEEDS_MEM0AI:
+        pytest.importorskip("mem0", reason="mem0ai is installed by provision.sh, not by upstream's test environment")
     importlib.import_module(module)
 
 
