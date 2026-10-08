@@ -1566,6 +1566,25 @@ _INFO_QUESTION_RE = re.compile(
 # //// END Neoffice ////
 
 
+# //// Neoffice — « quel rapport pour … ? », « où je trouve … ? », « dans quel menu … ? » (09.10): a
+# //// question about WHERE something lives in Neoffice. Its answer fits in one sentence, so the
+# //// classifier may call it 'direct', but on the chat the orchestrator holds no map of Neoffice (no
+# //// frappe tool, by design: configure.sh), while every pole reads it (neoffice_feature_map). A
+# //// 'direct' verdict on one is asked again in route_chat_message.
+_WHERE_TO_FIND_RE = re.compile(
+    r"\bquel(?:le)?s?\s+(?:rapports?|[ée]crans?|menus?|modules?|onglets?|espaces?|tableaux?\s+de\s+bord)\b"
+    r"|\bdans\s+quel(?:le)?s?\s+(?:menu|module|[ée]cran|onglet|espace|page)\b"
+    r"|\bo[uù]\s+(?:est[-\s]ce\s+qu(?:e\s+|['’]\s*))?(?:je\s+|j['’]|on\s+|l['’]on\s+)?"
+    r"(?:peux\s+|peut\s+|pourrais\s+|dois\s+|doit\s+)?(?:trouv|voi[rst]\b|consult|retrouv|regard)"
+    r"|\bo[uù]\s+se\s+trouve(?:nt)?\b"
+    r"|\bwhere\s+(?:can|do|could|should)\s+(?:i|we)\s+(?:find|see|look)\b|\bwhich\s+(?:report|screen|menu)\b"
+    r"|\bwo\s+(?:finde|sehe)\s+ich\b|\bwelche[rs]?\s+(?:bericht|auswertung)\b"
+    r"|\bdove\s+(?:trovo|vedo)\b|\bquale\s+(?:report|rapporto)\b",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
 def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     """Unambiguous keyword → pole/'DIRECT' without an LLM call; else None (→ LLM classify).
 
@@ -1914,6 +1933,7 @@ def classify(
     timeout: float = 8.0,
     hint: Optional[str] = None,
     page_doctype: Optional[str] = None,  # //// Neoffice — failure fallback, see _DOCTYPE_POLES
+    exclude_direct: bool = False,  # //// Neoffice — asked again for a pole, see _WHERE_TO_FIND_RE
 ) -> str:
     """Return a pole in :data:`POLES`, or ``"DIRECT"``.
 
@@ -1930,7 +1950,8 @@ def classify(
     if not msg:
         return "DIRECT"
     # Latency: obvious messages skip the ~1s LLM call → the ack lands instantly.
-    fast = _fast_path(msg, prior)
+    # //// Neoffice — asked again for a pole: the rules and the page already answered (exclude_direct)
+    fast = None if exclude_direct else _fast_path(msg, prior)
     if fast:
         logger.info("nora_chat_router: keyword fast-path → %s (no LLM call)", fast)
         return fast
@@ -1939,12 +1960,12 @@ def classify(
     # //// ALREADY said it aloud (« je transmets aux ventes… »). Without the hint the
     # //// classifier decided again, and the ack could name one pole while another worked.
     # //// After the deterministic rules, which stay the only thing above the page's word.
-    if hint in POLES:
+    if hint in POLES and not exclude_direct:
         logger.info("nora_chat_router: page pole hint → %s (no LLM call)", hint)
         return hint
     # //// END Neoffice ////
     # //// Neoffice — « ce document » on a page with a document open: the page decides (#914).
-    page_pole = _page_document_pole(msg, page_doctype)
+    page_pole = None if exclude_direct else _page_document_pole(msg, page_doctype)
     if page_pole:
         logger.info("nora_chat_router: the message points at the page's %s → %s (no LLM call)",
                     page_doctype, page_pole)
@@ -1957,6 +1978,13 @@ def classify(
             f"→ pôle « {prior['pole']} ». Si ce nouveau message est une suite/précision de ce "
             f"qui précède, garde le pôle « {prior['pole']} ».]\n{user_content}"
         )
+    # //// Neoffice — see _WHERE_TO_FIND_RE: the pole of the subject, never 'direct'
+    if exclude_direct:
+        user_content = (
+            "[Ce message demande OÙ trouver quelque chose dans Neoffice : 'direct' est exclu, "
+            "réponds par le pôle de son sujet.]\n" + user_content
+        )
+    # //// END Neoffice ////
     messages = [
         {"role": "system", "content": _CLASSIFIER_SYSTEM},
         {"role": "user", "content": user_content},
@@ -2710,6 +2738,29 @@ def route_chat_message(
     ):
         logger.info("nora_chat_router: DIRECT → support (a request for help, read by nora)")
         category = "support"
+    # //// END Neoffice ////
+    # //// Neoffice — « où je trouve … ? », « quel rapport pour … ? » is never DIRECT (09.10), see
+    # //// _WHERE_TO_FIND_RE. Sent to the orchestrator, « Quel rapport me permet de suivre ce que mes
+    # //// clients me doivent encore ? » called a map it does not hold, then searched its doctrine wiki
+    # //// five times with the same words until the guardrail ended the turn on « je n'ai pas réussi »
+    # //// (capability bench, 08.10), where the compta pole had named the receivables report from the
+    # //// map every night before. Asked once more with 'direct' excluded, the classifier names the
+    # //// pole of the subject; support, which owns help with using Neoffice, when it still cannot.
+    if (
+        category == "DIRECT"
+        and _WHERE_TO_FIND_RE.search(message or "")
+        and not (_canned_text or _note_request or _space_turn)
+    ):
+        again = classify(
+            message,
+            call_llm_fn=call_llm_fn,
+            main_runtime=main_runtime,
+            prior=prior,
+            timeout=classify_timeout,
+            exclude_direct=True,
+        )
+        category = again if again in POLES else "support"
+        logger.info("nora_chat_router: DIRECT → %s (where to find something in Neoffice)", category)
     # //// END Neoffice ////
     category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
