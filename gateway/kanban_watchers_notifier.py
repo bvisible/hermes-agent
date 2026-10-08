@@ -654,22 +654,75 @@ def _neoffice_fmt_gave_up(ev, n) -> tuple:
             f"Pouvez-vous la reformuler ?"), None, None
 
 
-_EVENT_FORMATTERS.update({
+def _neoffice_payload_text(ev, key: str, limit: int) -> str:
+    """A payload value as plain text, cut at ``limit``; "" when absent.
+
+    Not upstream's ``_clip``: since v0.21.6 its third argument is an i18n catalog KEY rendered
+    with ``{value}``, and our French templates passed there came out verbatim, braces included:
+    « … (bloquée {} fois pour la même raison) : {} » (found by upstream's own test, 08.10)."""
+    value = _payload(ev, key)
+    return str(value)[:limit] if value else ""
+
+
+def _neoffice_fmt_block_loop(ev, n) -> tuple:
+    """Upstream pings "🛑 … routed to TRIAGE"; without it a task stalls in triage SILENTLY, so we
+    keep the alert but say it as Nora: no board id, no "Kanban", French, vouvoiement.
+
+    Upstream's distinction (#111125) is kept: only a block typed ``needs_input`` carries a
+    question for the person, so only that one asks for a decision and shows its reason. A
+    repeated technical block is announced without asking anything, and its technical reason
+    stays out of the chat (it was « … j'ai besoin de votre décision » for every block)."""
+    head = _neoffice_head(n)
+    recurrences = _neoffice_payload_text(ev, "recurrences", 200)
+    times = f" (bloquée {recurrences} fois pour la même raison)" if recurrences else ""
+    if _payload(ev, "kind") == "needs_input":
+        reason = _neoffice_payload_text(ev, "reason", 160)
+        return (f"🛑 {head} — j'ai besoin de votre décision pour continuer{times}"
+                + (f" : {reason}" if reason else "")), None, None
+    return f"🛑 {head} — je bute sur cette demande{times} ; je la signale pour qu'elle soit reprise.", None, None
+
+
+# //// Neoffice — the branded formatters speak only to NORA's customer chats (08.10).
+# //// Every subscription NORA creates is on the webhook platform (desk Quick Chat, WhatsApp
+# //// through the router), and that is where a raw board id or an English operator ping would
+# //// reach a customer. Any other platform keeps upstream's operator pings, wake handoff and
+# //// review wording untouched: replacing them for every platform broke 17 upstream tests
+# //// for no customer of ours. Upstream's formatters are kept and called for those platforms.
+_NEOFFICE_UPSTREAM_FORMATTERS = dict(_EVENT_FORMATTERS)
+
+
+def _neoffice_customer_chat(n) -> bool:
+    return getattr(n, "platform_str", "") == "webhook"
+
+
+def _neoffice_silent(ev, n) -> tuple:
+    return None, None, None
+
+
+def _neoffice_for_customer_chats(kind: str, ours):
+    def formatter(ev, n) -> tuple:
+        if _neoffice_customer_chat(n):
+            return ours(ev, n)
+        upstream = _NEOFFICE_UPSTREAM_FORMATTERS.get(kind)
+        return upstream(ev, n) if upstream is not None else (None, None, None)
+
+    return formatter
+
+
+for _kind, _ours in {
     "completed": _neoffice_fmt_completed,
     "blocked": _neoffice_fmt_blocked,
     "gave_up": _neoffice_fmt_gave_up,
     "crashed": lambda ev, n: (f"✋ {_neoffice_head(n)} — incident technique, je réessaie.", None, None),
     "timed_out": lambda ev, n: (
         f"⏱ {_neoffice_head(n)} — la demande a pris trop de temps, je réessaie.", None, None),
-    # Upstream pings "🛑 … routed to TRIAGE"; without it a task stalls in triage SILENTLY,
-    # so we keep the alert but say it as Nora: no board id, no "Kanban", French, vouvoiement.
-    "block_loop_detected": lambda ev, n: (
-        f"🛑 {_neoffice_head(n)} — je bute sur cette demande et j'ai besoin de votre décision"
-        f"{_clip(ev, 'recurrences', ' (bloquée {} fois pour la même raison)', 200)}"
-        f"{_clip(ev, 'reason', ' : {}', 160)}", None, None),
-})
-for _silent in ("status", "review_requested", "changes_requested"):
-    _EVENT_FORMATTERS.pop(_silent, None)
+    "block_loop_detected": _neoffice_fmt_block_loop,
+    # Intermediate transitions between agents, silent for a customer (see above).
+    "status": _neoffice_silent,
+    "review_requested": _neoffice_silent,
+    "changes_requested": _neoffice_silent,
+}.items():
+    _EVENT_FORMATTERS[_kind] = _neoffice_for_customer_chats(_kind, _ours)
 # //// END Neoffice ////
 
 
