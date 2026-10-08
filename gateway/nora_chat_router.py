@@ -250,6 +250,18 @@ def _nothing_proposed_reply(message: str, language: Optional[str]) -> Optional[s
 # //// END Neoffice ////
 
 
+# //// Neoffice — a bare yes is titled by what it confirms (08.10). A worker's result reads « ✅ <pole> —
+# //// <title> », and the title was the message: « ✅ Ventes — Oui, vas-y. » named nothing (Quick Chat, a
+# //// price change confirmed). A bare yes takes the title of the request it answers, and a second yes keeps it.
+def _task_title(message: Optional[str], prior: Optional[dict]) -> str:
+    msg = (message or "").strip()
+    confirmed = (prior or {}).get("title") or (prior or {}).get("msg")
+    if confirmed and _NOTE_BARE_ACK_RE.match(msg) and _YES_HEAD_RE.match(msg):
+        return confirmed
+    return msg[:200] or "Demande"
+# //// END Neoffice ////
+
+
 def note_nora_reply(conversation_id: Optional[str], text: Optional[str]) -> None:
     """Record NORA's own delivered reply into the conversation film.
 
@@ -2708,6 +2720,7 @@ def route_chat_message(
         _LAST_ROUTE[conversation_id] = {
             "msg": (message or "")[:200],
             "pole": (category if category in POLES else None),
+            "title": _task_title(message, prior),  # //// Neoffice — what a later bare yes is titled by ////
         }
         # //// Neoffice — accumulate the rolling conversation film (INCLUDING DIRECT turns,
         # which carry the goal, e.g. the opening "créer un abonnement"). "User:"-prefixed;
@@ -3075,7 +3088,7 @@ def route_chat_message(
             # //// END Neoffice ////
             task_id = kanban_db.create_task(
                 conn,
-                title=(message or "").strip()[:200] or "Demande",
+                title=_task_title(message, prior),  # //// Neoffice — a bare yes, by what it confirms ////
                 body=_body,
                 assignee=category,
                 created_by="nora-chat-router",
