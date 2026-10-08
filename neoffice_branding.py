@@ -148,10 +148,14 @@ _NO_REPLY_RE = re.compile(r"^\s*⚠️?\s*No reply\s*:", re.IGNORECASE)
 # //// is not a slash command: the slash must follow a space, a bracket or a backtick),
 # //// plus "Hermes" as the subject of a sentence — the customer talks to NORA. The test
 # //// renders EVERY template of the module, so a copy added upstream is checked too.
+# //// v0.21.6 translates the gateway's copy (agent/i18n.py), so a sentence anchored on its
+# //// English words misses the same copy in French: the commands are the part no catalog
+# //// translates — `continue` and any backticked `hermes …` command in every language, plus
+# //// /reset, /login and /stop, which the gateway's error copy names.
 _UPSTREAM_FAILURE_COPY_RE = re.compile(
-    r"(?:^|[\s(`])/(?:retry|model|new|compress|reasoning)\b"
-    r"|`hermes (?:doctor|setup|model|fallback add|auth)\b"
-    r"|\bSend `continue`"
+    r"(?:^|[\s(`])/(?:retry|model|new|compress|reasoning|reset|login|stop)\b"
+    r"|`hermes\b"
+    r"|`continue`"
     r"|\bHermes (?:was shutting down|hit|couldn't|could not|didn't|did not)\b",
     re.IGNORECASE,
 )
@@ -231,14 +235,149 @@ REPLIES = {
         "it": "Interrompo la richiesta in corso per rispondere al suo messaggio.",
         "en": "I am interrupting the current request to reply to your message.",
     },
+    # //// Neoffice — two meanings the gateway's own notices carry (v0.21.6, see _CATALOG_NOTICES):
+    # //// the message is KEPT and will be answered after a restart, or it was NOT taken and must
+    # //// be sent again. Different instructions for the reader, so different sentences.
+    "restarting": {
+        "fr": "Je redémarre un instant ; votre message sera traité dès mon retour.",
+        "de": "Ich starte kurz neu; Ihre Nachricht wird bearbeitet, sobald ich wieder da bin.",
+        "it": "Mi sto riavviando un istante; il suo messaggio sarà elaborato appena sarò di nuovo disponibile.",
+        "en": "I am restarting for a moment; your message will be handled as soon as I am back.",
+    },
+    "resend": {
+        "fr": "Je n'ai pas pu traiter votre message pour le moment. Renvoyez-le dans un instant.",
+        "de": "Ich konnte Ihre Nachricht im Moment nicht bearbeiten. Senden Sie sie bitte in einem "
+              "Augenblick erneut.",
+        "it": "Non ho potuto elaborare il suo messaggio in questo momento. Lo invii di nuovo tra un istante.",
+        "en": "I could not handle your message just now. Please send it again in a moment.",
+    },
 }
 
 
 def reply(key: str, lang=None) -> str:
     """The customer sentence for ``key``, in ``lang``; French when it is unknown."""
-    par_langue = REPLIES[key]
+    by_language = REPLIES[key]
     code = str(lang or "").strip().lower().replace("_", "-").split("-")[0]
-    return par_langue.get(code) or par_langue["fr"]
+    return by_language.get(code) or by_language["fr"]
+# //// END Neoffice ////
+
+
+# //// Neoffice — upstream's gateway notices are CATALOGUED since v0.21.6 (agent/i18n.py) and
+# //// rendered in the profile's display.language, which provision.sh sets to French so the
+# //// clarify prompt reads French (our own French literal until then). Every rule above
+# //// anchors on English words: in French, « ↪ Exécution en cours redirigée », « ⚠️ Pas de
+# //// réponse : … » or « ⏳ Le gateway est en cours de redémarrage… » reached the customer
+# //// whole (measured on the merged tree, 08.10: seven notices out of eight).
+# ////
+# //// So these notices are also recognised by their catalog entry, read from the catalog the
+# //// process renders with: the active language, and English, which t() falls back to for a
+# //// key the language lacks. Whatever display.language says, the rule holds, and a reworded
+# //// entry is still the same entry. Each key's text OPENS the message the gateway sends (the
+# //// head of a busy notice, the prefix of an unanswered turn, the whole of an error); the
+# //// anchor is its fixed part up to the first placeholder, leading symbol REQUIRED, so an
+# //// answer that merely opens on the same words (« Pas de réponse du client depuis lundi »)
+# //// is left alone. The test renders every key with upstream's own code, in four languages.
+_CATALOG_NOTICES = (
+    ("gateway.busy.steered_subagents_head", "steered"),
+    ("gateway.busy.steered_head", "steered"),
+    ("gateway.busy.redirected_head", "redirected"),
+    ("gateway.busy.subagent_working_head", "queued"),
+    ("gateway.busy.compressing_head", "queued"),
+    ("gateway.busy.queued_head", "queued"),
+    ("gateway.busy.interrupting_head", "interrupting"),
+    ("gateway.busy.drain_queued", "restarting"),
+    ("gateway.busy.drain_rejected", "resend"),
+    ("gateway.busy.drain_rejected_new_work", "resend"),
+    ("gateway.busy.draining_maintenance", "resend"),
+    ("gateway.busy.another_turn_running", "resend"),
+    ("explainer.no_reply_prefix", "no_reply"),
+    ("gateway.errors.rate_limited", "provider_unavailable"),
+    ("gateway.errors.auth_failed", "provider_unavailable"),
+    ("gateway.errors.connection_interrupted", "provider_unavailable"),
+    ("gateway.errors.unreachable", "provider_unavailable"),
+    ("gateway.errors.connection_unknown", "provider_unavailable"),
+    ("gateway.errors.usage_limit_resets", "provider_unavailable"),
+    ("gateway.errors.provider_kept_failing", "provider_unavailable"),
+    ("gateway.errors.no_credentials", "provider_unavailable"),
+    ("gateway.errors.bad_request", "no_reply"),
+    ("gateway.errors.context_overflow", "no_reply"),
+    ("gateway.errors.generic_failed", "no_reply"),
+    ("gateway.errors.generic_failed_with_hint", "no_reply"),
+    ("gateway.errors.stopped_before_finishing", "no_reply"),
+    ("gateway.errors.no_response", "no_reply"),
+    ("gateway.errors.unexpected_silence", "no_reply"),
+    ("gateway.errors.history_unavailable", "no_reply"),
+    ("gateway.errors.interrupted_before_start", "resend"),
+    ("gateway.errors.previous_turn_cleanup", "resend"),
+    ("gateway.errors.session_storage_unavailable", "resend"),
+    ("gateway.errors.session_storage_unavailable_disk", "resend"),
+)
+# The notices a customer causes by typing while NORA works: ordinary impatience, logged at INFO.
+_IMPATIENCE_REPLIES = frozenset({"steered", "redirected", "queued", "interrupting", "restarting"})
+_CATALOG_ANCHOR_WORDS = 8
+_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
+_catalog_anchors_by_language: dict = {}
+
+
+def _catalog_anchor(text: str):
+    """The start-anchored pattern of a catalog entry's opening; None when too thin to be specific.
+
+    The opening runs over placeholders (a bounded wildcard each) up to eight literal words: two
+    entries can share everything before their first placeholder — « ⏳ Gateway {action} — queued… »
+    and « ⏳ Gateway {action} und nimmt… » — and differ only after it (found by the test, 08.10).
+    """
+    template = (text or "").strip()
+    cut = 0
+    while cut < len(template) and not template[cut].isalnum() and template[cut] != "{":
+        cut += 1
+    symbols = [c for c in template[:cut] if not c.isspace() and c != "\ufe0f"]
+    parts, words_left, literal = [], _CATALOG_ANCHOR_WORDS, ""
+    for index, chunk in enumerate(_PLACEHOLDER_RE.split(template[cut:])):
+        if index:
+            parts.append(r".{0,120}?")
+        words = chunk.split()[:words_left]
+        words_left -= len(words)
+        literal += "".join(words)
+        if words:
+            parts.append(r"\s+".join(re.escape(word) for word in words))
+        if words_left <= 0:
+            break
+    while parts and parts[-1] == r".{0,120}?":
+        parts.pop()
+    if len(literal) < 5 or (not symbols and _CATALOG_ANCHOR_WORDS - words_left < 3):
+        return None
+    lead = "".join(re.escape(c) + "\ufe0f?" for c in symbols)
+    return re.compile(r"\s*" + lead + r"\s*" + r"\s*".join(parts), re.IGNORECASE)
+
+
+def _catalog_notices() -> tuple:
+    """(pattern, reply key) for every catalogued notice, in the active language and in English.
+
+    Built once per language and cached: the catalogs are the ones t() already loaded to render
+    the notices, so the cost is a few dozen regexes. Empty when the catalog cannot be read; the
+    English anchors above stay as the floor.
+    """
+    try:
+        from agent.i18n import get_language, t
+
+        active = get_language()
+    except Exception:
+        return ()
+    cached = _catalog_anchors_by_language.get(active)
+    if cached is not None:
+        return cached
+    anchors = []
+    for language in dict.fromkeys((active, "en")):
+        for key, reply_key in _CATALOG_NOTICES:
+            try:
+                text = t(key, lang=language)
+            except Exception:
+                continue
+            pattern = _catalog_anchor(text) if text and text != key else None
+            if pattern is not None:
+                anchors.append((pattern, reply_key))
+    _catalog_anchors_by_language[active] = tuple(anchors)
+    return _catalog_anchors_by_language[active]
 # //// END Neoffice ////
 
 
@@ -284,6 +423,15 @@ def strip_internal_mechanics(text: str, lang=None) -> str:
         logger.warning("neoffice_branding: unanswered turn hidden from the customer: %s",
                        text[:200].replace("\n", " "))
         return reply("no_reply", lang)
+    # //// END Neoffice ////
+    # //// Neoffice — the same notices in the catalog's words, any language (v0.21.6), see
+    # //// _CATALOG_NOTICES above.
+    for _pattern, _key in _catalog_notices():
+        if _pattern.match(text):
+            logger.log(logging.INFO if _key in _IMPATIENCE_REPLIES else logging.WARNING,
+                       "neoffice_branding: gateway notice (%s) rewritten for the customer: %s",
+                       _key, text[:200].replace("\n", " "))
+            return reply(_key, lang)
     # //// END Neoffice ////
     # //// Neoffice — upstream's failure copy, see _UPSTREAM_FAILURE_COPY_RE above.
     if _UPSTREAM_FAILURE_COPY_RE.search(text):
