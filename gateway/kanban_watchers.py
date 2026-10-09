@@ -27,25 +27,56 @@ from gateway.kanban_watchers_common import (
     _to_thread_process_service,
     logger,
 )
-from gateway.kanban_watchers_notifier import _KanbanNotification, _notifier_collect
+from gateway.kanban_watchers_notifier import _KanbanNotification, _destination_key, _notifier_collect
 
 # //// Neoffice — added (#625): deliveries of one notifier tick, run concurrently.
 NOTIFIER_CONCURRENCY = 8
+# //// Neoffice — (09.10) and a tick waits for them at most NOTIFIER_TICK_WAIT_S. It used to wait for all of
+# //// them before the next collect: on the development instance the WhatsApp router timed out (15 s, twelve
+# //// attempts) on two test results, and a desk answer that completed at 05:31:15 reached its chat at
+# //// 05:31:31. A delivery still running after that goes on in the background; its destination is left
+# //// unclaimed until it ends (_destination_key), and the watcher drains the rest, NOTIFIER_DRAIN_S at most,
+# //// before it returns.
+NOTIFIER_TICK_WAIT_S = 1.0
+NOTIFIER_DRAIN_S = 20.0
+
+
+def _deliveries_in_flight(runner) -> dict:
+    inflight = getattr(runner, "_kanban_deliveries_in_flight", None)
+    if inflight is None:
+        inflight = runner._kanban_deliveries_in_flight = {}
+    return inflight
+
+
+def _busy_destinations(runner) -> frozenset:
+    return frozenset(key for key, task in _deliveries_in_flight(runner).items() if not task.done())
+
+
+async def _drain_deliveries(runner, timeout: float) -> None:
+    pending = [task for task in _deliveries_in_flight(runner).values() if not task.done()]
+    if pending:
+        await asyncio.wait(pending, timeout=timeout)
 
 
 async def _deliver_concurrently(runner, deliveries, platform_cls, sub_fail_counts) -> None:
     """Deliver one tick's subscriptions at most NOTIFIER_CONCURRENCY destinations at a time.
 
     Deliveries to the same destination (platform, chat, thread) stay in order, one after the
-    other; a delivery that raises is logged and never cancels the others."""
+    other; a delivery that raises is logged and never cancels the others. Returns once they all
+    ended or NOTIFIER_TICK_WAIT_S passed; the ones still running go on in the background."""
     groups: dict = {}
     for d in deliveries:
-        sub = d.get("sub") or {}
-        key = ((sub.get("platform") or "").lower(), sub.get("chat_id"), sub.get("thread_id") or "")
-        groups.setdefault(key, []).append(d)
-    gate = asyncio.Semaphore(NOTIFIER_CONCURRENCY)
+        groups.setdefault(_destination_key(d.get("sub") or {}), []).append(d)
+    if not groups:
+        return
+    gate = getattr(runner, "_kanban_delivery_gate", None)
+    if gate is None:
+        gate = runner._kanban_delivery_gate = asyncio.Semaphore(NOTIFIER_CONCURRENCY)
+    inflight = _deliveries_in_flight(runner)
 
-    async def run(group) -> None:
+    async def run(group, before) -> None:
+        if before is not None:  # never two deliveries to one chat at once, whatever the collect saw
+            await asyncio.wait([before])
         async with gate:
             for d in group:
                 try:
@@ -55,7 +86,18 @@ async def _deliver_concurrently(runner, deliveries, platform_cls, sub_fail_count
                 except Exception as exc:  # noqa: BLE001 — one delivery never stops the others
                     logger.warning("kanban notifier: delivery failed: %s", exc)
 
-    await asyncio.gather(*(run(group) for group in groups.values()))
+    def forget(key, task) -> None:
+        if inflight.get(key) is task:
+            del inflight[key]
+
+    tasks = []
+    for key, group in groups.items():
+        before = inflight.get(key)
+        task = asyncio.ensure_future(run(group, before if before is not None and not before.done() else None))
+        inflight[key] = task
+        task.add_done_callback(lambda done, key=key: forget(key, done))
+        tasks.append(task)
+    await asyncio.wait(tasks, timeout=NOTIFIER_TICK_WAIT_S)
 # //// END Neoffice ////
 from gateway.kanban_watchers_dispatcher import (
     _KanbanDispatcher,
@@ -310,12 +352,14 @@ class GatewayKanbanWatchersMixin:
                 deliveries = await asyncio.to_thread(
                     _notifier_collect, self, _kb,
                     notifier_profile=notifier_profile, gc_due=_gc_due, gc_retention_days=_retention,
+                    busy=_busy_destinations(self),  # //// Neoffice — see NOTIFIER_TICK_WAIT_S ////
                 )
                 # //// Neoffice — upstream delivered every subscription one after the other:
                 # //// a recipient that hangs the WhatsApp router (15 s per attempt, 12
                 # //// attempts) delayed every result behind it, and on osiris a worker's
                 # //// answer never reached its user (#625). Deliveries now run concurrently,
-                # //// bounded, grouped by destination so one chat keeps its order.
+                # //// bounded, grouped by destination so one chat keeps its order, and the
+                # //// tick waits for them NOTIFIER_TICK_WAIT_S at most (09.10).
                 await _deliver_concurrently(self, deliveries, _Platform, sub_fail_counts)
                 # //// END Neoffice ////
             except Exception as exc:
@@ -324,6 +368,9 @@ class GatewayKanbanWatchersMixin:
             # //// KANBAN_NOTIFIER_HOT_UNTIL.
             await self._kanban_notifier_wait(interval)
             # //// END Neoffice ////
+        # //// Neoffice — finish the deliveries the last ticks left running (see NOTIFIER_TICK_WAIT_S).
+        await _drain_deliveries(self, NOTIFIER_DRAIN_S)
+        # //// END Neoffice ////
 
     def _kanban_sub_op(self, board: Optional[str], op: str, sub: dict, **extra: Any) -> None:
         """Sync helper (runs in to_thread): call ``kanban_db_notify.<op>`` for one subscription on its board."""

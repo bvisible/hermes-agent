@@ -45,6 +45,12 @@ def _pin_first():
 # ``review_requested`` wakes the origin like a block but is not one;
 # the task is not archived so later review cycles keep notifying.
 TERMINAL_KINDS = ("completed", "blocked", "gave_up", "crashed", "timed_out", "status", "archived", "unblocked", "block_loop_detected", "review_requested", "changes_requested")
+# //// Neoffice — added (09.10): where a subscription delivers. A tick leaves a destination whose previous
+# //// delivery is still running unclaimed (see kanban_watchers.NOTIFIER_TICK_WAIT_S).
+def _destination_key(sub: dict) -> tuple:
+    return ((sub.get("platform") or "").lower(), sub.get("chat_id"), sub.get("thread_id") or "")
+# //// END Neoffice ////
+
 # Kinds that hand a decision back to the origin, which must take a turn.
 # status/archived/unblocked are bookkeeping.
 _WAKE_KINDS = ("completed", "gave_up", "crashed", "timed_out", "blocked", "review_requested", "changes_requested", "block_loop_detected")
@@ -234,8 +240,10 @@ def _adapter_for_subscription(runner: Any, platform: Any, sub: dict, owner_profi
 class _Collector:
     """One tick's claim state: which profiles/platforms this gateway serves and the GC gate."""
 
-    def __init__(self, runner: Any, kb: Any, *, notifier_profile: Optional[str], gc_due: bool, gc_retention_days: int) -> None:
+    def __init__(self, runner: Any, kb: Any, *, notifier_profile: Optional[str], gc_due: bool, gc_retention_days: int,
+                 busy: frozenset = frozenset()) -> None:  # //// Neoffice — busy: see _destination_key
         self.runner = runner
+        self.busy = busy  # //// Neoffice — destinations whose delivery still runs: left unclaimed
         self.kb = kb
         self.notifier_profile = notifier_profile
         self.gc_due = gc_due
@@ -311,6 +319,14 @@ class _Collector:
         """Claim one subscription's unseen events; None when skipped or nothing new."""
         owner_profile = sub.get("notifier_profile") or None
         platform = (sub.get("platform") or "").lower()
+        # //// Neoffice — a destination whose previous delivery still runs is not claimed this tick (09.10):
+        # //// the next claim would move the cursor that delivery may still rewind, and the chat would get
+        # //// the newer message first. The tick after it ends claims what is left.
+        if self.busy and _destination_key(sub) in self.busy:
+            logger.debug("kanban notifier: %s on %s left for a later tick; a delivery to it still runs",
+                         sub.get("task_id"), platform or "<missing>")
+            return None
+        # //// END Neoffice ////
         if platform not in self.active_platforms:
             logger.debug("kanban notifier: subscription for %s on %s skipped; adapter not connected",
                          sub.get("task_id"), platform or "<missing>")
@@ -382,7 +398,8 @@ class _Collector:
             conn.close()
 
 
-def _notifier_collect(runner: Any, kb: Any, *, notifier_profile: Optional[str], gc_due: bool, gc_retention_days: int) -> list[dict]:
+def _notifier_collect(runner: Any, kb: Any, *, notifier_profile: Optional[str], gc_due: bool, gc_retention_days: int,
+                      busy: frozenset = frozenset()) -> list[dict]:  # //// Neoffice — busy: see _destination_key
     """Claim unseen terminal events for every owned subscription on every board.
 
     Each gateway polls only subscriptions owned by profiles whose adapters it
@@ -391,6 +408,7 @@ def _notifier_collect(runner: Any, kb: Any, *, notifier_profile: Optional[str], 
     """
     return _Collector(
         runner, kb, notifier_profile=notifier_profile, gc_due=gc_due, gc_retention_days=gc_retention_days,
+        busy=busy,  # //// Neoffice ////
     ).collect()
 
 
