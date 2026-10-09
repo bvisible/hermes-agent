@@ -3348,6 +3348,11 @@ def route_chat_message(
     # Create the task exactly as the kanban_create tool does (assignee + running →
     # the dispatcher spawns the specialist worker). idempotency_key (the webhook
     # delivery id) makes a retried POST reuse the same task instead of double-routing.
+    # //// Neoffice — the time of each step, said when routing is slow (09.10). On the development
+    # //// instance a task was created at once and its ack posted 12.6 s later, with nothing logged in
+    # //// between (the ack itself took 44 ms at nginx): the next one must name its step.
+    _steps = {"start": _time_thread.monotonic()}
+    # //// END Neoffice ////
     try:
         from hermes_cli import kanban_db, kanban_db_connect, kanban_db_notify
 
@@ -3491,6 +3496,7 @@ def route_chat_message(
                 idempotency_key=idempotency_key,
                 **_ws_kwargs,  # //// Neoffice — stable worker cwd ////
             )
+            _steps["created"] = _time_thread.monotonic()  # //// Neoffice — see _steps ////
             _add_notify_sub(
                 kanban_db_notify,
                 conn,
@@ -3503,6 +3509,7 @@ def route_chat_message(
                 conversation_id=_unified_cid,
                 page_context=page_context,  # //// Neoffice — carries the voice source (see _add_notify_sub)
             )
+            _steps["subscribed"] = _time_thread.monotonic()  # //// Neoffice — see _steps ////
             # //// Neoffice — wake the dispatcher NOW: without the poke the new
             # task waited for the next periodic tick (0..interval s of dead
             # time; 3 s measured). Best-effort — the tick still guarantees it.
@@ -3522,12 +3529,26 @@ def route_chat_message(
         return {"routed": False, "category": category, "ack": None, "task_id": None}
 
     ack = build_ack(category, language)
+    _steps["closed"] = _time_thread.monotonic()  # //// Neoffice — see _steps ////
     # Deliver the immediate ack NOW so the user sees "I'm handing this to <pole>" right
     # away — it also makes the ~10s worker wait feel responsive. Failure to deliver the
     # ack must NEVER fail the routing (the worker result still arrives via the notifier).
     ack_delivered = _post_ack_to_callback(
         ack, {**(deliver_extra or {}), "conversation_id": _unified_cid}
     )
+    # //// Neoffice — see _steps
+    _steps["acked"] = _time_thread.monotonic()
+    if _steps["acked"] - _steps["start"] > 2.0:
+        logger.warning(
+            "nora_chat_router: slow routing for task %s: create %.1f s, subscription %.1f s, "
+            "close %.1f s, ack %.1f s",
+            task_id,
+            _steps.get("created", _steps["start"]) - _steps["start"],
+            _steps.get("subscribed", _steps["start"]) - _steps.get("created", _steps["start"]),
+            _steps["closed"] - _steps.get("subscribed", _steps["start"]),
+            _steps["acked"] - _steps["closed"],
+        )
+    # //// END Neoffice ////
     logger.info(
         "nora_chat_router: routed deterministically chat=%s → %s task=%s ack_delivered=%s",
         session_chat_id, category, task_id, ack_delivered,
