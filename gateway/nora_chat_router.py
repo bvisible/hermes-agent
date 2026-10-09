@@ -1181,14 +1181,56 @@ def _is_one_off_reminder(msg: str) -> bool:
     )
 
 
-# Handed to the orchestrator with the message. Routing it to NORA was not enough: on the dev
-# instance NORA held the tool and still delegated the reminder to the support pole with
-# kanban_create, then answered « C'est noté » with nothing written (2026-09-24). The code
-# decided it is a reminder; the instruction says so at the decision point.
-# //// Neoffice — a recurring request at a cadence the scheduler cannot run (« tous les 15
-# //// jours »). Recovered to a pole as a one-shot, it ran the job once and never mentioned
-# //// the cadence (dev instance, 2026-09-24). The orchestrator explains and asks; it sees
-# //// the conversation, so « chaque lundi alors » that follows keeps the original request.
+# //// Neoffice — a reminder asked WITHOUT its moment (09.10). « Rappelle-moi d'appeler le fournisseur
+# //// de carrelage » went to the orchestrator, which set it at a time it made up (today 09:00) after
+# //// 35 s, and « Demain à 10h » that followed set a SECOND one. The moment is asked in code, the
+# //// request kept 10 minutes, and the answer completes it for nora's route_reminder. Only « of
+# //// doing » forms: « rappelle-moi le nom du client » asks for information, not for a reminder.
+_REMINDER_TO_DO_RE = re.compile(
+    r"\b(?:rappelle[rz]?[- ]moi\s+(?:de|d['’]|que)|fais[- ]moi\s+penser\s+(?:[àa]|de|d['’]|que)|"
+    r"(?:mets|mettre|mettez|cr[ée]e[rz]?|ajoute[rz]?)[- ](?:moi\s+)?un\s+rappel\s+(?:pour|de|d['’])|"
+    r"remind\s+me\s+(?:to|that|about)|erinnere?\s+mich\s+(?:an|daran|dass)|ricordami\s+(?:di|che))\b",
+    re.IGNORECASE,
+)
+_REMINDER_WHEN = {
+    "fr": "Pour quand voulez-vous ce rappel ? Par exemple « demain à 10 h » ou « vendredi à 8 h ».",
+    "de": "Wann soll ich Sie daran erinnern? Zum Beispiel « morgen um 10 Uhr ».",
+    "it": "Quando vuole che glielo ricordi? Per esempio « domani alle 10 ».",
+    "en": "When should I remind you? For example « tomorrow at 10am ».",
+}
+_PENDING_REMINDER: dict = {}
+_PENDING_REMINDER_TTL = 600  # seconds the question stays open
+
+
+def _needs_reminder_moment(msg: str) -> bool:
+    """« Rappelle-moi d'appeler X »: a reminder of something to do, with no moment and no habit."""
+    msg = msg or ""
+    return bool(
+        _REMINDER_TO_DO_RE.search(msg)
+        and not _REMINDER_MOMENT_RE.search(msg)
+        and not _PAYMENT_REMINDER_RE.search(msg)
+        and not _RECUR_RE.search(msg)
+    )
+
+
+def _take_pending_reminder(conversation_id: Optional[str], message: str) -> Optional[str]:
+    """The reminder NORA asked the moment of, completed by *message* when it gives one; else None.
+    The question is consumed by a refusal or by anything else; a bare yes leaves it open."""
+    if not conversation_id:
+        return None
+    pending = _PENDING_REMINDER.pop(conversation_id, None)
+    if not pending or _time_note.time() - pending[0] > _PENDING_REMINDER_TTL:
+        return None
+    msg = (message or "").strip()
+    if _NOTE_BARE_ACK_RE.match(msg):
+        _PENDING_REMINDER[conversation_id] = pending
+        return None
+    if not msg or _NOTE_CANCEL_RE.match(msg) or not _REMINDER_MOMENT_RE.search(msg) or _RECUR_RE.search(msg):
+        return None
+    return f"{pending[1].rstrip(' .!')} {msg}"
+# //// END Neoffice ////
+
+
 # //// Neoffice — the person's SCHEDULED tasks are the orchestrator's (09.10): on the chat she holds
 # //// nora_list_tasks, nora_pause_task and nora_delete_task (mcp-tasks), and no pole and no code route
 # //// lists, pauses or deletes one. « Mets en pause la tâche des devis ouverts » went to ventes (the
@@ -1246,6 +1288,14 @@ _SCHEDULED_TASKS_HINT = (
 # //// END Neoffice ////
 
 
+# Handed to the orchestrator with the message. Routing it to NORA was not enough: on the dev
+# instance NORA held the tool and still delegated the reminder to the support pole with
+# kanban_create, then answered « C'est noté » with nothing written (2026-09-24). The code
+# decided it is a reminder; the instruction says so at the decision point.
+# //// Neoffice — a recurring request at a cadence the scheduler cannot run (« tous les 15
+# //// jours »). Recovered to a pole as a one-shot, it ran the job once and never mentioned
+# //// the cadence (dev instance, 2026-09-24). The orchestrator explains and asks; it sees
+# //// the conversation, so « chaque lundi alors » that follows keeps the original request.
 _UNSUPPORTED_CADENCE_HINT = (
     "[Route: the person asked for a RECURRING task at a cadence the scheduler cannot run "
     "(every N days or weeks, several times a day, a day of the month other than the 1st, the "
@@ -2698,6 +2748,13 @@ def route_chat_message(
         _offer is None and not _note_request and not _space_turn
         and _manages_scheduled_tasks(message, prior)
     )
+    # //// Neoffice — a reminder asked without its moment, see _needs_reminder_moment (09.10)
+    _reminder_completed = _take_pending_reminder(conversation_id, message) if _offer is None else None
+    _reminder_ask = (
+        _offer is None and not _note_request and not _space_turn and not _reminder_completed
+        and _needs_reminder_moment(message)
+    )
+    _owned_turn = bool(_tasks_turn or _reminder_completed or _reminder_ask)  # settled before any pole
     # //// END Neoffice ////
 
     # //// Neoffice — a yes in a thread where NORA has said nothing confirms nothing, see
@@ -2714,7 +2771,7 @@ def route_chat_message(
     # fast-answer thread, no light-path completion (see _canned_smalltalk_reply).
     _canned_text = (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
         (_nothing_to_confirm or _canned_smalltalk_reply(message, language))  # //// Neoffice — #1065
-        if _offer is None and not _note_request and not _space_turn and not _tasks_turn  # //// Neoffice — 09.10
+        if _offer is None and not _note_request and not _space_turn and not _owned_turn  # //// Neoffice — 09.10
         else None
     )
     # //// END Neoffice ////
@@ -2733,7 +2790,7 @@ def route_chat_message(
     if (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
         not _note_request
         and not _space_turn
-        and not _tasks_turn  # //// Neoffice — nor the scheduled tasks (09.10)
+        and not _owned_turn  # //// Neoffice — nor the scheduled tasks, nor a reminder's moment (09.10)
         and _asks_fast_answer(language, _canned_text, _one_off_reminder)
     ):
         import concurrent.futures as _cf
@@ -2754,8 +2811,8 @@ def route_chat_message(
         category = "DIRECT"  # //// Neoffice — a note, written in code (#1040), classifier skipped ////
     elif _space_turn:
         category = "DIRECT"  # //// Neoffice — a space, NORA's own conversation (step 3), classifier skipped ////
-    elif _tasks_turn:
-        category = "DIRECT"  # //// Neoffice — the scheduled tasks, see _manages_scheduled_tasks (09.10) ////
+    elif _owned_turn:
+        category = "DIRECT"  # //// Neoffice — the scheduled tasks, a reminder's moment (09.10) ////
     else:
         category = classify(
             message,
@@ -2788,7 +2845,7 @@ def route_chat_message(
         and not _canned_text
         and not _note_request  # //// Neoffice — a note on a job page is a note (#1040)
         and not _space_turn  # //// Neoffice — a space composed on a job page is a space (step 3)
-        and not _tasks_turn  # //// Neoffice — the scheduled tasks are the orchestrator's (09.10)
+        and not _owned_turn  # //// Neoffice — the scheduled tasks are the orchestrator's (09.10)
         and _page_project(page_context)
         and not _DIRECT_RE.match((message or "").strip())
         and not _CAPABILITY_RE.match((message or "").strip())
@@ -2807,7 +2864,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and help_request == "ask"
-        and not (_canned_text or _note_request or _space_turn or _tasks_turn)  # //// Neoffice — 09.10
+        and not (_canned_text or _note_request or _space_turn or _owned_turn)  # //// Neoffice — 09.10
     ):
         logger.info("nora_chat_router: DIRECT → support (a request for help, read by nora)")
         category = "support"
@@ -2822,7 +2879,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and _WHERE_TO_FIND_RE.search(message or "")
-        and not (_canned_text or _note_request or _space_turn or _tasks_turn)
+        and not (_canned_text or _note_request or _space_turn or _owned_turn)
     ):
         again = classify(
             message,
@@ -2835,7 +2892,7 @@ def route_chat_message(
         category = again if again in POLES else "support"
         logger.info("nora_chat_router: DIRECT → %s (where to find something in Neoffice)", category)
     # //// END Neoffice ////
-    if not _tasks_turn:  # //// Neoffice — the scheduled tasks stay the orchestrator's (09.10)
+    if not _owned_turn:  # //// Neoffice — the scheduled tasks stay the orchestrator's (09.10)
         category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
@@ -2875,6 +2932,27 @@ def route_chat_message(
                 return _note
             return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                     "agent_hint": _NOTE_HINT}
+        # //// END Neoffice ////
+        # //// Neoffice — the reminder NORA asked the moment of, see _needs_reminder_moment (09.10)
+        if _reminder_completed:
+            _rem = _route_reminder(_reminder_completed, chat_user, deliver_extra)
+            if _rem.get("routed"):
+                note_nora_reply(conversation_id, _rem["ack"])
+                return _rem
+            return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
+                    "agent_hint": f"{_ONE_OFF_REMINDER_HINT} [The reminder asked: « {_reminder_completed} ».]"}
+        if _reminder_ask:
+            _ask = _REMINDER_WHEN.get(_norm_lang(language), _REMINDER_WHEN["fr"])
+            _ask_cid = (deliver_extra or {}).get("conversation_id") or (conversation_id or None)
+            _ask_delivered = _post_ack_to_callback(_ask, {**(deliver_extra or {}), "conversation_id": _ask_cid})
+            if conversation_id:
+                if len(_PENDING_REMINDER) > _LAST_ROUTE_MAX:
+                    _PENDING_REMINDER.clear()
+                _PENDING_REMINDER[conversation_id] = (_time_note.time(), message)
+            note_nora_reply(conversation_id, _ask)
+            logger.info("nora_chat_router: a reminder without its moment → asked when (delivered=%s)", _ask_delivered)
+            return {"routed": True, "category": "DIRECT", "ack": _ask, "task_id": None,
+                    "fast": True, "ack_delivered": _ask_delivered}
         # //// END Neoffice ////
         # //// Neoffice — a one-off reminder is set in code first, see _route_reminder.
         # //// Declined or failed: straight to the orchestrator with the instruction,
@@ -2938,7 +3016,7 @@ def route_chat_message(
             }
         # //// END Neoffice ////
         _is_capability = bool(_CAPABILITY_RE.match(message or ""))
-        if not _tasks_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10)
+        if not _owned_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10)
             len(message or "") <= 80
             and _SMALLTALK_RE.search(message or "")
             and not _BUSINESS_RE.search(message or "")
