@@ -2202,10 +2202,16 @@ def classify(
         # //// then the same fallback as an exception. On 24.09 at 21:17 raw='' sent a request
         # //// made on a quotation page to the orchestrator, which ran its own card and
         # //// answered « je n'ai pas réussi » after 76 s (capability bench, 1 in 35 calls).
+        # //// Asked again WITH the list of answers (09.10): for a question about a client's contact the
+        # //// model answered an empty string, finish « stop », five times in six at temperature 0, so the same
+        # //// question asked again failed again (2 routings of 224 that day, 25 s each through the
+        # //// orchestrator). With the one-word reminder it answered the pole six times in six.
         if not raw:
+            retry = [messages[0], {"role": "user", "content": (
+                f"{user_content}\n[Réponds par un seul mot parmi : {', '.join(sorted(POLES))}, direct.]")}]
             resp = call_llm_fn(
                 task="nora_chat_routing",
-                messages=messages,
+                messages=retry,
                 max_tokens=8,
                 temperature=0.0,
                 timeout=timeout,
