@@ -144,7 +144,12 @@ def worker_reply_directive(language: Optional[str]) -> str:
     lang = _norm_lang(language)
     return (
         f"{REPLY_DIRECTIVE_MARK}{_WORKER_LANGUAGE_NAMES.get(lang, lang)}. Do not reply in any "
-        "other language. If a document you are about to create needs a "
+        "other language. "
+        # //// Neoffice — 09.10: in English the amounts came without « CHF », and a German answer
+        # //// kept the ERP's French status « Brouillon ». Said here, not in the SOULs, which are
+        # //// at their 20 000-character cap.
+        "Write every amount with its currency (CHF), and the ERP's own words (a status such "
+        "as « Brouillon ») in that language too. If a document you are about to create needs a "
         "business partner (customer or supplier) and NO partner is named in "
         "the request or the conversation context, do NOT pick one yourself — "
         "ask the user which partner to use (kanban_block kind=needs_input) "

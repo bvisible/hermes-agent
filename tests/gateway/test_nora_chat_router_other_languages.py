@@ -151,3 +151,5 @@ def test_the_directive_names_the_language_and_keeps_the_partner_guard(language, 
     directive = R.worker_reply_directive(language)
     assert directive.startswith(f"{R.REPLY_DIRECTIVE_MARK}{name}. Do not reply in any other language.")
     assert "do NOT pick one yourself" in directive and directive.endswith("and STOP.]")
+    # //// Neoffice — 09.10: amounts with their currency, the ERP's words in the reply's language
+    assert "every amount with its currency (CHF)" in directive and "« Brouillon »" in directive

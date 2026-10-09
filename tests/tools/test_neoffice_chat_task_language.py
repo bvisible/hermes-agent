@@ -25,11 +25,14 @@ def router(monkeypatch, tmp_path):
     from hermes_cli import kanban_db as kb
     kb._INITIALIZED_PATHS.clear()
     kb.init_db()
-    from gateway import nora_chat_router
+    from gateway import nora_chat_router, session_context
     monkeypatch.setattr(nora_chat_router, "_CHAT_LANGUAGE", {})
-    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "webhook")
-    monkeypatch.setenv("HERMES_SESSION_CHAT_ID", CHAT)
-    return nora_chat_router
+    # The session is bound the way the gateway binds it: its ContextVars win over os.environ, and a
+    # test that cleared them before this one leaves them at "" (09.10: 5 failures after tests/gateway).
+    session_context.reset_session_vars()
+    session_context.set_session_vars(platform="webhook", chat_id=CHAT)
+    yield nora_chat_router
+    session_context.reset_session_vars()
 
 
 def _create(body):
@@ -73,9 +76,10 @@ def test_a_chat_the_router_never_saw_keeps_its_body(router):
     assert _create("Count the quotes.") == "Count the quotes."
 
 
-def test_another_platform_keeps_its_body(router, monkeypatch):
+def test_another_platform_keeps_its_body(router):
+    from gateway import session_context
     router.remember_chat_language(CHAT, "en")
-    monkeypatch.setenv("HERMES_SESSION_PLATFORM", "telegram")
+    session_context.set_session_vars(platform="telegram", chat_id=CHAT)
     assert _create("Count the quotes.") == "Count the quotes."
 
 
