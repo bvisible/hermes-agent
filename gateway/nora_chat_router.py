@@ -171,6 +171,41 @@ def chat_reply_directive(session_chat_id: Optional[str]) -> Optional[str]:
     return worker_reply_directive(lang) if lang else None
 # //// END Neoffice ////
 
+# //// Neoffice — a chat without a conversation_id has a thread all the same (09.10). The desk sends one
+# //// per thread; a WhatsApp payload has none, and every piece of the router's context (the prior pole,
+# //// the film, a pending question) keys on it: on WhatsApp « oui » or « et le mois dernier ? » was routed
+# //// as a first message, and the worker of a follow-up never saw what came before. The chat (the
+# //// number, session_key: phone) is the thread; it starts afresh after _CHAT_THREAD_IDLE seconds
+# //// without a message from either side, as a new desk thread would.
+import time as _time_thread
+
+_CHAT_THREAD_IDLE = 1800
+_CHAT_THREADS: dict = {}  # session_chat_id -> [thread key, last activity]
+_thread_now = _time_thread.time
+
+
+def chat_thread(session_chat_id: Optional[str]) -> Optional[str]:
+    """The thread key of a chat that sends no conversation_id, renewed after _CHAT_THREAD_IDLE of silence."""
+    if not session_chat_id:
+        return None
+    now = _thread_now()
+    current = _CHAT_THREADS.get(session_chat_id)
+    if current is None or now - current[1] > _CHAT_THREAD_IDLE:
+        if len(_CHAT_THREADS) > _LAST_ROUTE_MAX:
+            _CHAT_THREADS.clear()
+        current = [f"{session_chat_id}#{int(now)}", now]
+        _CHAT_THREADS[session_chat_id] = current
+    current[1] = now
+    return current[0]
+
+
+def _touch_chat_thread(key: str) -> None:
+    """NORA's reply keeps its chat thread alive: the person answers it, not their own last message."""
+    current = _CHAT_THREADS.get(key.rpartition("#")[0])
+    if current and current[0] == key:
+        current[1] = _thread_now()
+# //// END Neoffice ////
+
 # //// Neoffice — rolling per-conversation history of recent turns (the "film").
 # A ROUTED worker runs as a FRESH, session-less kanban task: it sees ONLY the current
 # message, so a MULTI-STEP request loses its thread (build a subscription → give the
@@ -289,6 +324,7 @@ def note_nora_reply(conversation_id: Optional[str], text: Optional[str]) -> None
     # //// END Neoffice ////
     film.append(entry)
     del film[:-_CONV_HISTORY_TURNS]
+    _touch_chat_thread(conversation_id)  # //// Neoffice — a chat thread, see chat_thread (09.10)
 # //// END Neoffice ////
 
 # //// Neoffice — briefing CTA → reply continuity (cross-process bridge).
@@ -2729,6 +2765,10 @@ def route_chat_message(
     # //// person's language (see worker_reply_directive).
     remember_chat_language(session_chat_id, language)
     # //// END Neoffice ////
+    # //// Neoffice — a WhatsApp chat sends no conversation_id: its thread is the number, see chat_thread.
+    if not conversation_id:
+        conversation_id = chat_thread(session_chat_id)
+    # //// END Neoffice ////
     prior = _LAST_ROUTE.get(conversation_id) if conversation_id else None
 
     # //// Neoffice — briefing CTA continuity. On the FIRST inbound after an out-of-band
@@ -2787,10 +2827,8 @@ def route_chat_message(
         _offer is None and not _note_request and not _space_turn
         and _manages_scheduled_tasks(message, prior)
     )
-    # //// Neoffice — a reminder asked without its moment, see _needs_reminder_moment (09.10). A WhatsApp
-    # //// payload has no conversation_id: its question waits under the chat, which is the number.
-    _reminder_key = conversation_id or session_chat_id
-    _reminder_completed = _take_pending_reminder(_reminder_key, message) if _offer is None else None
+    # //// Neoffice — a reminder asked without its moment, see _needs_reminder_moment (09.10)
+    _reminder_completed = _take_pending_reminder(conversation_id, message) if _offer is None else None
     _reminder_ask = (
         _offer is None and not _note_request and not _space_turn and not _reminder_completed
         and _needs_reminder_moment(message)
@@ -2986,10 +3024,10 @@ def route_chat_message(
             _ask = _REMINDER_WHEN.get(_norm_lang(language), _REMINDER_WHEN["fr"])
             _ask_cid = (deliver_extra or {}).get("conversation_id") or (conversation_id or None)
             _ask_delivered = _post_ack_to_callback(_ask, {**(deliver_extra or {}), "conversation_id": _ask_cid})
-            if _reminder_key:
+            if conversation_id:
                 if len(_PENDING_REMINDER) > _LAST_ROUTE_MAX:
                     _PENDING_REMINDER.clear()
-                _PENDING_REMINDER[_reminder_key] = (_time_note.time(), message)
+                _PENDING_REMINDER[conversation_id] = (_time_note.time(), message)
             note_nora_reply(conversation_id, _ask)
             logger.info("nora_chat_router: a reminder without its moment → asked when (delivered=%s)", _ask_delivered)
             return {"routed": True, "category": "DIRECT", "ack": _ask, "task_id": None,

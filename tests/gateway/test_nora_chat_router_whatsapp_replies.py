@@ -7,12 +7,11 @@ carries the central WhatsApp router (router_url, router_api_key, phone), so the 
 of the dev instance, whatsapp_inbox). And a reminder asked without its moment kept its question under the
 desk thread only, so « demain à 10h » sent on WhatsApp completed nothing.
 """
-import io
 import json
 import sys
 import types
-import urllib.error
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import pytest
 
@@ -85,7 +84,7 @@ def test_a_refusal_of_the_whatsapp_router_is_not_a_delivery(monkeypatch):
     import urllib.request
 
     def urlopen(req, timeout=None):
-        raise urllib.error.HTTPError(req.full_url, 500, "Internal Server Error", None, None)
+        raise HTTPError(req.full_url, 500, "Internal Server Error", None, None)
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     assert R._post_ack_to_callback("Bonjour", dict(_WHATSAPP)) is False
