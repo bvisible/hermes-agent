@@ -32,7 +32,7 @@ def test_a_long_validation_follow_up_stays_too():
     ("Valide la commande BC-2026-00489", "ventes"),
     ("Valide le bon de livraison de Martin", "ventes"),
     ("Valide la facture fournisseur de Sunrise", "compta"),
-    ("Valide le paiement de Daniel Moret", "compta"),
+    ("Valide le paiement de Marc Exemple", "compta"),
 ))
 def test_a_validation_asked_cold_reaches_a_pole_that_validates(message, expected):
     assert _fast_path(message, prior=None) == expected

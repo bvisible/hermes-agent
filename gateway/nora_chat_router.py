@@ -1739,13 +1739,13 @@ _WHERE_TO_FIND_RE = re.compile(
 )
 # //// END Neoffice ////
 
-# //// Neoffice — a NAME typed alone (« Atelier Démo SA », « Daniel Moret », « Boulangerie du Lac ») is never
+# //// Neoffice — a NAME typed alone (« Atelier Démo SA », « Marc Exemple », « Boulangerie du Lac ») is never
 # //// DIRECT (09.10). The classifier called the bare customer name 'direct' on the development instance: on
 # //// 04.10 the orchestrator answered « Je n'ai pas réussi à traiter votre demande » after 11 s, on 09.10 it
 # //// took 22.7 s to hand it to the job pole (answer at 71.6 s). The person wants the record of what they
 # //// named, which a pole holds. Asked again with 'direct' excluded; ventes when the classifier still cannot
 # //// choose. A name here: up to six words, each capitalised but for connectors, and a company suffix or at
-# //// least two capitalised words. One word alone (« Alltron », « Parfait ») and courtesy (« Merci
+# //// least two capitalised words. One word alone (« Zephyra », « Parfait ») and courtesy (« Merci
 # //// Beaucoup ») stay as they were.
 _COMPANY_SUFFIX_RE = re.compile(r"^(?:SA|S\.A\.?|S[àa]rl|SARL|AG|GmbH|Sagl|SNC|Cie|Ltd|Inc|SAS|SRL)\.?$")
 _NAME_CONNECTORS = frozenset({"de", "du", "des", "la", "le", "les", "et", "&", "von", "van", "der", "di", "da", "y"})
@@ -1763,7 +1763,7 @@ _BARE_NAME_REASON = (
 
 
 def _is_bare_name(msg: str) -> bool:
-    """True when the whole message is a name: « Atelier Démo SA », « Daniel Moret », « Boulangerie du Lac »."""
+    """True when the whole message is a name: « Atelier Démo SA », « Marc Exemple », « Boulangerie du Lac »."""
     text = (msg or "").strip().rstrip("?!.").strip()
     words = text.replace("’", "'").split()
     if not 1 <= len(words) <= 6 or len(text) > 60:

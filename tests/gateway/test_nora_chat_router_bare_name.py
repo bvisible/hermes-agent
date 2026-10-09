@@ -99,26 +99,26 @@ def test_ventes_takes_a_bare_name_the_classifier_still_calls_direct(monkeypatch)
 
 def test_a_single_ambiguous_word_stays_direct(monkeypatch):
     created = _fake_kanban(monkeypatch)
-    decision, calls = _route(monkeypatch, "Alltron", ["DIRECT"])
+    decision, calls = _route(monkeypatch, "Zephyra", ["DIRECT"])
     assert decision["category"] == "DIRECT" and created == [] and len(calls) == 1
 
 
 @pytest.mark.parametrize("message, bare", [
     ("Atelier Démo SA", True),
     ("Atelier Démo SA ?", True),
-    ("Daniel Moret", True),
+    ("Marc Exemple", True),
     ("Boulangerie du Lac", True),
     ("Quincaillerie du Banc Sàrl", True),
     ("Menuiserie de l'Etang S.A.", True),
     ("Jean-Pierre D'Amico", True),
-    ("Alltron", False),                 # one word: a name, a product or anything else
+    ("Zephyra", False),                 # one word: a name, a product or anything else
     ("Merci Beaucoup", False),
     ("Bonne Journée", False),
     ("Joyeux Noël", False),
     ("Bonjour Nora", False),
     ("Test Test", False),
-    ("C'est Daniel Moret", False),      # a sentence, not a name
-    ("Daniel Moret a payé", False),
+    ("C'est Marc Exemple", False),      # a sentence, not a name
+    ("Marc Exemple a payé", False),
     ("Crée un devis", False),
     ("devis", False),
 ])
