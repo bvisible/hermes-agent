@@ -1184,6 +1184,63 @@ def _is_one_off_reminder(msg: str) -> bool:
 # //// jours »). Recovered to a pole as a one-shot, it ran the job once and never mentioned
 # //// the cadence (dev instance, 2026-09-24). The orchestrator explains and asks; it sees
 # //// the conversation, so « chaque lundi alors » that follows keeps the original request.
+# //// Neoffice — the person's SCHEDULED tasks are the orchestrator's (09.10): on the chat she holds
+# //// nora_list_tasks, nora_pause_task and nora_delete_task (mcp-tasks), and no pole and no code route
+# //// lists, pauses or deletes one. « Mets en pause la tâche des devis ouverts » went to ventes (the
+# //// word « devis »), which has no such tool: it wrote the internal tool's name to the person and sent
+# //// them to their administrator, and « Supprime-la », « Oui » followed it there (Quick Chat, 09.10).
+_TASK_MANAGE_VERB_RE = re.compile(
+    r"\b(?:mets?|mettez|mettre)[- ](?:(?:la|le|les)\s+)?en\s+pause\b|\bpause\b|\bsuspend\w*|"
+    r"\barr[eê]t\w*|\bstopp?\w*|\bd[ée]sactiv\w*|\br[ée]activ\w*|\bsupprim\w*|\beffac\w*|\bretir\w*|"
+    r"\bdelete\b|\bremove\b|\bdisable\b|\bresume\b|\bl[öo]sch\w*|\bpausier\w*|\bdeaktivier\w*|"
+    r"\belimin\w*|\bcancella\w*|\bsospend\w*|\bdisattiv\w*|\briattiv\w*",
+    re.IGNORECASE,
+)
+_SCHEDULED_TASK_RE = re.compile(
+    r"\bt[aâ]ches?\s+(?:programm|planifi|automati|r[ée]curren)\w*|\brel[eè]ves?\b|"
+    r"\brappels?\s+r[ée]currents?\b|\b(?:scheduled|recurring)\s+(?:tasks?|jobs?)\b|"
+    r"\b(?:geplante|wiederkehrende)\w*\s+aufgabe\w*|\battivit[aà]\s+(?:programmat|pianificat|ricorrent)\w*",
+    re.IGNORECASE,
+)
+_TASK_REFERENCE_RE = re.compile(r"\bt[aâ]ches?\b|\btasks?\b|\baufgabe\w*|\battivit[aà]\b", re.IGNORECASE)
+_PAUSE_RE = re.compile(r"\bpause\b|\bsuspend\w*|\bpausier\w*|\bsospend\w*", re.IGNORECASE)
+
+
+def _manages_scheduled_tasks(msg: str, prior: Optional[dict]) -> bool:
+    """« Mets en pause la tâche des devis ouverts », « supprime ma relève du matin », or « supprime-la »,
+    « oui » right after a turn about the scheduled tasks: the orchestrator's, never a pole's."""
+    msg = (msg or "").strip()
+    if not msg:
+        return False
+    verb = bool(_TASK_MANAGE_VERB_RE.search(msg))
+    if verb and _SCHEDULED_TASK_RE.search(msg):
+        return True
+    # A job's task is closed or reassigned, never paused: a pause names a scheduled one.
+    if _PAUSE_RE.search(msg) and _TASK_REFERENCE_RE.search(msg):
+        return True
+    if prior and prior.get("tasks"):
+        # Only a SHORT follow-up (« supprime-la », « oui », « non, garde-la », « et la tâche du
+        # vendredi ? »): « ok crée un rappel pour les impayés » starts with a yes and is a new request.
+        words = len(re.findall(r"\w+", msg))
+        reference = bool(_TASK_REFERENCE_RE.search(msg))
+        if verb and (words <= 5 or reference):
+            return True
+        if (_YES_HEAD_RE.match(msg) or _NEGATE_RE.search(msg)) and words <= 4:
+            return True
+        return reference and words <= 8
+    return False
+
+
+_SCHEDULED_TASKS_HINT = (
+    "[Route: this turn is about the person's SCHEDULED tasks (the recurring jobs NORA runs for them), "
+    "not about a business document. Do NOT call kanban_create. List them with nora_list_tasks; to stop "
+    "one, nora_pause_task; to remove one, ask them to confirm, then nora_delete_task. Pass user and "
+    "conversation_id exactly as the message gives them. A task's time or cadence cannot be changed here: "
+    "offer to delete it so that they ask for it again as they want it.]"
+)
+# //// END Neoffice ////
+
+
 _UNSUPPORTED_CADENCE_HINT = (
     "[Route: the person asked for a RECURRING task at a cadence the scheduler cannot run "
     "(every N days or weeks, several times a day, a day of the month other than the 1st, the "
@@ -2631,6 +2688,13 @@ def route_chat_message(
         _PENDING_SPACE[conversation_id] = _time_note.time()
     # //// END Neoffice ////
 
+    # //// Neoffice — the person's scheduled tasks are the orchestrator's, see _manages_scheduled_tasks
+    _tasks_turn = (
+        _offer is None and not _note_request and not _space_turn
+        and _manages_scheduled_tasks(message, prior)
+    )
+    # //// END Neoffice ////
+
     # //// Neoffice — a yes in a thread where NORA has said nothing confirms nothing, see
     # //// _NOTHING_PROPOSED (#1065): a bare one is answered in code, any other gets a rule.
     _fresh_thread = (
@@ -2645,7 +2709,7 @@ def route_chat_message(
     # fast-answer thread, no light-path completion (see _canned_smalltalk_reply).
     _canned_text = (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
         (_nothing_to_confirm or _canned_smalltalk_reply(message, language))  # //// Neoffice — #1065
-        if _offer is None and not _note_request and not _space_turn
+        if _offer is None and not _note_request and not _space_turn and not _tasks_turn  # //// Neoffice — 09.10
         else None
     )
     # //// END Neoffice ////
@@ -2664,6 +2728,7 @@ def route_chat_message(
     if (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
         not _note_request
         and not _space_turn
+        and not _tasks_turn  # //// Neoffice — nor the scheduled tasks (09.10)
         and _asks_fast_answer(language, _canned_text, _one_off_reminder)
     ):
         import concurrent.futures as _cf
@@ -2684,6 +2749,8 @@ def route_chat_message(
         category = "DIRECT"  # //// Neoffice — a note, written in code (#1040), classifier skipped ////
     elif _space_turn:
         category = "DIRECT"  # //// Neoffice — a space, NORA's own conversation (step 3), classifier skipped ////
+    elif _tasks_turn:
+        category = "DIRECT"  # //// Neoffice — the scheduled tasks, see _manages_scheduled_tasks (09.10) ////
     else:
         category = classify(
             message,
@@ -2716,6 +2783,7 @@ def route_chat_message(
         and not _canned_text
         and not _note_request  # //// Neoffice — a note on a job page is a note (#1040)
         and not _space_turn  # //// Neoffice — a space composed on a job page is a space (step 3)
+        and not _tasks_turn  # //// Neoffice — the scheduled tasks are the orchestrator's (09.10)
         and _page_project(page_context)
         and not _DIRECT_RE.match((message or "").strip())
         and not _CAPABILITY_RE.match((message or "").strip())
@@ -2734,7 +2802,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and help_request == "ask"
-        and not (_canned_text or _note_request or _space_turn)
+        and not (_canned_text or _note_request or _space_turn or _tasks_turn)  # //// Neoffice — 09.10
     ):
         logger.info("nora_chat_router: DIRECT → support (a request for help, read by nora)")
         category = "support"
@@ -2749,7 +2817,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and _WHERE_TO_FIND_RE.search(message or "")
-        and not (_canned_text or _note_request or _space_turn)
+        and not (_canned_text or _note_request or _space_turn or _tasks_turn)
     ):
         again = classify(
             message,
@@ -2762,7 +2830,8 @@ def route_chat_message(
         category = again if again in POLES else "support"
         logger.info("nora_chat_router: DIRECT → %s (where to find something in Neoffice)", category)
     # //// END Neoffice ////
-    category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
+    if not _tasks_turn:  # //// Neoffice — the scheduled tasks stay the orchestrator's (09.10)
+        category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
     if conversation_id:
@@ -2772,6 +2841,8 @@ def route_chat_message(
             "msg": (message or "")[:200],
             "pole": (category if category in POLES else None),
             "title": _task_title(message, prior),  # //// Neoffice — what a later bare yes is titled by ////
+            # //// Neoffice — a turn about the scheduled tasks: its follow-up stays with them (09.10)
+            "tasks": bool(_tasks_turn or category == "recurrent"),
         }
         # //// Neoffice — accumulate the rolling conversation film (INCLUDING DIRECT turns,
         # which carry the goal, e.g. the opening "créer un abonnement"). "User:"-prefixed;
@@ -2862,11 +2933,11 @@ def route_chat_message(
             }
         # //// END Neoffice ////
         _is_capability = bool(_CAPABILITY_RE.match(message or ""))
-        if _is_capability or (
+        if not _tasks_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10)
             len(message or "") <= 80
             and _SMALLTALK_RE.search(message or "")
             and not _BUSINESS_RE.search(message or "")
-        ):
+        )):
             try:
                 _lp_resp = call_llm_fn(
                     task="nora_capability" if _is_capability else "nora_smalltalk",
@@ -2901,7 +2972,8 @@ def route_chat_message(
         # //// Neoffice — the orchestrator gets the reminder instruction, see _ONE_OFF_REMINDER_HINT,
         # //// and a yes in a fresh thread its rule, see _FRESH_THREAD_HINT (#1065).
         _direct_hints = [h for h in (_ONE_OFF_REMINDER_HINT if _one_off_reminder else None,
-                                     _FRESH_THREAD_HINT if _fresh_yes else None) if h]
+                                     _FRESH_THREAD_HINT if _fresh_yes else None,
+                                     _SCHEDULED_TASKS_HINT if _tasks_turn else None) if h]  # //// Neoffice — 09.10
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                 "agent_hint": "\n".join(_direct_hints) or None}  # //// Neoffice — #1065
 
@@ -2925,6 +2997,12 @@ def route_chat_message(
             logger.info("nora_chat_router: recurrent cadence not runnable → orchestrator explains")
             return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                     "agent_hint": _UNSUPPORTED_CADENCE_HINT}
+        # //// Neoffice — a question about the scheduled tasks (nora refuses to create one from it,
+        # //// 09.10): the orchestrator answers it with her task tools, never a pole the words name.
+        if _rec.get("reason") == "question":
+            logger.info("nora_chat_router: a question about the scheduled tasks → orchestrator")
+            return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
+                    "agent_hint": _SCHEDULED_TASKS_HINT}
         # //// END Neoffice ////
         _prior_pole = (prior or {}).get("pole")
         _kw_pole = next((p for rx, p in _FAST_PATH_RULES if rx.search(message or "")), None)
