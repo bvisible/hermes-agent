@@ -1739,6 +1739,48 @@ _WHERE_TO_FIND_RE = re.compile(
 )
 # //// END Neoffice ////
 
+# //// Neoffice — a NAME typed alone (« Atelier Démo SA », « Daniel Moret », « Boulangerie du Lac ») is never
+# //// DIRECT (09.10). The classifier called the bare customer name 'direct' on the development instance: on
+# //// 04.10 the orchestrator answered « Je n'ai pas réussi à traiter votre demande » after 11 s, on 09.10 it
+# //// took 22.7 s to hand it to the job pole (answer at 71.6 s). The person wants the record of what they
+# //// named, which a pole holds. Asked again with 'direct' excluded; ventes when the classifier still cannot
+# //// choose. A name here: up to six words, each capitalised but for connectors, and a company suffix or at
+# //// least two capitalised words. One word alone (« Alltron », « Parfait ») and courtesy (« Merci
+# //// Beaucoup ») stay as they were.
+_COMPANY_SUFFIX_RE = re.compile(r"^(?:SA|S\.A\.?|S[àa]rl|SARL|AG|GmbH|Sagl|SNC|Cie|Ltd|Inc|SAS|SRL)\.?$")
+_NAME_CONNECTORS = frozenset({"de", "du", "des", "la", "le", "les", "et", "&", "von", "van", "der", "di", "da", "y"})
+_ELIDED_CONNECTOR_RE = re.compile(r"^[dlDL]'")  # « de l'Etang », « D'Amico »: the name starts after the apostrophe
+_NOT_A_NAME_WORDS = frozenset(
+    "bonjour salut bonsoir coucou hello hey hi yo ciao hallo merci beaucoup bon bonne journée journee soirée soiree "
+    "nuit année annee joyeux noël noel anniversaire félicitations felicitations bravo parfait super top génial "
+    "genial cool excellent oui non ok okay d'accord très tres bien au revoir rien pardon désolé desole nora c'est "
+    "voici voilà voila test thanks thank you good morning evening bye danke guten tag morgen grazie buongiorno "
+    "buonasera".split())
+_BARE_NAME_REASON = (
+    "[Ce message n'est qu'un nom (client, fournisseur, personne, article ou chantier) : la personne veut sa fiche. "
+    "'direct' est exclu ; un client ou un fournisseur → ventes, un employé → rh, un chantier → projet.]"
+)
+
+
+def _is_bare_name(msg: str) -> bool:
+    """True when the whole message is a name: « Atelier Démo SA », « Daniel Moret », « Boulangerie du Lac »."""
+    text = (msg or "").strip().rstrip("?!.").strip()
+    words = text.replace("’", "'").split()
+    if not 1 <= len(words) <= 6 or len(text) > 60:
+        return False
+    capitals = suffixes = 0
+    for word in words:
+        if word.lower() in _NOT_A_NAME_WORDS:
+            return False
+        if _COMPANY_SUFFIX_RE.match(word):
+            suffixes += 1
+        elif word.lower() not in _NAME_CONNECTORS:
+            if not _ELIDED_CONNECTOR_RE.sub("", word)[:1].isupper():
+                return False  # a lower-case word: a sentence, not a name
+            capitals += 1
+    return capitals >= 1 and (suffixes >= 1 or capitals >= 2)
+# //// END Neoffice ////
+
 
 def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     """Unambiguous keyword → pole/'DIRECT' without an LLM call; else None (→ LLM classify).
@@ -2089,6 +2131,7 @@ def classify(
     hint: Optional[str] = None,
     page_doctype: Optional[str] = None,  # //// Neoffice — failure fallback, see _DOCTYPE_POLES
     exclude_direct: bool = False,  # //// Neoffice — asked again for a pole, see _WHERE_TO_FIND_RE
+    exclude_reason: Optional[str] = None,  # //// Neoffice — why, when not a where-to-find (see _is_bare_name)
 ) -> str:
     """Return a pole in :data:`POLES`, or ``"DIRECT"``.
 
@@ -2135,10 +2178,9 @@ def classify(
         )
     # //// Neoffice — see _WHERE_TO_FIND_RE: the pole of the subject, never 'direct'
     if exclude_direct:
-        user_content = (
+        user_content = (exclude_reason or (
             "[Ce message demande OÙ trouver quelque chose dans Neoffice : 'direct' est exclu, "
-            "réponds par le pôle de son sujet.]\n" + user_content
-        )
+            "réponds par le pôle de son sujet.]")) + "\n" + user_content
     # //// END Neoffice ////
     messages = [
         {"role": "system", "content": _CLASSIFIER_SYSTEM},
@@ -3014,6 +3056,24 @@ def route_chat_message(
         )
         category = again if again in POLES else "support"
         logger.info("nora_chat_router: DIRECT → %s (where to find something in Neoffice)", category)
+    # //// END Neoffice ////
+    # //// Neoffice — a name typed alone is never DIRECT (09.10), see _is_bare_name.
+    if (
+        category == "DIRECT"
+        and _is_bare_name(message)
+        and not (_canned_text or _note_request or _space_turn or _owned_turn)
+    ):
+        again = classify(
+            message,
+            call_llm_fn=call_llm_fn,
+            main_runtime=main_runtime,
+            prior=prior,
+            timeout=classify_timeout,
+            exclude_direct=True,
+            exclude_reason=_BARE_NAME_REASON,
+        )
+        category = again if again in POLES else "ventes"
+        logger.info("nora_chat_router: DIRECT → %s (a name typed alone)", category)
     # //// END Neoffice ////
     if not _owned_turn:  # //// Neoffice — the scheduled tasks stay the orchestrator's (09.10)
         category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
