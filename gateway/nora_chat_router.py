@@ -2209,13 +2209,17 @@ def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
     nora-deliver path uses ({conversation_id, text} + X-Hermes-Token). We POST it here
     rather than via the platform's ``_direct_deliver`` because that routes the custom
     "nora" deliver type to ``_deliver_cross_platform``, which doesn't know it, so the
-    ack was silently dropped (success=False, no exception). Desk only — when there is no
-    callback_url (e.g. WhatsApp) we skip; the worker's result still delivers via the
-    notifier. Never raises: a failed ack must not break routing."""
+    ack was silently dropped (success=False, no exception). A WhatsApp chat has no
+    callback_url: its text goes to the central WhatsApp router instead, see
+    _post_to_whatsapp_router. Never raises: a failed ack must not break routing."""
     extra = deliver_extra or {}
     url = (extra.get("callback_url") or "").strip()
     token = (extra.get("callback_token") or "").strip()
     cid = (extra.get("conversation_id") or "").strip()
+    # //// Neoffice — a WhatsApp chat (09.10), see _post_to_whatsapp_router.
+    if not url:
+        return _post_to_whatsapp_router(ack, extra)
+    # //// END Neoffice ////
     if not (url and token and cid and ack):
         return False
     import json as _json
@@ -2239,6 +2243,41 @@ def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.warning("nora_chat_router: ack callback POST failed: %s", exc)
         return False
+
+
+# //// Neoffice — the router's own replies reach a WhatsApp chat (09.10). Every reply the router
+# //// writes itself (a greeting, a fast answer, the light path, « Pour quand ? », the ack of a task)
+# //// went to the desk callback only. A WhatsApp route carries the central router instead
+# //// (router_url, router_api_key, phone): the reply was logged « delivered=False » and, the turn
+# //// being handled, the agent was skipped, so the person got nothing (dev instance, whatsapp_inbox).
+# //// Same text contract as the webhook adapter's _deliver_whatsapp_router; a voice note is the
+# //// agent's final reply only, a reply of the router goes as text.
+def _post_to_whatsapp_router(text: str, extra: dict) -> bool:
+    """POST *text* to the central WhatsApp router ({phone, text} on <router_url>/api/sendText,
+    Bearer router_api_key). False when the route is not a whole WhatsApp route; never raises."""
+    url = (extra.get("router_url") or "").strip()
+    key = (extra.get("router_api_key") or "").strip()
+    phone = (extra.get("phone") or "").strip()
+    if not (url and key and phone and text) or "{" in phone:  # « {phone} »: the payload had no number
+        return False
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(
+        url.rstrip("/") + "/api/sendText",
+        data=_json.dumps({"phone": phone, "text": text}).encode(),
+        method="POST",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            status = getattr(resp, "status", 0)
+            logger.info("nora_chat_router: posted to WhatsApp status=%s (%d chars)", status, len(text))
+            return 200 <= status < 300
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("nora_chat_router: WhatsApp router POST failed: %s", exc)
+        return False
+# //// END Neoffice ////
 
 
 def _route_recurrent(
@@ -2748,8 +2787,10 @@ def route_chat_message(
         _offer is None and not _note_request and not _space_turn
         and _manages_scheduled_tasks(message, prior)
     )
-    # //// Neoffice — a reminder asked without its moment, see _needs_reminder_moment (09.10)
-    _reminder_completed = _take_pending_reminder(conversation_id, message) if _offer is None else None
+    # //// Neoffice — a reminder asked without its moment, see _needs_reminder_moment (09.10). A WhatsApp
+    # //// payload has no conversation_id: its question waits under the chat, which is the number.
+    _reminder_key = conversation_id or session_chat_id
+    _reminder_completed = _take_pending_reminder(_reminder_key, message) if _offer is None else None
     _reminder_ask = (
         _offer is None and not _note_request and not _space_turn and not _reminder_completed
         and _needs_reminder_moment(message)
@@ -2945,10 +2986,10 @@ def route_chat_message(
             _ask = _REMINDER_WHEN.get(_norm_lang(language), _REMINDER_WHEN["fr"])
             _ask_cid = (deliver_extra or {}).get("conversation_id") or (conversation_id or None)
             _ask_delivered = _post_ack_to_callback(_ask, {**(deliver_extra or {}), "conversation_id": _ask_cid})
-            if conversation_id:
+            if _reminder_key:
                 if len(_PENDING_REMINDER) > _LAST_ROUTE_MAX:
                     _PENDING_REMINDER.clear()
-                _PENDING_REMINDER[conversation_id] = (_time_note.time(), message)
+                _PENDING_REMINDER[_reminder_key] = (_time_note.time(), message)
             note_nora_reply(conversation_id, _ask)
             logger.info("nora_chat_router: a reminder without its moment → asked when (delivered=%s)", _ask_delivered)
             return {"routed": True, "category": "DIRECT", "ack": _ask, "task_id": None,
