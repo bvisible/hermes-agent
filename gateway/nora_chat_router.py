@@ -2246,8 +2246,9 @@ def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
     rather than via the platform's ``_direct_deliver`` because that routes the custom
     "nora" deliver type to ``_deliver_cross_platform``, which doesn't know it, so the
     ack was silently dropped (success=False, no exception). A WhatsApp chat has no
-    callback_url: its text goes to the central WhatsApp router instead, see
-    _post_to_whatsapp_router. Never raises: a failed ack must not break routing."""
+    callback_url: its text is queued for the central WhatsApp router instead (True means
+    queued there), see _post_to_whatsapp_router. Never raises: a failed ack must not break
+    routing."""
     extra = deliver_extra or {}
     url = (extra.get("callback_url") or "").strip()
     token = (extra.get("callback_token") or "").strip()
@@ -2288,13 +2289,32 @@ def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
 # //// being handled, the agent was skipped, so the person got nothing (dev instance, whatsapp_inbox).
 # //// Same text contract as the webhook adapter's _deliver_whatsapp_router; a voice note is the
 # //// agent's final reply only, a reply of the router goes as text.
+# //// The POST runs on ONE background thread (in order, never in the gateway's event loop, where
+# //// the router runs, #869): the central router waits on WhatsApp before it answers, 8 s and more
+# //// for a number WhatsApp does not know, and every message of every chat waited with it (the
+# //// gate's WhatsApp greeting went from instant to 7 s). A « number » that is not one (a test's
+# //// « +417000800T000 ») is never handed to WhatsApp.
+from concurrent.futures import ThreadPoolExecutor as _WhatsAppPool
+
+_E164_RE = re.compile(r"^\+?[1-9]\d{7,14}$")
+_WHATSAPP_SENDER: Optional[_WhatsAppPool] = None
+
+
+def _whatsapp_sender() -> _WhatsAppPool:
+    global _WHATSAPP_SENDER
+    if _WHATSAPP_SENDER is None:
+        _WHATSAPP_SENDER = _WhatsAppPool(max_workers=1, thread_name_prefix="nora-whatsapp")
+    return _WHATSAPP_SENDER
+
+
 def _post_to_whatsapp_router(text: str, extra: dict) -> bool:
-    """POST *text* to the central WhatsApp router ({phone, text} on <router_url>/api/sendText,
-    Bearer router_api_key). False when the route is not a whole WhatsApp route; never raises."""
+    """Hand *text* to the central WhatsApp router ({phone, text} on <router_url>/api/sendText,
+    Bearer router_api_key), on the background sender. True once queued; False when the route is
+    not a whole WhatsApp route or the number is not one. Never raises, never waits."""
     url = (extra.get("router_url") or "").strip()
     key = (extra.get("router_api_key") or "").strip()
     phone = (extra.get("phone") or "").strip()
-    if not (url and key and phone and text) or "{" in phone:  # « {phone} »: the payload had no number
+    if not (url and key and text) or not _E164_RE.match(phone):  # « {phone} »: the payload had none
         return False
     import json as _json
     import urllib.request
@@ -2305,13 +2325,30 @@ def _post_to_whatsapp_router(text: str, extra: dict) -> bool:
         method="POST",
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
     )
+
+    def _send() -> bool:
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                status = getattr(resp, "status", 0)
+                logger.info("nora_chat_router: posted to WhatsApp status=%s (%d chars)", status, len(text))
+                return 200 <= status < 300
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("nora_chat_router: WhatsApp router POST failed: %s", exc)
+            return False
+
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            status = getattr(resp, "status", 0)
-            logger.info("nora_chat_router: posted to WhatsApp status=%s (%d chars)", status, len(text))
-            return 200 <= status < 300
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("nora_chat_router: WhatsApp router POST failed: %s", exc)
+        _whatsapp_sender().submit(_send)
+    except RuntimeError:  # the interpreter is shutting down
+        return False
+    return True
+
+
+def flush_whatsapp_sends(timeout: float = 20.0) -> bool:
+    """Wait until every reply handed to the WhatsApp sender has been posted (tests, the gate)."""
+    try:
+        _whatsapp_sender().submit(lambda: None).result(timeout=timeout)
+        return True
+    except Exception:  # noqa: BLE001
         return False
 # //// END Neoffice ////
 

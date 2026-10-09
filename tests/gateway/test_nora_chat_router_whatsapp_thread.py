@@ -80,6 +80,7 @@ def chat(monkeypatch):
         )
 
     yield SimpleNamespace(route=route, clock=clock, created=created, subs=subs, sent=sent)
+    R.flush_whatsapp_sends()  # the acks posted in the background, before urlopen is restored
     for d in _STATE:
         d.clear()
 

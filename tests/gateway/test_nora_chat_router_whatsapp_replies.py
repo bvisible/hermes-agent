@@ -6,9 +6,14 @@ carries the central WhatsApp router (router_url, router_api_key, phone), so the 
 « delivered=False » and, the turn being handled, the agent was skipped: the person got nothing (gateway log
 of the dev instance, whatsapp_inbox). And a reminder asked without its moment kept its question under the
 desk thread only, so « demain à 10h » sent on WhatsApp completed nothing.
+
+The POST runs on a background sender: the central router waits on WhatsApp before it answers (8 s and
+more for a number WhatsApp does not know), and the router runs in the gateway's event loop.
 """
 import json
+import logging
 import sys
+import time
 import types
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -57,6 +62,7 @@ def posts(monkeypatch):
 
 def test_a_reply_reaches_whatsapp_through_the_central_router(posts):
     assert R._post_ack_to_callback("Bonjour, que puis-je faire pour vous ?", dict(_WHATSAPP)) is True
+    assert R.flush_whatsapp_sends()
     assert len(posts) == 1, posts
     assert posts[0].url == _ROUTER + "/api/sendText"
     assert posts[0].headers["authorization"] == "Bearer router-key"
@@ -74,20 +80,43 @@ def test_the_desk_callback_is_used_when_there_is_one(posts):
     {"router_url": _ROUTER, "phone": _PHONE},                              # no key
     {"router_url": _ROUTER, "router_api_key": "router-key"},               # no number
     {"router_url": _ROUTER, "router_api_key": "router-key", "phone": "{phone}"},  # template not rendered
+    {"router_url": _ROUTER, "router_api_key": "router-key", "phone": "+417000800T000"},  # a test's « number »
 ])
 def test_nothing_is_posted_without_a_whole_route(posts, extra):
     assert R._post_ack_to_callback("Bonjour", extra) is False
+    assert R.flush_whatsapp_sends()
     assert posts == []
 
 
-def test_a_refusal_of_the_whatsapp_router_is_not_a_delivery(monkeypatch):
+def test_a_refusal_of_the_whatsapp_router_is_logged_and_never_raised(monkeypatch, caplog):
     import urllib.request
 
     def urlopen(req, timeout=None):
         raise HTTPError(req.full_url, 500, "Internal Server Error", None, None)
 
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    assert R._post_ack_to_callback("Bonjour", dict(_WHATSAPP)) is False
+    with caplog.at_level(logging.WARNING, logger=R.logger.name):
+        assert R._post_ack_to_callback("Bonjour", dict(_WHATSAPP)) is True  # queued
+        assert R.flush_whatsapp_sends()
+    assert "WhatsApp router POST failed" in caplog.text
+
+
+def test_the_router_never_waits_for_the_whatsapp_router(monkeypatch):
+    import urllib.request
+
+    seen = []
+
+    def slow_urlopen(req, timeout=None):
+        time.sleep(1.5)  # the central router waiting on WhatsApp
+        seen.append(req.full_url)
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", slow_urlopen)
+    t0 = time.monotonic()
+    assert R._post_ack_to_callback("Bonjour", dict(_WHATSAPP)) is True
+    assert time.monotonic() - t0 < 0.5
+    assert R.flush_whatsapp_sends()
+    assert seen == [_ROUTER + "/api/sendText"]
 
 
 @pytest.fixture
@@ -127,6 +156,7 @@ def whatsapp_chat(monkeypatch, posts):
         )
 
     yield SimpleNamespace(route=route, posts=posts, classified=classified, reminders=reminders)
+    R.flush_whatsapp_sends()
     for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED,
               R._PENDING_REMINDER):
         d.clear()
@@ -135,12 +165,14 @@ def whatsapp_chat(monkeypatch, posts):
 def test_a_greeting_on_whatsapp_gets_its_answer(whatsapp_chat):
     result = whatsapp_chat.route("Bonjour")
     assert result["routed"] is True and result["ack_delivered"] is True, result
+    assert R.flush_whatsapp_sends()
     assert [p.body["text"] for p in whatsapp_chat.posts] == [result["ack"]]
 
 
 def test_the_reminder_moment_is_asked_and_completed_on_whatsapp(whatsapp_chat):
     first = whatsapp_chat.route("Rappelle-moi d'appeler le fournisseur de carrelage.")
     assert first["ack"] == R._REMINDER_WHEN["fr"] and first["ack_delivered"] is True, first
+    assert R.flush_whatsapp_sends()
     assert [p.body for p in whatsapp_chat.posts] == [{"phone": _PHONE, "text": R._REMINDER_WHEN["fr"]}]
 
     second = whatsapp_chat.route("Demain à 10h.")
