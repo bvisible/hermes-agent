@@ -183,6 +183,21 @@ class _KanbanDispatcher:
         fingerprint = self.board_db_fingerprint(slug)
         if not self._quarantine_lifted(slug, fingerprint):
             return None
+        # //// Neoffice — a board removed since this tick listed it is skipped quietly (09.10). With
+        # //// neither its database nor its board.json left, connect() refuses to resurrect it and the
+        # //// tick logged « tick failed on board … does not exist » with a traceback (development
+        # //// instance, while a test run removed and recreated its board). A live board whose database
+        # //// is missing (board.json present) still opens and gets it back, as upstream intends.
+        from hermes_cli.kanban_db_boards import board_metadata_path
+
+        if (
+            fingerprint[1] is None
+            and slug != self.kb.DEFAULT_BOARD
+            and not board_metadata_path(slug).exists()
+        ):
+            logger.debug("kanban dispatcher: board %s is gone since it was listed; skipped this tick", slug)
+            return None
+        # //// END Neoffice ////
         kwargs = {k: v for k, v in asdict(self.settings).items() if k != "interval"}
         try:
             # No explicit init_db(): connect() runs the migration once per
