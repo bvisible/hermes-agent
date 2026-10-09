@@ -739,8 +739,23 @@ _PROMO_OFFER = (
     r"(?![^.!?]{0,25}?\b(?:sp[ée]ciale?s?|promo\w*|du\s+(?:jour|mois|moment)|"
     r"de\s+(?:no[eë]l|saison|bienvenue|lancement)|exclusive?s?|limit[ée]e?s?)\b)"
 )
+# //// Neoffice — the account an expense goes to is compta's, whatever the expense paid for (09.10).
+# //// « Dans quel compte imputer la commission d'un cabinet pour recruter un employé ? » reached rh: the
+# //// recruitment rule sits above the allocation rule in the table, and rh holds no chart of accounts
+# //// (gate llm/27, three runs out of three). Shared by the allocation rule below and, as an exclusion,
+# //// by the recruitment rule: recruiting stays rh's, the account of what it cost is compta's.
+_ACCOUNT_ALLOCATION = (
+    r"\bplan\s+comptable\b|\bimputation\s+comptable\b"
+    r"|\b(?:dans|sur)\s+quel\s+compte\b[^.!?]{0,60}?\b(?:imput\w*|pass\w*|comptabilis\w*|enregistr\w*|"
+    r"class\w*|mettre|mets|saisi\w*)"
+    r"|(?=[\s\S]*\b(?:factur\w*|tickets?\b|d[ée]pens\w*|achats?\b|frais\b|honoraires?\b|commissions?\b))"
+    r"(?=[\s\S]*\b(?:imput\w*|comptes?\s+(?:de\s+)?(?:charge|comptable)))"
+)
+_ACCOUNT_ALLOCATION_RE = re.compile(_ACCOUNT_ALLOCATION, re.IGNORECASE)
+# //// END Neoffice ////
 _RECRUITMENT_RE = re.compile(
-    r"^(?![\s\S]*\b(?:appels?\s+d['’]\s*offres?|soumissions?|march[ée]s?\s+publics?|adjudications?|"
+    r"^(?![\s\S]*?(?:" + _ACCOUNT_ALLOCATION + r"))"  # //// Neoffice — see _ACCOUNT_ALLOCATION (09.10)
+    r"(?![\s\S]*\b(?:appels?\s+d['’]\s*offres?|soumissions?|march[ée]s?\s+publics?|adjudications?|"
     r"ausschreibung(?:en)?|bandi|bando|appalt\w*|tenders?)\b)"
     r"(?!(?=[\s\S]*\b(?:e-?mails?|mails?|courriels?)\b)"
     r"(?=[\s\S]*\b(?:envoi\w*|envoy\w*|[ée]cri[rstvez]\w*|r[ée]dig\w*|transmet\w*|send\w*|writ\w*|"
@@ -962,15 +977,7 @@ _FAST_PATH_RULES = (
     # never reached compta, even though "plan comptable" is unambiguous. Require
     # either that exact domain phrase, or both an accounting object and an
     # allocation/account cue, so "à qui imputer cette erreur ?" stays untouched.
-    (
-        re.compile(
-            r"\bplan\s+comptable\b|\bimputation\s+comptable\b|"
-            r"(?=.*\b(?:factur\w*|tickets?\b|d[ée]pens\w*|achats?\b))"
-            r"(?=.*\b(?:imput\w*|comptes?\s+(?:de\s+)?(?:charge|comptable)))",
-            re.IGNORECASE,
-        ),
-        "compta",
-    ),
+    (_ACCOUNT_ALLOCATION_RE, "compta"),  # //// Neoffice — widened on 09.10, see _ACCOUNT_ALLOCATION
     # //// END Neoffice ////
     # //// Neoffice — Swiss accounting law must reach the compta worker, which
     # owns the curated doctrine wiki. Keep this separate from the generic rule
