@@ -1361,7 +1361,14 @@ class WebhookAdapter(BasePlatformAdapter):
             # explicit): it reliably reaches the model AND sits after the cached SOUL (the user
             # turn is always last → cache-safe). The desk shows the user's ORIGINAL text (not
             # event.text), so this stays invisible to the user.
-            _event_text = f"(System: reply to the user in {_lang_name}. Do not reply in any other language.)\n\n{prompt}"
+            # //// Neoffice — the formal register in the same line (09.10): told « vous » only in the
+            # //// SOUL, far from the turn, she answered « Mets-la en pause » with « dis-moi si tu veux ».
+            _register = {"fr": " Address them as « vous », whatever form they use.",
+                         "de": " Address them as « Sie », whatever form they use.",
+                         "it": " Address them as « Lei », whatever form they use."}.get(
+                _lang_code.split("-")[0].lower(), "")
+            _event_text = (f"(System: reply to the user in {_lang_name}.{_register} "
+                           f"Do not reply in any other language.)\n\n{prompt}")
         # //// END Neoffice ////
         # //// Neoffice — text carries the language directive and channel_prompt the ephemeral
         # //// system line (both built just above); upstream passes the raw prompt and no
