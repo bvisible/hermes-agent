@@ -146,9 +146,11 @@ def worker_reply_directive(language: Optional[str]) -> str:
         f"{REPLY_DIRECTIVE_MARK}{_WORKER_LANGUAGE_NAMES.get(lang, lang)}. Do not reply in any "
         "other language. "
         # //// Neoffice — 09.10: in English the amounts came without « CHF », and a German answer
-        # //// kept the ERP's French status « Brouillon ». Said here, not in the SOULs, which are
-        # //// at their 20 000-character cap.
-        "Write every amount with its currency (CHF), and the ERP's own words (a status such "
+        # //// kept the ERP's French status « Brouillon »; the workers wrote numbers the French way
+        # //// (« 30 120,15 CHF ») beside the fast path's Swiss « 30'120.15 ». Said here, not in the
+        # //// SOULs, which are at their 20 000-character cap.
+        "Write every amount with its currency (CHF), the Swiss way (an apostrophe between the "
+        "thousands, a point before the cents: 1'234.50 CHF), and the ERP's own words (a status such "
         "as « Brouillon ») in that language too. If a document you are about to create needs a "
         "business partner (customer or supplier) and NO partner is named in "
         "the request or the conversation context, do NOT pick one yourself — "

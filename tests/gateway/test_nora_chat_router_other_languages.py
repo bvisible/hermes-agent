@@ -153,3 +153,5 @@ def test_the_directive_names_the_language_and_keeps_the_partner_guard(language, 
     assert "do NOT pick one yourself" in directive and directive.endswith("and STOP.]")
     # //// Neoffice — 09.10: amounts with their currency, the ERP's words in the reply's language
     assert "every amount with its currency (CHF)" in directive and "« Brouillon »" in directive
+    # //// Neoffice — 09.10: the Swiss number format, as the fast path writes it
+    assert "1'234.50 CHF" in directive
