@@ -23,6 +23,57 @@ from hermes_constants import FINISH_REASON_LENGTH
 logger = logging.getLogger("agent.conversation_loop")
 
 
+# //// Neoffice — a deferred tool called by its own name, and MCP names the fuzzy repair confuses (10.10).
+# //// A worker found « send_email » with tool_search, read it with tool_describe, then called it by its own
+# //// name, as models do. Upstream rejects a direct call to a deferred tool as unknown (it must be wrapped
+# //// in tool_call), but its fuzzy repair runs first, and two tools of one MCP server share a long prefix
+# //// (mcp__neoffice_ventes__): « send_email » came out as « search_link », and the e-mail's arguments went
+# //// to the link search nine times in two turns, until the worker said the mail tool was broken. The call is
+# //// what the model meant: it becomes the tool_call it should have been, in the very scope the bridge
+# //// checks (agent.tool_executor._tool_search_scoped_names). And the fuzzy repair no longer turns one MCP
+# //// tool into another tool of the same server: it is there for case and separators, not for that.
+def _route_deferred_through_bridge(agent, tc, valid_names) -> bool:
+    """Rewrite a direct call to a deferred tool the session may reach into a ``tool_call`` bridge call."""
+    from tools.tool_search_catalog import TOOL_CALL_NAME
+
+    if TOOL_CALL_NAME not in valid_names:
+        return False
+    try:
+        from agent.tool_executor import _tool_search_scoped_names
+
+        scoped = _tool_search_scoped_names(agent)
+        name = tc.function.name
+        if name not in scoped:  # a bare name (« send_email ») for one deferred MCP tool of the session
+            named = [n for n in scoped if n.startswith("mcp__") and n.endswith("__" + name)]
+            if len(named) != 1:
+                return False
+            name = named[0]
+        raw = tc.function.arguments
+        args = json.loads(raw) if isinstance(raw, str) and raw.strip() else (raw or {})
+    except Exception:  # an unreadable call keeps upstream's path: repair, then unknown tool
+        return False
+    if not isinstance(args, dict):
+        return False
+    tc.function.name = TOOL_CALL_NAME
+    tc.function.arguments = json.dumps({"calls": [{"name": name, "arguments": args}]}, ensure_ascii=False)
+    return True
+
+
+def _other_mcp_tool(asked: str, repaired: str) -> bool:
+    """True when a repair turned one MCP tool into a different tool of the same server: their shared
+    ``mcp__<server>__`` prefix makes unrelated names close (``send_email`` and ``search_link``)."""
+    if not (asked.startswith("mcp__") and repaired.startswith("mcp__")):
+        return False
+    asked_server, _, asked_tool = asked[5:].partition("__")
+    repaired_server, _, repaired_tool = repaired[5:].partition("__")
+    if not asked_tool or asked_server.lower() != repaired_server.lower():
+        return False
+    from difflib import SequenceMatcher
+
+    return SequenceMatcher(None, asked_tool.lower(), repaired_tool.lower()).ratio() < 0.7
+# //// END Neoffice ////
+
+
 @dataclass
 class ToolValidationVerdict:
     """Outcome of ``validate_tool_calls``.
@@ -102,7 +153,19 @@ def validate_tool_calls(
     repaired_ids = set()
     for tc in tool_calls:
         if tc.function.name not in valid_names:
+            # //// Neoffice — see _route_deferred_through_bridge (10.10).
+            asked = tc.function.name
+            if _route_deferred_through_bridge(agent, tc, valid_names):
+                agent._vprint(f"{agent.log_prefix}🔧 Deferred tool called by name: '{asked}' -> tool_call",
+                              force=True, diagnostic=True)
+                repaired_ids.add(id(tc))
+                continue
+            # //// END Neoffice ////
             repaired = agent._repair_tool_call(tc.function.name)
+            # //// Neoffice — see _other_mcp_tool (10.10): never another tool of the same server.
+            if repaired and _other_mcp_tool(tc.function.name, repaired):
+                repaired = None
+            # //// END Neoffice ////
             if not repaired:
                 # //// Neoffice — MCP-prefix tolerance. Some models (Mistral notably) emit
                 # //// the BARE tool name (frappe_revenue_summary) instead of the registered
