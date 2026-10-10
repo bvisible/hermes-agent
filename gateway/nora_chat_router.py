@@ -2547,6 +2547,83 @@ def _route_reminder(message: str, chat_user: Optional[str], deliver_extra: Optio
 # //// END Neoffice ////
 
 
+# //// Neoffice — a « oui » to what NORA just offered is carried out in code by nora (10.10).
+# //// « Oui, valide-la » and « Oui, envoyez » each cost a worker turn, 8 to 15 s on the development
+# //// instance, for an action the last reply had already named. nora (confirmations.route_confirmation)
+# //// carries out that ONE action as the person and answers, over the desk callback and token of
+# //// _route_reminder. Anything else (nothing offered, two offers, a change, a refusal) declines, and
+# //// the pole's worker takes the turn as before.
+def _is_go_ahead(msg: str) -> bool:
+    """A short yes to a proposal, as the go-ahead rule of _fast_path reads one."""
+    text = msg or ""
+    return (
+        len(text) <= 80
+        and bool(_CONFIRM_SEND_RE.search(text))
+        and not _RECUR_RE.search(text)
+        and not _INFO_QUESTION_RE.search(text)
+        and not _is_one_off_reminder(text)
+    )
+
+
+def _route_confirmation(
+    message: str,
+    chat_user: Optional[str],
+    deliver_extra: Optional[dict],
+    conversation_id: Optional[str],
+    language: Optional[str],
+) -> dict:
+    extra = deliver_extra or {}
+    cb = (extra.get("callback_url") or "").strip()
+    token = (extra.get("callback_token") or "").strip()
+    user = (chat_user or "").strip()
+    _DELIVER = "nora.api.v2.hermes_callback.deliver"
+    _ROUTE = "nora.api.v2.confirmations.route_confirmation"
+    declined = {"routed": False, "category": "DIRECT", "ack": None, "task_id": None}
+    cid = (extra.get("conversation_id") or conversation_id or "").strip()
+    if not (cb and token and user and cid) or _DELIVER not in cb:
+        return declined
+    import json as _json
+    import urllib.request
+
+    req = urllib.request.Request(
+        cb.replace(_DELIVER, _ROUTE),
+        data=_json.dumps({"user": user, "message": message, "conversation_id": cid,
+                          "language": language or ""}).encode(),
+        method="POST", headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = _json.loads(resp.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("nora_chat_router: confirmation POST failed → the pole's worker: %s", exc)
+        return declined
+    if isinstance(data, dict) and isinstance(data.get("message"), dict):
+        data = data["message"]  # a whitelisted Frappe method answers {"message": {...}}
+    if not isinstance(data, dict) or not data.get("ok") or not data.get("ack"):
+        logger.info("nora_chat_router: confirmation declined (%s) → the pole's worker", (data or {}).get("reason"))
+        return declined
+    delivered = _post_ack_to_callback(data["ack"], deliver_extra)
+    logger.info("nora_chat_router: a yes carried out in code (%s %s), ack_delivered=%s",
+                data.get("action"), data.get("name") or data.get("card") or "", delivered)
+    return {"routed": True, "category": "DIRECT", "ack": data["ack"], "task_id": None, "fast": True,
+            "confirmed": data.get("action"), "ack_delivered": delivered}
+
+
+def _remember_confirmed_turn(conversation_id: Optional[str], message: str, prior: dict, ack: str) -> None:
+    """A turn carried out in code is the conversation's like any other: the pole stays, so a « oui » to the next
+    offer still reaches it, and the film holds the yes and NORA's answer for the next worker."""
+    if not conversation_id:
+        return
+    _LAST_ROUTE[conversation_id] = {**prior, "msg": (message or "")[:200], "title": _task_title(message, prior)}
+    if len(_CONV_HISTORY) > _LAST_ROUTE_MAX:
+        _CONV_HISTORY.clear()
+    film = _CONV_HISTORY.setdefault(conversation_id, [])
+    film.append("User: " + (message or "")[:240])
+    del film[:-_CONV_HISTORY_TURNS]
+    note_nora_reply(conversation_id, ack)
+# //// END Neoffice ////
+
+
 # //// Neoffice — a note is WRITTEN IN CODE by nora (notes.route_note, #1040), over the desk
 # //// callback and token of _route_reminder. nora reads the note out of the request, writes it as
 # //// the person and answers; with nothing to note it asks what to note, and the next message of
@@ -2965,6 +3042,19 @@ def route_chat_message(
         and _needs_reminder_moment(message)
     )
     _owned_turn = bool(_tasks_turn or _reminder_completed or _reminder_ask)  # settled before any pole
+    # //// END Neoffice ////
+
+    # //// Neoffice — a short « oui » after a pole's proposal is first handed to nora, which carries out the one
+    # //// action NORA's last reply offered (10.10), see _route_confirmation. Declined: routed as before.
+    if (
+        _offer is None and not _note_request and not _space_turn and not _owned_turn
+        and prior and prior.get("pole") in POLES
+        and _is_go_ahead(message)
+    ):
+        _confirmed = _route_confirmation(message, chat_user, deliver_extra, conversation_id, language)
+        if _confirmed.get("routed"):
+            _remember_confirmed_turn(conversation_id, message, prior, _confirmed["ack"])
+            return _confirmed
     # //// END Neoffice ////
 
     # //// Neoffice — a yes in a thread where NORA has said nothing confirms nothing, see
