@@ -839,6 +839,23 @@ _FOREIGN_SALES_DOCUMENT_RE = re.compile(
 # //// END Neoffice ////
 
 
+# //// Neoffice — an order to place, said with its verb (10.10). « Recommande-nous 10 raccords coudés en laiton »
+# //// matched no rule: the classifier read « recommander » as « to recommend », and the orchestrator answered it
+# //// itself in 43 s instead of the sales pole, which owns restocking. A verb of ordering followed by a quantity,
+# //// or by « chez le fournisseur », is an order to place: « commande 5 arrosoirs », « recommande-nous-en 10 »,
+# //// « commandes-en 10 chez le fournisseur », « passe une commande de 20 siphons ». A year is no quantity
+# //// (« les commandes 2026 »), and « un » is an article (« recommande-moi un bon fournisseur »).
+_ORDER_TO_PLACE_RE = re.compile(
+    r"\b(?:re)?command(?:e|ez|er|ons|es(?=[-\s]+en\b))\b"
+    r"(?:(?:[-\s]+(?:nous|moi|en|les?|la))*[-\s]+(?:\d{1,3}\b|(?:deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze"
+    r"|douze|treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent)\b)"
+    r"|[^.?!]{0,60}\bchez\s+(?:le|notre|nos|ce|cet|un|mon)\s+fournisseurs?\b)"
+    r"|\bpass(?:e|es|ez|er|ons)\s+(?:une\s+)?commande\s+(?:de\s+\d|d['\u2019]|au\s+fournisseur|chez\b)",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -1124,6 +1141,9 @@ _FAST_PATH_RULES = (
     (re.compile(r"(\bdevis\b|commande[s]? client|bon de commande client)", re.IGNORECASE), "ventes"),
     # //// Neoffice — the same documents in English, German and Italian, see _FOREIGN_SALES_DOCUMENT_RE.
     (_FOREIGN_SALES_DOCUMENT_RE, "ventes"),
+    # //// END Neoffice ////
+    # //// Neoffice — an order to place, see _ORDER_TO_PLACE_RE (10.10).
+    (_ORDER_TO_PLACE_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — expense claims, salary certificates and source tax go to rh
     # (2026-09-23): the pole now holds the tools to file, list and decide an expense
