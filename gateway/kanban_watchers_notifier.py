@@ -621,12 +621,21 @@ def _neoffice_fmt_completed(ev, n) -> tuple:
         payload_summary = _payload(ev, "summary")
         if payload_summary:
             full = str(payload_summary)
+    # //// Neoffice — a worker that read this header in the conversation film wrote it back at the
+    # //// top of its handoff, and the person read it twice (osiris, 10.10): the repeat is dropped.
+    head = f"✅ {_neoffice_head(n)} — {n.title}"
+    if full:
+        body = full.strip()
+        while body.startswith(head):
+            body = body[len(head):].lstrip()
+        full = body
     handoff = f"\n{full.strip()[:3500]}" if full else ""
     # Upstream #70752: the wake turn carries the first line only (their cap), so a woken
     # creator does not re-decompose work that already exists. The customer message above
     # stays full length; the wake prompt is internal.
     wake_handoff = _first_line(full, 200) if full else None
-    return f"✅ {_neoffice_head(n)} — {n.title}{handoff}", wake_handoff, None
+    # //// Neoffice — the header is built once, above, so that its repeat can be dropped.
+    return f"{head}{handoff}", wake_handoff, None
 
 
 def _neoffice_fmt_blocked(ev, n) -> tuple:
