@@ -801,6 +801,20 @@ _FOREIGN_CHART_RE = re.compile(
     re.IGNORECASE,
 )
 
+# //// Neoffice — a KPI card asked for is drawn by analyse too (10.10). « Crée-moi un indicateur du
+# //// chiffre d'affaires du mois » matched only the revenue rule and reached compta, which told the
+# //// figure: no card was made. « indicateur » counts only with a verb that makes or shows one (« le
+# //// CA est-il un bon indicateur ? » is a question); « KPI » and « carte d'indicateur » always. Nora's
+# //// fast path defers the same words (nora.api.fast_answer._CHART_ASKED_RE): change both together.
+_KPI_CARD_RE = re.compile(
+    r"\b(?:cr[ée]{1,2}\w*|fai[st]\w*|ajout\w*|mets|mettre|montre\w*)\b[^.?!]{0,40}\bindicateurs?\b"
+    r"|\bcartes?\s+(?:d['\u2019]\s*)?indicateurs?\b|\bkpis?\b|\bnumber\s+cards?\b"
+    r"|\b(?:create|add|make|show)\b[^.?!]{0,40}\bindicators?\b"
+    r"|\b(?:erstell\w*|mach\w*|f[üu]g\w*|zeig\w*)\b[^.?!]{0,40}\bkennzahl\w*"
+    r"|\b(?:crea\w*|fammi|aggiung\w*|mostra\w*)\b[^.?!]{0,40}\bindicator[ei]\b",
+    re.IGNORECASE,
+)
+
 # //// Neoffice — sales documents named in the fleet's three other languages (08.10), the
 # //// counterpart of the French « devis / commande client » rule. « How many open quotes does <a
 # //// client> have, and what is their total amount? » matched no rule, the classifier answered
@@ -829,6 +843,9 @@ _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
     (_FOREIGN_CHART_RE, "analyse"),
+    # //// END Neoffice ////
+    # //// Neoffice — a KPI card to create, see _KPI_CARD_RE (10.10): before the revenue rule of compta.
+    (_KPI_CARD_RE, "analyse"),
     # //// END Neoffice ////
     # //// Neoffice — recruitment, see _RECRUITMENT_RE (07.10). Here so the go-ahead guard sees it too.
     (_RECRUITMENT_RE, "rh"),
