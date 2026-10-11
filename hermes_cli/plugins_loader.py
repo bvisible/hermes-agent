@@ -154,8 +154,16 @@ def run_with_load_deadline(plugin_key: str, ctx: "PluginContext", fn: Callable[[
 def _evict_modules(module_name: str) -> None:
     """Drop ``module_name`` and every ``module_name.*`` submodule from ``sys.modules``."""
     prefix = f"{module_name}."
-    for name in [n for n in sys.modules if n == module_name or n.startswith(prefix)]:
-        del sys.modules[name]
+    # //// Neoffice — iterate a snapshot of sys.modules: a plugin loads in a worker thread, and any other
+    # //// thread importing a module meanwhile (the memory prefetch, the MCP discovery) made this
+    # //// comprehension raise "dictionary changed size during iteration", so that plugin failed to load.
+    # //// Measured on osiris after the v0.21.6 merge: 28 to 67 plugin loads failed a day, one pole start
+    # //// in nine, a different plugin each time. list() copies the keys in C, without a thread switch.
+    # //// Upstream issues #130208, #132886; open PRs #123936, #125854, #127620, #132367, #132434, #135987.
+    # //// Drop this block when one of them is merged.
+    for name in [n for n in list(sys.modules) if n == module_name or n.startswith(prefix)]:
+        sys.modules.pop(name, None)
+    # //// END Neoffice ////
 
 
 def _serialized_replacement(method):
