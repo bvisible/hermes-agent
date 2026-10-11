@@ -63,6 +63,11 @@ _SPECIALIST_TEAM = {
 # //// END Neoffice ////
 _KANBAN_TASK_RE = re.compile(r"\bt[âa]ches?\s+kanban\b", re.IGNORECASE)
 _INTERNALS_RE = re.compile(r"`?\b(kanban|mem0|hermes|olares|mcp|worker|board)\w*\b`?", re.IGNORECASE)
+# //// Neoffice — the software the customer bought has one name (11.10). A pole telling where a report
+# //// lives wrote « via le bureau ERPNext » despite its instructions; ERPNext is the name underneath,
+# //// so it becomes Neoffice. Only that one: « Frappe » is also a French word (« une faute de
+# //// frappe »), and ERPNextSwiss, a module's own name, does not match (no word boundary).
+_UNDERLYING_PRODUCT_RE = re.compile(r"\bERP ?Next\b", re.IGNORECASE)
 _SPACES_RE = re.compile(r"[ \t]{2,}")
 
 # //// Neoffice — a provider failure is not an answer.
@@ -486,5 +491,7 @@ def strip_internal_mechanics(text: str, lang=None) -> str:
     # //// kanban tool, not rescued at the door.
     text = _TASK_ID_RE.sub("", text)
     # //// END Neoffice ////
+    # //// Neoffice — see _UNDERLYING_PRODUCT_RE above.
+    text = _UNDERLYING_PRODUCT_RE.sub("Neoffice", text)
     text = _INTERNALS_RE.sub("", text)
     return _SPACES_RE.sub(" ", text).strip()
