@@ -201,7 +201,8 @@ def test_one_worker_reviews_at_a_time_on_a_machine(worker_card, review_slot):
 
     _finish_card(worker_card, "done")
     # Another worker of this machine is reviewing: it holds the slot.
-    other = open(os.path.join(str(review_slot), f"hermes-neoffice-skill-review-{os.getuid()}.lock"), "a")
+    other = open(os.path.join(str(review_slot), f"hermes-neoffice-skill-review-{os.getuid()}.lock"), "a",
+                 encoding="utf-8")
     fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
     try:
         agent = _agent_with_review(0.1, threading.Event())
@@ -214,6 +215,60 @@ def test_one_worker_reviews_at_a_time_on_a_machine(worker_card, review_slot):
     agent = _agent_with_review(0.1, threading.Event())
     _finalize(agent, "kanban_terminal_tool(status=done)")
     agent._spawn_background_review.assert_called_once()
+
+
+def _tool_tail(tool: str) -> list:
+    """How a worker's transcript really ends when the loop stops on a tool: on that tool's row."""
+    return [
+        {"role": "user", "content": "work kanban task"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "type": "function", "function": {"name": tool, "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": '{"ok": true}'},
+    ]
+
+
+def _finalize_tail(agent, messages: list, exit_reason: str) -> dict:
+    return finalize_turn(
+        agent, final_response="", api_call_count=3, interrupted=False, failed=False,
+        messages=messages, conversation_history=[], effective_task_id="worker",
+        turn_id="worker-turn", user_message="work kanban task",
+        original_user_message="work kanban task", _should_review_memory=False,
+        _turn_exit_reason=exit_reason,
+    )
+
+
+@pytest.mark.parametrize("card, tool", [("done", "kanban_complete"), ("blocked", "kanban_block")])
+def test_a_run_settled_by_its_terminal_kanban_tool_is_not_a_silent_stop(worker_card, card, tool):
+    """Our breaker stops a worker on the row of the tool that settled its card. Upstream's close
+    of a tool tail (#55316) relabelled that pending_tool_result: from the v0.21.6 merge every pole
+    run on osiris ended failed with a "No reply", and no worker was reviewed. The tests above end
+    on an assistant row, which a real worker never does, so they stayed green."""
+    _finish_card(worker_card, card)
+    finished = threading.Event()
+    agent = _agent_with_review(0.1, finished)
+
+    result = _finalize_tail(agent, _tool_tail(tool), f"kanban_terminal_tool(status={card})")
+
+    assert result["turn_exit_reason"] == f"kanban_terminal_tool(status={card})"
+    assert result["failed"] is False
+    assert not (result["final_response"] or "").strip()
+    if card == "done":
+        agent._spawn_background_review.assert_called_once()
+        assert finished.is_set()
+    else:
+        agent._spawn_background_review.assert_not_called()
+
+
+def test_a_worker_that_stops_on_another_tool_keeps_the_upstream_close(worker_card):
+    """Only the breaker's verdict is exempt: a worker whose loop falls out on a business tool's
+    row, its card still running, is the silent stop upstream closes and fails."""
+    agent = _agent_with_review(0.1, threading.Event())
+
+    result = _finalize_tail(agent, _tool_tail("frappe_get_list"), "unknown")
+
+    assert result["turn_exit_reason"] == "pending_tool_result"
+    assert result["failed"] is True
+    agent._spawn_background_review.assert_not_called()
 
 
 def test_the_thread_name_is_the_one_run_agent_gives_the_review():

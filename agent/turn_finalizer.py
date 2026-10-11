@@ -148,7 +148,7 @@ def _neoffice_claim_review_slot() -> bool:
     path = os.path.join(tempfile.gettempdir(), f"hermes-neoffice-skill-review-{os.getuid()}.lock")
     slot = None
     try:
-        slot = open(path, "a")
+        slot = open(path, "a", encoding="utf-8")  # //// Neoffice — a lock file; PLW1514
         fcntl.flock(slot, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         if slot is not None:
@@ -677,6 +677,16 @@ def finalize_turn(
         and isinstance(messages[-1], dict)
         and messages[-1].get("role") == "tool"
         and not (getattr(agent, "_current_streamed_assistant_text", "") or "").strip()
+        # //// Neoffice — a pole worker ends ON the row of the kanban tool that settled its card:
+        # //// our breaker (agent/neoffice_kanban_breaker.py) re-reads the card after
+        # //// kanban_complete / kanban_block and stops the loop there, so a weak model cannot act
+        # //// twice. That is not upstream's silent stop. Closing it as pending_tool_result failed
+        # //// every pole run after the v0.21.6 merge, logged a "No reply" nobody waited for, woke
+        # //// kanban_turn_recovery, and made _neoffice_worker_task_done refuse every skill review
+        # //// (none on osiris from 2026-10-08). The worker process exits with this turn; any
+        # //// other tool tail keeps upstream's close.
+        and not str(_turn_exit_reason or "").startswith("kanban_terminal_tool(")
+        # //// END Neoffice ////
     ):
         _turn_exit_reason = "pending_tool_result"
         failed = True
