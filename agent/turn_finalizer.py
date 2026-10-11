@@ -495,7 +495,15 @@ def _log_turn_exit(agent, messages, final_response, api_call_count, _turn_exit_r
         agent.session_id or "none",
         *((_turn_origin,) if _turn_origin else ()),
     )
-    if _last_msg_role == "tool" and not interrupted:
+    if (
+        _last_msg_role == "tool"
+        and not interrupted
+        # //// Neoffice — a worker settled by its terminal kanban tool ends on that tool's row on purpose
+        # //// (see the pending_tool_result close in finalize_turn): one warning per pole task was noise
+        # //// that hid the real ones. The line is still logged, at INFO, with its exit reason.
+        and not str(_turn_exit_reason or "").startswith("kanban_terminal_tool(")
+        # //// END Neoffice ////
+    ):
         logger.warning(
             "Turn ended with pending tool result (agent may appear stuck). "
             + _diag_msg + " last_tool=%s",

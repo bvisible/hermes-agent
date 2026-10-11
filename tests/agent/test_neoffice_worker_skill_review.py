@@ -10,6 +10,7 @@ its wait budget, and skips the review of a halted, blocked or failed run.
 
 from __future__ import annotations
 
+import logging
 import pathlib
 import threading
 import time
@@ -238,7 +239,7 @@ def _finalize_tail(agent, messages: list, exit_reason: str) -> dict:
 
 
 @pytest.mark.parametrize("card, tool", [("done", "kanban_complete"), ("blocked", "kanban_block")])
-def test_a_run_settled_by_its_terminal_kanban_tool_is_not_a_silent_stop(worker_card, card, tool):
+def test_a_run_settled_by_its_terminal_kanban_tool_is_not_a_silent_stop(worker_card, card, tool, caplog):
     """Our breaker stops a worker on the row of the tool that settled its card. Upstream's close
     of a tool tail (#55316) relabelled that pending_tool_result: from the v0.21.6 merge every pole
     run on osiris ended failed with a "No reply", and no worker was reviewed. The tests above end
@@ -247,9 +248,14 @@ def test_a_run_settled_by_its_terminal_kanban_tool_is_not_a_silent_stop(worker_c
     finished = threading.Event()
     agent = _agent_with_review(0.1, finished)
 
-    result = _finalize_tail(agent, _tool_tail(tool), f"kanban_terminal_tool(status={card})")
+    with caplog.at_level(logging.INFO, logger="agent.conversation_loop"):
+        result = _finalize_tail(agent, _tool_tail(tool), f"kanban_terminal_tool(status={card})")
 
     assert result["turn_exit_reason"] == f"kanban_terminal_tool(status={card})"
+    # Nor a warning per task: the exit line is there, at INFO, with its reason.
+    ended = [r for r in caplog.records if "Turn ended" in r.getMessage()]
+    assert ended, "the exit line is still logged"
+    assert {r.levelname for r in ended} == {"INFO"}, [r.getMessage() for r in ended]
     assert result["failed"] is False
     assert not (result["final_response"] or "").strip()
     if card == "done":
