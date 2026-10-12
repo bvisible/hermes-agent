@@ -1170,6 +1170,23 @@ _FAST_PATH_RULES = (
         "rh",
     ),
     # //// END Neoffice ////
+    # //// Neoffice — the person's own line manager is an HR question (13.10): « Qui est mon responsable ? » was classified
+    # //// `direct`, so the orchestrator handed it to rh itself, after 64 s (114 s in all, where a routed question answers in
+    # //// 20-30 s). Only the explicit forms: « responsable hiérarchique », « Qui est mon responsable ? » asked as the whole
+    # //// question, and the same question in English, German and Italian. « mon responsable de compte » or « le responsable
+    # //// du chantier » are someone else's and stay with the classifier.
+    (
+        re.compile(
+            r"\bresponsable\s+hi[ée]rarchique\b|\bsup[ée]rieur\s+hi[ée]rarchique\b"
+            r"|\bqui\s+est\s+(?:mon|ma)\s+(?:responsable|sup[ée]rieur|manager|chef(?:fe)?)\s*\??\s*$"
+            r"|\bwho\s+is\s+my\s+(?:line\s+)?(?:manager|supervisor|boss)\b"
+            r"|\bwer\s+ist\s+(?:mein|meine)\s+(?:vorgesetzte[rn]?|chef(?:in)?)\b"
+            r"|\bchi\s+[eè]\s+il\s+mio\s+(?:responsabile|superiore|capo)\b",
+            re.IGNORECASE,
+        ),
+        "rh",
+    ),
+    # //// END Neoffice ////
 )
 # DIRECT only when the WHOLE message is a greeting/thanks/meta (so "Bonjour, quel est mon
 # CA ?" is NOT caught here — the domain rules above match "chiffre d'affaires" first).
