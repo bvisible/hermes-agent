@@ -140,6 +140,41 @@ REPLY_DIRECTIVE_MARK = "[Reply to the user in "
 _CHAT_LANGUAGE: dict = {}
 
 
+_WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+
+
+# //// Neoffice — the calendar a worker filters with, computed in code (13.10). Asked « Quels devis arrivent à
+# //// expiration cette semaine ? » on a Tuesday, a worker took « this week » for the seven days from today (13 to 19
+# //// October) where the week of a Swiss office runs from Monday to Sunday (12 to 18), and another had taken the week
+# //// before for the current one (12.10). A model computes a calendar badly, the code does not: today and the periods a
+# //// person names are written into the task, in the site's time (hermes_time), and the worker filters with those dates.
+def calendar_hint(now=None) -> str:
+    from datetime import datetime, timedelta
+
+    if now is None:
+        try:
+            from hermes_time import now as _site_now
+
+            now = _site_now()
+        except Exception:  # a clock that cannot be read must never stop a task from being created
+            now = datetime.now()
+    day = now.date()
+    monday = day - timedelta(days=day.weekday())
+    month_start = day.replace(day=1)
+    month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    last_month_end = month_start - timedelta(days=1)
+    return (
+        f"Calendar (site time): today is {_WEEKDAY_NAMES[day.weekday()]} {day.isoformat()}. "
+        f"This week = {monday.isoformat()} (Monday) to {(monday + timedelta(days=6)).isoformat()} (Sunday); "
+        f"last week = {(monday - timedelta(days=7)).isoformat()} to {(monday - timedelta(days=1)).isoformat()}; "
+        f"this month = {month_start.isoformat()} to {month_end.isoformat()}; "
+        f"last month = {last_month_end.replace(day=1).isoformat()} to {last_month_end.isoformat()}; "
+        f"this year = {day.year}-01-01 to {day.year}-12-31. "
+        "Filter « this week », « last week », « this month »… with exactly these dates. "
+    )
+# //// END Neoffice ////
+
+
 def worker_reply_directive(language: Optional[str]) -> str:
     lang = _norm_lang(language)
     return (
@@ -151,7 +186,9 @@ def worker_reply_directive(language: Optional[str]) -> str:
         # //// SOULs, which are at their 20 000-character cap.
         "Write every amount with its currency (CHF), the Swiss way (an apostrophe between the "
         "thousands, a point before the cents: 1'234.50 CHF), and the ERP's own words (a status such "
-        "as « Brouillon ») in that language too. If a document you are about to create needs a "
+        "as « Brouillon ») in that language too. "
+        + calendar_hint()  # //// Neoffice — see calendar_hint
+        + "If a document you are about to create needs a "
         "business partner (customer or supplier) and NO partner is named in "
         "the request or the conversation context, do NOT pick one yourself — "
         "ask the user which partner to use (kanban_block kind=needs_input) "
