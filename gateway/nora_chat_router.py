@@ -2929,11 +2929,20 @@ def quantity_change_hint(message: str) -> Optional[str]:
 # //// a preamble, to say before the answer. « nora-live-widget » is the widget's own tag when
 # //// its page names none; a message TYPED on the NORA Live page carries « nora-console » and
 # //// keeps the usual form.
+# //// 13.10 (#1509): « it has to stop saying everything, it is long and tiresome to listen to ». The voice
+# //// clients say TWO short sentences at most and never a link, an address, a document number or a token;
+# //// the worker's first sentence was a whole quote (number, quantity, unit price, HT, VAT, TTC, validity).
+# //// The worker now opens on ONE sentence with the ONE figure that matters, which only it knows, says what
+# //// it could not do in those sentences, and leaves the rest to a paragraph of its own.
 VOICE_SOURCES = frozenset({"nora-console-voice", "nora-quick-voice", "nora-live-widget"})
 VOICE_ANSWER_HINT = (
-    "[The question was asked aloud and the answer will be read by speech synthesis. Start with "
-    "the answer itself in one or two short sentences (the figure, the name, the result), with no "
-    "table, list or markdown before it. Details may follow after those sentences.]"
+    "[The question was asked aloud and the answer will be read by speech synthesis. Open with ONE "
+    "short sentence (twenty words at most) that gives the result and the ONE figure that matters "
+    "(for a document, its total), with no document number, link, e-mail address or code, and no "
+    "table, list or markdown. Add at most one more short sentence, then the question that asks for "
+    "the next step if there is one. If something could not be done, say it in those sentences "
+    "(\"two points are not done: X and Y\"), never only in the details. Every detail comes after, "
+    "in a paragraph of its own: it is shown on screen, not read aloud.]"
 )
 
 

@@ -4,7 +4,8 @@
 reply through speech synthesis and keep only its prose sentences: a table or a list is shown,
 never spoken. A worker that opened on one left nothing, or only a preamble, to say before the
 answer (#759). The router now tells the worker, for a voice turn only, to start with the answer
-in one or two sentences."""
+in one short sentence that carries the one figure that matters, and to leave the details to the
+screen (#1509)."""
 import sys
 import types
 from types import SimpleNamespace
@@ -44,7 +45,10 @@ def test_the_hint_asks_for_the_answer_first_and_no_markup():
     hint = router.VOICE_ANSWER_HINT
     assert hint.startswith("[") and hint.endswith("]") and "\n" not in hint
     assert "asked aloud" in hint and "speech synthesis" in hint
-    assert "one or two short sentences" in hint and "no table, list or markdown before it" in hint
+    assert "ONE short sentence" in hint and "no table, list or markdown" in hint
+    # 13.10 (#1509): the ONE figure that matters, nothing the voice would spell out, the rest on the screen
+    assert "the ONE figure that matters" in hint and "no document number, link, e-mail address or code" in hint
+    assert "never only in the details" in hint and "shown on screen, not read aloud" in hint
 
 
 # ── the hint reaches the worker, and only for a voice turn ────────────────────────────
