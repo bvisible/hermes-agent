@@ -649,7 +649,10 @@ def _neoffice_stamp_bridge_user(server_name: str, tool_name: str, args) -> None:
             # A pole worker has no session — the dispatcher stripped it. Its task,
             # however, still names the human.
             raw = _kanban_task_user()
-        keep = raw if ("@" in raw and not raw.startswith("webhook:")) else ""
+        # //// Neoffice — #1508: the Administrator has no « @ » and is still a person: the server must hear it, to let the commercial writes
+        # //// (a discount, a line, a price, a contact) through for the one account that holds every right. The server never ACTS AS it; any other
+        # //// id without an « @ » (a phone number, webhook:…) still names nobody.
+        keep = raw if (("@" in raw and not raw.startswith("webhook:")) or raw == "Administrator") else ""
         if not keep:
             logger.info(
                 "[bridge_user] %s.%s: no session user (raw=%r) — the call names nobody",

@@ -87,6 +87,32 @@ def test_a_value_that_is_not_a_person_names_nobody(session, monkeypatch, raw):
     assert args["params"]["bridge_user"] == ""
 
 
+def test_the_administrator_is_a_person_the_server_can_name(session):
+    """#1508: the Administrator has no « @ », and « mets vingt pour cent dessus » said by it was refused as if nobody asked."""
+    session("Administrator")
+    args = {"bridge_user": FORGED, "params": {"bridge_user": FORGED}}
+    _neoffice_stamp_bridge_user("neoffice-ventes", "frappe_document_discount", args)
+    assert args["bridge_user"] == "Administrator"
+    assert args["params"]["bridge_user"] == "Administrator"
+
+
+@pytest.mark.parametrize("raw", ["administrator", "ADMINISTRATOR", "Administrator2", "Guest", "root", "admin"])
+def test_only_the_administrator_itself_is_a_person_without_an_at(session, monkeypatch, raw):
+    session(raw)
+    monkeypatch.setattr(handlers, "_kanban_task_user", lambda: "")
+    args = {"bridge_user": FORGED, "params": {}}
+    _neoffice_stamp_bridge_user("neoffice-ventes", "frappe_document_discount", args)
+    assert args["bridge_user"] == ""
+
+
+def test_a_model_cannot_pass_itself_off_as_the_administrator(session, monkeypatch):
+    session("")
+    monkeypatch.setattr(handlers, "_kanban_task_user", lambda: "")
+    args = {"bridge_user": "Administrator", "params": {"bridge_user": "Administrator"}}
+    _neoffice_stamp_bridge_user("neoffice-ventes", "frappe_document_discount", args)
+    assert args["bridge_user"] == "" and args["params"]["bridge_user"] == ""
+
+
 def test_a_pole_worker_falls_back_to_its_kanban_task(session, monkeypatch):
     session("")
     monkeypatch.setattr(handlers, "_kanban_task_user", lambda: PERSON)
