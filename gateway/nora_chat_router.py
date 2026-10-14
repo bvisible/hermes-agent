@@ -2798,6 +2798,42 @@ def _asks_fast_answer(language: Optional[str], canned_text: Optional[str], one_o
 # //// END Neoffice ////
 
 
+# //// Neoffice — the film handed to the fast answer is the END of the conversation (14.10). It was cut to its FIRST
+# //// 1500 characters, which keep the OLDEST turns: after five long lists, « Combien ça fait au total ? » found only the
+# //// first three in front of it and was answered about the wrong one (the 55 supplier invoices of turn 5 for the 4
+# //// purchase orders of turn 6). The most recent whole entries that fit are kept, so a follow-up always finds the
+# //// turn it refers to and the cut never lands inside an entry.
+_FAST_ANSWER_FILM_CHARS = 1500
+
+
+def _film_tail(film: list, limit: int = _FAST_ANSWER_FILM_CHARS) -> str:
+    """The most recent whole entries of the film that fit in `limit` characters, oldest first (the last entry is always
+    kept, cut to the limit if it alone is longer)."""
+    kept, size = [], 0
+    for entry in reversed(film or []):
+        size += len(entry) + (1 if kept else 0)
+        if kept and size > limit:
+            break
+        kept.append(entry)
+    text = "\n".join(reversed(kept))
+    return text[-limit:] if len(text) > limit else text
+
+
+def _film_end(text: str, limit: int = _FAST_ANSWER_FILM_CHARS) -> str:
+    """The last `limit` characters of a film already joined, starting at a line."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    tail = text[-limit:]
+    return tail.split("\n", 1)[1] if "\n" in tail else tail
+
+
+def _film_for_the_fast_answer(conversation_id: Optional[str]) -> str:
+    """The film of the conversation as the fast-answer engine reads it: the end of it."""
+    return _film_tail(_CONV_HISTORY.get(conversation_id) or []) if conversation_id else ""
+# //// END Neoffice ////
+
+
 def _fast_answer(
     message: str,
     chat_user: Optional[str],
@@ -2823,7 +2859,7 @@ def _fast_answer(
     # router; not passing it was the whole gap (measured 2026-08-11).
     payload = {"user": user, "message": message}
     if (context or "").strip():
-        payload["context"] = context.strip()[:1500]
+        payload["context"] = _film_end(context)  # //// Neoffice — the end of the film, see _film_tail ////
     # //// Neoffice — the conversation id keys the PAGE context on the desk side
     # (nora_page_context:<cid>): the docked job panel stores the project there, and
     # « on en est où sur ce chantier ? » is answered in code from it (05.09).
@@ -3159,7 +3195,7 @@ def route_chat_message(
         import concurrent.futures as _cf
 
         _fa_pool = _cf.ThreadPoolExecutor(max_workers=1)
-        _fa_film = "\n".join(_CONV_HISTORY.get(conversation_id) or []) if conversation_id else ""
+        _fa_film = _film_for_the_fast_answer(conversation_id)  # //// Neoffice — the END of the film, see _film_tail ////
         _fa_future = _fa_pool.submit(
             _fast_answer, message, chat_user, deliver_extra, _fa_film
         )
