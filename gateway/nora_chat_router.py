@@ -1683,6 +1683,37 @@ _ATELIER_HINT = (
 # //// END Neoffice ////
 
 
+# //// Neoffice — the DOCUMENT in front of the person is NORA's (maintenance#1573). The panel of the editors
+# //// (Word, Excel, PowerPoint, PDF in the Drive or in NeoDesk) sends every message with the page context
+# //// {surface: "editor", app, document: {name, …}}. « Mets le mot offre en gras, puis ajoute à la fin une
+# //// ligne » was classified as business and became a task of the Support pole (osiris, 14.10): the pole
+# //// holds no document tool (they are NORA's own, NORA_TASKS), so it could only say it could not. A turn
+# //// from an editor is the orchestrator's, with the document tools and _EDITOR_HINT; a note, a space, the
+# //// scheduled tasks and a reminder stay settled in code first, and a question about the company's data
+# //// is still business, which the hint says.
+def _editor_of(page_context: Optional[dict]) -> Optional[dict]:
+    """The document the person writes from, from the page context; None outside an editor."""
+    if not isinstance(page_context, dict) or page_context.get("surface") != "editor":
+        return None
+    document = page_context.get("document") if isinstance(page_context.get("document"), dict) else {}
+    return {
+        "app": (str(page_context.get("app") or "").strip() or "editor")[:20],
+        "name": (str(document.get("name") or "").strip() or "an untitled document")[:140],
+    }
+
+
+_EDITOR_HINT = (
+    "[Route: the person writes from an OPEN DOCUMENT in the {app} editor (« {name} »): they see it and every "
+    "change you make. Reading it, editing it and answering about its text are YOURS, with your document tools "
+    "only: nora_doc_observe FIRST (never change a document you have not read), then nora_doc_execute, "
+    "nora_doc_batch, nora_doc_select_text or nora_doc_type_text; nora_doc_commands finds a command's id. Do NOT "
+    "call kanban_create for the document: no pole holds these tools. Say what changed only after the result "
+    "says ok. A request about the company's own data (a customer, an invoice, stock…) is business as usual: "
+    "kanban_create.]"
+)
+# //// END Neoffice ////
+
+
 # //// Neoffice — a plain space request is read in code by nora (space_route.route_space, 02.10):
 # //// given the tools and the instruction, the orchestrator read « Ajoute les bons de livraison à mon
 # //// espace Commercial » as a wiki question, searched it twenty times and was stopped by the guard
@@ -3175,6 +3206,15 @@ def route_chat_message(
     )
     # //// END Neoffice ////
 
+    # //// Neoffice — the document in front of the person is NORA's (maintenance#1573), see _editor_of.
+    # //// Decided after the turns settled in code and after small talk (« merci » stays a canned answer).
+    _editor = _editor_of(page_context)
+    _editor_turn = (
+        _editor is not None and _offer is None and not _note_request and not _space_turn
+        and not _owned_turn and not _canned_text
+    )
+    # //// END Neoffice ////
+
     # //// Neoffice — PARALLEL classify + fast-answer. They were serial (two
     # LLM round-trips ≈ 1.9 s before any work started, on EVERY path). They
     # are independent — the fast-answer engine classifies its own intent —
@@ -3190,6 +3230,7 @@ def route_chat_message(
         not _note_request
         and not _space_turn
         and not _owned_turn  # //// Neoffice — nor the scheduled tasks, nor a reminder's moment (09.10)
+        and not _editor_turn  # //// Neoffice — nor the document in front of the person (#1573)
         and _asks_fast_answer(language, _canned_text, _one_off_reminder)
     ):
         import concurrent.futures as _cf
@@ -3212,6 +3253,8 @@ def route_chat_message(
         category = "DIRECT"  # //// Neoffice — a space, NORA's own conversation (step 3), classifier skipped ////
     elif _owned_turn:
         category = "DIRECT"  # //// Neoffice — the scheduled tasks, a reminder's moment (09.10) ////
+    elif _editor_turn:
+        category = "DIRECT"  # //// Neoffice — the document in front of the person (#1573), classifier skipped ////
     else:
         category = classify(
             message,
@@ -3245,6 +3288,7 @@ def route_chat_message(
         and not _note_request  # //// Neoffice — a note on a job page is a note (#1040)
         and not _space_turn  # //// Neoffice — a space composed on a job page is a space (step 3)
         and not _owned_turn  # //// Neoffice — the scheduled tasks are the orchestrator's (09.10)
+        and not _editor_turn  # //// Neoffice — nor the document in front of the person (#1573)
         and _page_project(page_context)
         and not _DIRECT_RE.match((message or "").strip())
         and not _CAPABILITY_RE.match((message or "").strip())
@@ -3263,7 +3307,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and help_request == "ask"
-        and not (_canned_text or _note_request or _space_turn or _owned_turn)  # //// Neoffice — 09.10
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn)  # //// Neoffice — 09.10, #1573
     ):
         logger.info("nora_chat_router: DIRECT → support (a request for help, read by nora)")
         category = "support"
@@ -3278,7 +3322,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and _WHERE_TO_FIND_RE.search(message or "")
-        and not (_canned_text or _note_request or _space_turn or _owned_turn)
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn)  # //// Neoffice — #1573
     ):
         again = classify(
             message,
@@ -3295,7 +3339,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and _is_bare_name(message)
-        and not (_canned_text or _note_request or _space_turn or _owned_turn)
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn)  # //// Neoffice — #1573
     ):
         again = classify(
             message,
@@ -3309,7 +3353,7 @@ def route_chat_message(
         category = again if again in POLES else "ventes"
         logger.info("nora_chat_router: DIRECT → %s (a name typed alone)", category)
     # //// END Neoffice ////
-    if not _owned_turn:  # //// Neoffice — the scheduled tasks stay the orchestrator's (09.10)
+    if not (_owned_turn or _editor_turn):  # //// Neoffice — the scheduled tasks (09.10) and the document (#1573) stay the orchestrator's
         category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
@@ -3433,7 +3477,9 @@ def route_chat_message(
             }
         # //// END Neoffice ////
         _is_capability = bool(_CAPABILITY_RE.match(message or ""))
-        if not _owned_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10)
+        # //// Neoffice — nor the document in front of the person (#1573): « que peux-tu faire ici ? » asked
+        # //// from an editor is about the document tools, which only the orchestrator holds.
+        if not _owned_turn and not _editor_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10)
             len(message or "") <= 80
             and _SMALLTALK_RE.search(message or "")
             and not _BUSINESS_RE.search(message or "")
@@ -3471,8 +3517,10 @@ def route_chat_message(
         # //// END Neoffice ////
         # //// Neoffice — the orchestrator gets the reminder instruction, see _ONE_OFF_REMINDER_HINT,
         # //// and a yes in a fresh thread its rule, see _FRESH_THREAD_HINT (#1065).
+        # //// Neoffice — and the document in front of the person its tools, see _EDITOR_HINT (#1573).
         _direct_hints = [h for h in (_ONE_OFF_REMINDER_HINT if _one_off_reminder else None,
                                      _FRESH_THREAD_HINT if _fresh_yes else None,
+                                     _EDITOR_HINT.format(**_editor) if _editor_turn else None,
                                      _SCHEDULED_TASKS_HINT if _tasks_turn else None) if h]  # //// Neoffice — 09.10
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                 "agent_hint": "\n".join(_direct_hints) or None}  # //// Neoffice — #1065
