@@ -90,6 +90,8 @@ def test_a_request_about_the_document_goes_to_the_orchestrator_with_the_document
     assert hint == R._EDITOR_HINT.format(**_EDITOR)
     assert "« Devis.docx »" in hint and "word editor" in hint
     assert "nora_doc_observe FIRST" in hint and "nora_doc_commands" in hint
+    # What the real agent got wrong on osiris (14.10): tool names as command ids, a line typed over a selection.
+    assert 'where="end"' in hint and "not command ids" in hint and "typing replaces the selection" in hint
     assert "Do NOT call kanban_create for the document" in hint
     # What is still business is said to be, so the hint does not turn every turn of an editor into a document turn.
     assert "company's own data" in hint and hint.rstrip("]").endswith("kanban_create.")

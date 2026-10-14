@@ -1705,11 +1705,15 @@ def _editor_of(page_context: Optional[dict]) -> Optional[dict]:
 _EDITOR_HINT = (
     "[Route: the person writes from an OPEN DOCUMENT in the {app} editor (« {name} »): they see it and every "
     "change you make. Reading it, editing it and answering about its text are YOURS, with your document tools "
-    "only: nora_doc_observe FIRST (never change a document you have not read), then nora_doc_execute, "
-    "nora_doc_batch, nora_doc_select_text or nora_doc_type_text; nora_doc_commands finds a command's id. Do NOT "
-    "call kanban_create for the document: no pole holds these tools. Say what changed only after the result "
-    "says ok. A request about the company's own data (a customer, an invoice, stock…) is business as usual: "
-    "kanban_create.]"
+    # //// Neoffice — what the real agent got wrong on osiris (14.10): its tool names used as command ids in a batch,
+    # //// a line typed over the selection it had just made instead of added at the end, a step repeated.
+    "only: nora_doc_observe FIRST (never change a document you have not read), then ONE step per call: "
+    "nora_doc_select_text then nora_doc_execute to format a passage; nora_doc_type_text(text, where=\"end\") to "
+    "add a line at the end (never select a passage to type after it: typing replaces the selection); "
+    "nora_doc_commands finds a command's id (the names of your tools are not command ids). Do NOT call "
+    "kanban_create for the document: no pole holds these tools. Say what changed only after the result says ok; "
+    "a change that does not come out right after two tries: stop and say what is there. A request about the "
+    "company's own data (a customer, an invoice, stock…) is business as usual: kanban_create.]"
 )
 # //// END Neoffice ////
 
