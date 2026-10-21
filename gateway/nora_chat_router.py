@@ -893,6 +893,89 @@ _ORDER_TO_PLACE_RE = re.compile(
 # //// END Neoffice ////
 
 
+# //// Neoffice — a LETTER to post is the letter path's (21.10, tranche 1 of the letters in NeoWrite). « Prépare une
+# //// lettre pour notre assurance : … » matched no rule and was left to the classifier, which has no letter class; and
+# //// « une lettre de relance pour l'énergie », a letter to a SUPPLIER, reached compta by the dunning rule's \brelanc
+# //// (compta holds the customer dunning, not a letter). The support pole holds the letter tool (nora_letter_create)
+# //// beside the e-mail tools; a turn from an open editor stays the orchestrator's, who holds it too.
+# //// The shapes, French first, then English, German and Italian:
+# ////   · a writing verb in the imperative or the infinitive, then the noun with an indefinite article (« écris-lui une
+# ////     lettre », « prépare un courrier ») or with a definite one followed by its recipient (« prépare la lettre à la
+# ////     régie »): « fais le point sur le courrier reçu » and « prépare le courrier du jour » are the incoming mail;
+# ////   · a sending verb only with an indefinite article (« envoie une lettre recommandée à … »): « envoie le courrier à
+# ////     Dupont » sends what exists; never a past participle (« j'ai fait / envoyé une lettre » is a report);
+# ////   · a wish or a need (« je voudrais une lettre pour … », « il me faut un courrier »), or the noun that opens the
+# ////     message with its recipient (« Une lettre à la gérance : … »).
+# //// Never when the message speaks of an e-mail (the e-mail rule: « envoie la lettre par e-mail »), a cover letter or a
+# //// candidate (recruitment, rh), a recurring job (« tous les mois », the scheduled tasks), nor an explicit payment
+# //// reminder: « relance » / « rappel » NEXT TO an invoice, a payment, a debtor or a customer stays the dunning's.
+_LETTER_NOUN_FR = r"(?:lettres?|courriers?(?!\s+[ée]lectroniques?))"
+_LETTER_ADJECTIVE = r"(?:[a-zà-ÿ]{3,12}\s+)?"
+_LETTER_RECIPIENT = r"[^.!?\n]{0,25}?\b(?:[àa]|au|aux|pour|to|for|an|für|al|alla|per)\b"
+_LETTER_WRITE_FR = (
+    r"(?:fais|faire|faites|[ée]cri(?:s|re|vez|vons)|pr[ée]pare[rsz]?|pr[ée]parons|r[ée]dige[rsz]?|r[ée]digeons"
+    r"|g[ée]n[èée]re[rsz]?|compose[rsz]?|cr[ée]e[rsz]?)"
+)
+_LETTER_SEND_FR = r"(?:envoie[sz]?|envoyer|envoyez|envoyons|adresse[rz]?)"
+_LETTER_REQUEST_RE = re.compile(
+    # not an e-mail, a cover letter, a bill of exchange, a candidate
+    r"^(?![\s\S]*\b(?:e-?mails?|mails?|courriels?|lettres?\s+de\s+(?:motivation|change|voiture|cr[ée]dit)"
+    r"|cover\s+letters?|motivationsschreiben|lettera\s+di\s+(?:motivazione|presentazione)"
+    r"|candidat(?:e|es|s)?|candidatures?|bewerb\w*)\b)"
+    # not an explicit payment reminder
+    r"(?![\s\S]*(?:\b(?:relanc\w*|rappels?)\b[^.!?\n]{0,40}?\b(?:factur\w*|paiements?|impay\w*|d[ée]biteurs?|arri[ée]r[ée]s?"
+    r"|clients?|DUNN-\w+|FA-\d[\w-]*|montants?\s+d[ûu]s?)"
+    r"|\b(?:factur\w*|impay\w*|paiements?\s+en\s+retard)\b[^.!?\n]{0,40}?\b(?:relanc\w*|rappels?)\b"
+    r"|\breminders?\b[^.!?\n]{0,40}?\b(?:invoices?|payments?|unpaid|overdue|customers?)\b"
+    r"|\b(?:mahnung\w*|zahlungserinnerung\w*)\b|\bsollecit\w*[^.!?\n]{0,40}?\b(?:fattur\w*|pagament\w*)\b))"
+    r"[\s\S]*?(?:"
+    # French
+    r"\b" + _LETTER_WRITE_FR + r"\b[^.!?\n]{0,40}?\bune?\s+" + _LETTER_ADJECTIVE + _LETTER_NOUN_FR + r"\b"
+    r"|\b" + _LETTER_WRITE_FR + r"\b[^.!?\n]{0,40}?\b(?:la|le|cette|cet|ce|ma|mon|notre|votre)\s+" + _LETTER_ADJECTIVE
+    + _LETTER_NOUN_FR + _LETTER_RECIPIENT
+    + r"|\b" + _LETTER_SEND_FR + r"\b[^.!?\n]{0,40}?\bune?\s+" + _LETTER_ADJECTIVE + _LETTER_NOUN_FR + r"\b"
+    r"|\b(?:(?:voudrais|voudrions|aimerais|aimerions|veux|voulons|souhaite\w*|faut)\s+(?:d['’]\s*)?|besoin\s+d['’]\s*)une?\s+"
+    + _LETTER_ADJECTIVE + _LETTER_NOUN_FR + r"\b"
+    r"|^\s*(?:une?\s+)?" + _LETTER_NOUN_FR + r"\s+(?:[àa]|au|aux|pour)\b"
+    # English
+    r"|\b(?:write|draft|prepare|make|compose)\b[^.!?\n]{0,40}?\b(?:a|an|the|this)\s+(?:[a-z]{3,12}\s+)?letter\b"
+    r"|\bsend\b[^.!?\n]{0,40}?\ba\s+(?:[a-z]{3,12}\s+)?letter\b"
+    r"|\b(?:need|want|like)\s+a\s+(?:[a-z]{3,12}\s+)?letter\s+(?:to|for)\b"
+    r"|^\s*(?:a\s+)?letter\s+(?:to|for)\b"
+    # German: « schreib einen Brief an … », « einen Brief an … schreiben »
+    r"|\b(?:schreib\w*|verfass\w*|erstell\w*|mach\w*|entwirf|entwerf\w*)\b[^.!?\n]{0,40}?"
+    r"\b(?:einen|ein|den|diesen)\s+(?:[a-zäöüß]{3,12}\s+)?brief\b"
+    r"|\b(?:einen|ein)\s+(?:[a-zäöüß]{3,12}\s+)?brief\b[^.!?\n]{0,60}?\b(?:schreib\w*|verfass\w*|erstell\w*|aufsetz\w*)"
+    r"|^\s*(?:ein(?:en)?\s+)?brief\s+(?:an|für)\b"
+    # Italian
+    r"|\b(?:scrivi\w*|prepara\w*|redigi\w*|fai|fammi|fate|componi\w*)\b[^.!?\n]{0,40}?"
+    r"\b(?:una|la|questa|un['’])\s*(?:[a-zà-ù]{3,12}\s+)?lettera\b"
+    r"|^\s*(?:una\s+)?lettera\s+(?:a|al|alla|per)\b"
+    r")",
+    re.IGNORECASE,
+)
+# A letter with its recipient (« … une lettre à la gérance », « … a letter to … »): real work, never the short question
+# about what NORA can do that _CAPABILITY_RE answers in a sentence (« tu peux faire des lettres ? »).
+_LETTER_TO_SOMEONE_RE = re.compile(r"\b(?:lettres?|courriers?|letters?|brief|lettera)\b" + _LETTER_RECIPIENT, re.IGNORECASE)
+
+
+def _is_letter_request(msg: Optional[str]) -> bool:
+    """A postal letter to write (support's nora_letter_create): not an e-mail, not a customer payment reminder, not
+    recruitment, not a recurring job."""
+    msg = msg or ""
+    return bool(_LETTER_REQUEST_RE.search(msg)) and not _RECRUITMENT_RE.search(msg) and not _RECUR_RE.search(msg)
+
+
+_LETTER_HINT = (
+    "[Route: a postal LETTER is asked. ONE call: nora_letter_create(party=…, subject=…, body=…): `party` as the "
+    "person named it (a name or a role: « la gérance », « notre assurance »), `subject` in a few words, `body` the "
+    "text only, in plain text: no address, date, salutation, closing or signature (the code writes them from "
+    "Neoffice). Then answer with its `reply`, as it is: it carries the link that opens the letter. `candidates`: ask "
+    "which one; `error`: say it. Never invent an address; the letter is neither printed nor sent.]"
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -903,6 +986,10 @@ _FAST_PATH_RULES = (
     # //// END Neoffice ////
     # //// Neoffice — recruitment, see _RECRUITMENT_RE (07.10). Here so the go-ahead guard sees it too.
     (_RECRUITMENT_RE, "rh"),
+    # //// END Neoffice ////
+    # //// Neoffice — a letter to post, see _LETTER_REQUEST_RE (21.10): before every rule a letter's words can meet (the
+    # //// dunning rule's « relance », a job, a contact change, an e-mail), after recruitment (a cover letter is rh's).
+    (_LETTER_REQUEST_RE, "support"),
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
@@ -1250,6 +1337,12 @@ def _keyword_pole(msg: str) -> Optional[str]:
     # //// chef de chantier » a job order. The table still decides, so a chart goes to analyse.
     if _RECRUITMENT_RE.search(msg):
         return next(pole for rx, pole in _FAST_PATH_RULES if rx.search(msg))
+    # //// END Neoffice ////
+    # //// Neoffice — a letter to post before the job rules too (21.10): « écris une lettre au client pour fixer la visite
+    # //// du chantier » is a letter, which projet cannot write. See _LETTER_REQUEST_RE.
+    if _is_letter_request(msg):
+        logger.info("nora_chat_router: a letter to post → support (nora_letter_create)")
+        return "support"
     # //// END Neoffice ////
     if _APPOINTMENT_RE.search(msg):
         logger.info("nora_chat_router: booking a visit → projet (keyword rules skipped)")
@@ -1959,6 +2052,12 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     # _CAPABILITY_RE is deliberately narrow: short question, no figure, no e-mail, so a
     # real order ("crée le client X, contact@exemple.ch") never reaches this branch and a
     # data request ("peux-tu me dire le montant…") is not a capability question either.
+    # //// Neoffice — « peux-tu préparer une lettre à la gérance ? » is a letter to write, not a question about what NORA
+    # //// can do (21.10): with its recipient it is real work, see _LETTER_TO_SOMEONE_RE.
+    if _is_letter_request(msg) and _LETTER_TO_SOMEONE_RE.search(msg) and not _is_one_off_reminder(msg):
+        logger.info("nora_chat_router: a letter to someone → support (before the capability question)")
+        return "support"
+    # //// END Neoffice ////
     if _CAPABILITY_RE.match(msg) and not _RECUR_RE.search(msg):
         logger.info("nora_chat_router: capability question → DIRECT (no pole, no worker)")
         return "DIRECT"
@@ -3230,11 +3329,18 @@ def route_chat_message(
     # //// Neoffice — a one-off reminder is an action nora sets in code (_route_reminder):
     # //// the read-only fast-answer engine has nothing to answer, so it is not asked.
     _one_off_reminder = _is_one_off_reminder(message)
+    # //// Neoffice — a letter to post (21.10), see _LETTER_REQUEST_RE: a gesture, never a read for the fast answer
+    _letter_turn = (
+        _offer is None and not _note_request and not _space_turn and not _owned_turn and not _canned_text
+        and not _one_off_reminder and _is_letter_request(message)
+    )
+    # //// END Neoffice ////
     if (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
         not _note_request
         and not _space_turn
         and not _owned_turn  # //// Neoffice — nor the scheduled tasks, nor a reminder's moment (09.10)
         and not _editor_turn  # //// Neoffice — nor the document in front of the person (#1573)
+        and not _letter_turn  # //// Neoffice — nor a letter to write (21.10)
         and _asks_fast_answer(language, _canned_text, _one_off_reminder)
     ):
         import concurrent.futures as _cf
@@ -3275,7 +3381,7 @@ def route_chat_message(
     # which has no job tools, edited ANOTHER project's line with generic tools. The
     # `projet` pole owns the job tools (moved out of ventes on 16.09); compta/analyse
     # keep money and charts questions.
-    if category in ("rh", "support") and _page_project(page_context):
+    if category in ("rh", "support") and _page_project(page_context) and not _letter_turn:  # //// Neoffice — 21.10
         logger.info("nora_chat_router: %s → projet (job page %s)", category, _page_project(page_context))
         category = "projet"
     # //// END Neoffice ////
@@ -3357,7 +3463,7 @@ def route_chat_message(
         category = again if again in POLES else "ventes"
         logger.info("nora_chat_router: DIRECT → %s (a name typed alone)", category)
     # //// END Neoffice ////
-    if not (_owned_turn or _editor_turn):  # //// Neoffice — the scheduled tasks (09.10) and the document (#1573) stay the orchestrator's
+    if not (_owned_turn or _editor_turn or _letter_turn):  # //// Neoffice — the scheduled tasks (09.10), the document (#1573) and a letter (21.10) keep their place
         category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
@@ -3525,6 +3631,7 @@ def route_chat_message(
         _direct_hints = [h for h in (_ONE_OFF_REMINDER_HINT if _one_off_reminder else None,
                                      _FRESH_THREAD_HINT if _fresh_yes else None,
                                      _EDITOR_HINT.format(**_editor) if _editor_turn else None,
+                                     _LETTER_HINT if _letter_turn else None,  # //// Neoffice — a letter (21.10)
                                      _SCHEDULED_TASKS_HINT if _tasks_turn else None) if h]  # //// Neoffice — 09.10
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                 "agent_hint": "\n".join(_direct_hints) or None}  # //// Neoffice — #1065
@@ -3738,6 +3845,9 @@ def route_chat_message(
             # //// Neoffice — « à quatre pièces » is a quantity, see quantity_change_hint.
             if _qty_hint := quantity_change_hint(message):
                 _body = _qty_hint + "\n\n" + _body
+            # //// Neoffice — a letter to post: the one tool that writes it, said in the task (21.10)
+            if _letter_turn and category == "support":
+                _body = _LETTER_HINT + "\n\n" + _body
             # //// END Neoffice ////
             # //// Neoffice — tell the specialist worker which language to answer in (the
             # user's). ALWAYS carry it, FRENCH INCLUDED: the worker SOUL only "leans" FR, and a

@@ -1,0 +1,61 @@
+{
+  "_comment": "//// Neoffice — added file (no upstream equivalent): the words of a letter request (21.10). Fictional parties only.",
+  "letters": [
+    "Prépare une lettre pour notre assurance Exemple : nous avons un dégât d'eau dans nos locaux, merci d'envoyer un expert",
+    "Fais une lettre à la gérance : nous avons un problème d'eau",
+    "fais-moi une lettre au fournisseur d'électricité pour contester la hausse",
+    "Écris une lettre à la régie Fictive SA pour signaler une fuite",
+    "écris-lui un courrier pour annuler le contrat",
+    "Rédige un courrier à notre bailleur au sujet du chauffage",
+    "Génère-moi une lettre de relance pour l'énergie",
+    "Prépare une petite lettre de remerciement pour Atelier Fictif Sàrl",
+    "Une lettre à la gérance : la porte du garage est cassée",
+    "Un courrier pour la commune au sujet du bruit",
+    "J'ai besoin d'une lettre pour notre fiduciaire",
+    "il me faut un courrier pour le propriétaire",
+    "Envoie une lettre recommandée à Exemple Fictif SA pour résilier l'abonnement",
+    "Peux-tu préparer une lettre à la gérance pour la fuite ?",
+    "Write a letter to our landlord about the water leak",
+    "Draft a letter for the insurer about the damage",
+    "Schreib einen Brief an die Hausverwaltung wegen des Wasserschadens",
+    "Kannst du einen Brief an unsere Versicherung schreiben?",
+    "Scrivi una lettera al fornitore di energia per la fattura sbagliata",
+    "Écris une lettre au client Fictif SA pour le remercier de sa confiance",
+    "Je voudrais une lettre pour la gérance concernant la fuite",
+    "J'aimerais une lettre à notre assurance pour le dégât",
+    "Fais une lettre au client Martin pour le rappel du rendez-vous",
+    "Prépare la lettre pour la régie Fictive au sujet du chauffage"
+  ],
+  "dunning": [
+    "Prépare une lettre de relance pour la facture FA-2026-00012",
+    "Écris une lettre de rappel de paiement au client Exemple SA",
+    "Fais une lettre de relance au client Fictif pour ses impayés",
+    "Prépare un courrier de rappel pour les factures en retard",
+    "Write a reminder letter to the customer about the unpaid invoice"
+  ],
+  "not_letters": [
+    "Écris un courrier électronique à Fictif SA",
+    "Envoie un e-mail au client Exemple",
+    "Rédige une lettre de motivation pour le poste de comptable",
+    "Écris le montant en toutes lettres",
+    "Vide la boîte aux lettres",
+    "Write a brief summary of the open quotes",
+    "Combien de factures ouvertes ?",
+    "Relance la facture de Martin",
+    "Envoie la lettre de résiliation par e-mail à Fictif SA",
+    "Peux-tu envoyer cette lettre à Dupont par mail ?",
+    "send the letter to the client by email",
+    "Fais le point sur le courrier reçu ce matin",
+    "Prépare le courrier du jour",
+    "J'ai fait une lettre à la gérance hier, tu la retrouves ?",
+    "J'ai envoyé une lettre à la régie la semaine passée",
+    "Envoie-moi la liste des lettres",
+    "Envoie le courrier à Dupont",
+    "Écris une lettre au candidat Paul pour lui annoncer un refus",
+    "Tous les mois, écris une lettre à la gérance"
+  ],
+  "capability": [
+    "Tu peux faire des lettres ?",
+    "Est-ce que tu sais écrire un courrier ?"
+  ]
+}
