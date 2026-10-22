@@ -611,7 +611,10 @@ def _kanban_task_user() -> str:
             marker = ":user:"
             chat_id = (row[0] or "")
             if chat_id.startswith("webhook:nora_chat:") and marker in chat_id:
-                found = chat_id.split(marker, 1)[1].strip()
+                # //// Neoffice — the LAST `:user:` (22.10): a thread's chat id puts the client's thread id
+                # //// before the person (webhook.py _neoffice_thread_chat_id), and a thread named « user »
+                # //// made the first cut name `user:<person>`.
+                found = chat_id.rsplit(marker, 1)[1].strip()
             elif "@" in (row[1] or ""):
                 found = (row[1] or "").strip()
             break

@@ -282,6 +282,92 @@ def _neoffice_provider_delivery_id(route_name: str, payload: Any, delivery_id: s
 # //// END Neoffice ////
 
 
+# //// Neoffice — a conversation THREAD is the agent's session (22.10). A conversational route
+# //// (`session_key: user`, see _spawn_agent_run) keyed the agent's session on the person alone, and
+# //// upstream closes a webhook's session when its run ends (on_processing_complete, written for one
+# //// session per delivery): the next message found the row ended in state.db, the routing self-heal
+# //// minted a new session, and every turn of the orchestrator began with history=0. From an editor's
+# //// Nora panel, « J'applique le caviardage ? » then « Oui » reached an agent that had asked nothing,
+# //// and it filled the PDF form a second time (osiris, 22.10). Kept per person and left open, the
+# //// session would mix the person's threads instead: the desk chat and every open document. So the
+# //// thread the payload names (`conversation_id`: the desk, the mobile app, Raven, the editor panels)
+# //// goes into the session chat id, and that session stays open for the thread's next message
+# //// (on_processing_complete): « Nouvelle conversation » sends a new id, hence a new session. A payload
+# //// that names no thread (WhatsApp) keeps the person's session, closed after each run as before.
+# //// The thread goes BEFORE the person: two readers take the person from the end of the chat id
+# //// (_deliver_nora's `user`, tools/mcp_tool_handlers.py's last `:user:`). A thread id is the client's;
+# //// one outside a safe alphabet (a chat id is split on ':') is replaced by its digest.
+# //// A monitoring probe (`context.channel == "monitor"`) gets no thread: each probe sends a new id and
+# //// never a second message, so a thread would only leave one open session per probe.
+# //// A thread nobody wrote in for a day is closed (_neoffice_end_idle_thread_sessions): prune_sessions
+# //// reaps closed sessions only, and coming back to that thread later starts a new session.
+_NEOFFICE_THREAD_ID_RE = re.compile(r"[A-Za-z0-9_.-]{1,80}")
+_NEOFFICE_THREAD_IDLE_SECONDS = 24 * 3600
+_NEOFFICE_THREAD_SWEEP_LIMIT = 50  # sessions closed per sweep, so one sweep stays short
+_NEOFFICE_THREAD_SWEEP_EVERY = 600.0  # seconds between two sweeps of one adapter
+
+
+def _neoffice_conversation_thread(payload: Any) -> Optional[str]:
+    """The conversation thread a payload names, safe inside a chat id; None when it names none or
+    comes from a monitoring probe."""
+    thread = payload.get("conversation_id") if isinstance(payload, dict) else None
+    if not isinstance(thread, str) or not thread.strip():
+        return None
+    context = payload.get("context")
+    if isinstance(context, dict) and context.get("channel") == "monitor":
+        return None
+    thread = thread.strip()
+    if _NEOFFICE_THREAD_ID_RE.fullmatch(thread):
+        return thread
+    return "h" + hashlib.sha256(thread.encode("utf-8")).hexdigest()[:32]
+
+
+def _neoffice_thread_chat_id(route_name: str, session_key_mode: str, value: str, payload: Any) -> Optional[str]:
+    """The session chat id of the conversation thread *payload* names on a conversational route, else None."""
+    thread = _neoffice_conversation_thread(payload)
+    return f"webhook:{route_name}:thread:{thread}:{session_key_mode}:{value}" if thread else None
+
+
+def _neoffice_is_thread_session(event: MessageEvent) -> bool:
+    """Whether *event* ran in a conversation thread's session (see _neoffice_thread_chat_id). A
+    per-delivery chat id (``webhook:v2:<base64url>``) never holds ``:thread:``."""
+    thread = _neoffice_conversation_thread(event.raw_message)
+    chat_id = str(getattr(event.source, "chat_id", "") or "")
+    return bool(thread) and not chat_id.startswith("webhook:v2:") and f":thread:{thread}:" in chat_id
+
+
+def _neoffice_end_idle_thread_sessions(db: Any, cutoff: float, limit: int, busy_keys=frozenset()) -> int:
+    """Close (``webhook_thread_idle``) at most *limit* open thread sessions last active before *cutoff*;
+    returns how many. Last activity is the freshest of the heartbeat and the latest message. A session
+    whose key has a turn in flight (*busy_keys*) is kept, and the idle test is repeated in the UPDATE
+    itself, under the write lock: a message written since the SELECT keeps its session."""
+    from hermes_state_common import _sql_session_last_active
+
+    last_active = _sql_session_last_active("s")
+    with db._read_ctx() as conn:
+        rows = conn.execute(
+            "SELECT s.id, s.session_key FROM sessions s WHERE s.source = 'webhook' AND s.ended_at IS NULL"
+            " AND s.chat_id LIKE 'webhook:%:thread:%'"
+            f" AND {last_active} < ? ORDER BY s.started_at LIMIT ?",
+            (cutoff, limit),
+        ).fetchall()
+    update = (
+        "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL"
+        f" AND (SELECT {last_active} FROM sessions s WHERE s.id = ?) < ?"
+    )
+    closed = 0
+    for row in rows:
+        session_id, session_key = row[0], row[1]
+        if session_key and session_key in busy_keys:
+            continue
+        # The same write path as SessionDB.end_session (the end stamp and its generation bump).
+        closed += db._execute_write(lambda conn, sid=session_id: db._end_and_bump(
+            conn, update, (time.time(), "webhook_thread_idle", sid, sid, cutoff), sid, "webhook_thread_idle",
+        )) or 0
+    return closed
+# //// END Neoffice ////
+
+
 
 # //// Neoffice — added (#625): the kind of a failure the central WhatsApp router answered.
 def _whatsapp_router_error_kind(status: int, body: str) -> str:
@@ -1191,6 +1277,7 @@ class WebhookAdapter(BasePlatformAdapter):
         # //// path) so every message from the same user reuses one chat_id. Default stays
         # //// upstream's "unique". Drop when upstream supports conversational webhook routes.
         session_key_mode = route_config.get("session_key", "unique")
+        _neoffice_person_chat_id = None  # //// Neoffice — the person's chat id, see _neoffice_thread_chat_id (22.10)
         if session_key_mode == "unique":
             # upstream's own key: one collision-free identity per delivery (concurrent webhooks on
             # one route get independent runs).
@@ -1207,6 +1294,13 @@ class WebhookAdapter(BasePlatformAdapter):
                     break
             _sk_value = (str(_sk_value).strip() if _sk_value else "") or delivery_id
             session_chat_id = f"webhook:{route_name}:{session_key_mode}:{_sk_value}"
+            # //// Neoffice — one agent session per conversation thread, see _neoffice_thread_chat_id (22.10).
+            # //// A payload that names nobody (the delivery id stands in) keeps its one-shot, closed session.
+            _neoffice_person_chat_id = session_chat_id
+            if _sk_value != delivery_id:
+                session_chat_id = (
+                    _neoffice_thread_chat_id(route_name, session_key_mode, _sk_value, payload) or session_chat_id
+                )
         # //// END Neoffice ////
         # ``profile`` rides along so the reply leg (``send`` → ``_deliver_cross_platform``) egresses through
         # THIS profile's adapter, home channel and secrets — not the first profile that has the platform.
@@ -1270,7 +1364,8 @@ class WebhookAdapter(BasePlatformAdapter):
                         # reply continuity); falls back to digits from the session chat_id. ////
                         chat_phone=(
                             str((payload or {}).get("phone") or "").strip()
-                            or str(session_chat_id or "")
+                            # //// Neoffice — the person's chat id, never the thread's digits (22.10)
+                            or str(_neoffice_person_chat_id or session_chat_id or "")
                         ),
                         # //// Neoffice — whether NORA already replied in this thread, read by
                         # //// send_chat from nora's chat log: a yes in a fresh thread confirms
@@ -1388,7 +1483,40 @@ class WebhookAdapter(BasePlatformAdapter):
         """Close the one-shot per-delivery session: ``prune_sessions`` only reaps rows with ``ended_at`` set, so
         unclosed webhook sessions leak unbounded. Fires at the true end of the run; ``end_session()`` is
         first-reason-wins."""
+        # //// Neoffice — a conversation thread's session stays open for the thread's next message (22.10):
+        # //// closing it began every turn of the thread with history=0, see _neoffice_thread_chat_id. Its
+        # //// row stays open as a messaging chat's does (one per thread, not one per delivery), until the
+        # //// thread has been idle for a day.
+        if _neoffice_is_thread_session(event):
+            await self._neoffice_close_idle_threads()
+            return
+        # //// END Neoffice ////
         await self._end_webhook_session(event, event.source.chat_id)
+
+    # //// Neoffice — closes the threads nobody wrote in for a day, see _neoffice_end_idle_thread_sessions.
+    async def _neoffice_close_idle_threads(self) -> int:
+        """At most one sweep every _NEOFFICE_THREAD_SWEEP_EVERY seconds; never raises."""
+        now = time.time()
+        if now - getattr(self, "_neoffice_last_thread_sweep", 0.0) < _NEOFFICE_THREAD_SWEEP_EVERY:
+            return 0
+        self._neoffice_last_thread_sweep = now
+        session_db = getattr(self.gateway_runner, "_session_db", None)
+        db = getattr(session_db, "_db", session_db)  # AsyncSessionDB wraps the SessionDB
+        if db is None or not all(callable(getattr(db, name, None)) for name in ("_read_ctx", "_execute_write", "_end_and_bump")):
+            return 0
+        busy_keys = frozenset(getattr(self, "_active_sessions", {}) or {})  # turns in flight, read on the loop
+        try:
+            closed = await asyncio.to_thread(
+                _neoffice_end_idle_thread_sessions, db, now - _NEOFFICE_THREAD_IDLE_SECONDS,
+                _NEOFFICE_THREAD_SWEEP_LIMIT, busy_keys,
+            )
+        except Exception as exc:  # a sweep must never cost a turn
+            logger.debug("[webhook] idle thread sweep failed: %s", exc)
+            return 0
+        if closed:
+            logger.info("[webhook] closed %d conversation thread session(s) idle for a day", closed)
+        return closed
+    # //// END Neoffice ////
 
     async def _end_webhook_session(self, event: "MessageEvent", session_chat_id: str) -> None:
         """Mark the per-delivery session ended via ``SessionDB.end_session`` (never a hand-written UPDATE),

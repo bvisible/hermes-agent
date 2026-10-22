@@ -165,3 +165,25 @@ def test_the_registry_handler_stamps_before_any_transport_work(session, monkeypa
     assert json.loads(handler(args)) == {"error": "stop here"}
     assert args["bridge_user"] == PERSON
     assert args["params"]["bridge_user"] == PERSON
+
+
+# //// Neoffice — the person of a worker's task is after the LAST `:user:` of its chat id (22.10): a
+# //// conversation thread's chat id puts the client's thread id before the person, and a thread named
+# //// « user » made the first cut name `user:<person>`.
+@pytest.mark.parametrize("chat_id", [
+    f"webhook:nora_chat:user:{PERSON}",
+    f"webhook:nora_chat:thread:nora-0929bee8086342b8:user:{PERSON}",
+    f"webhook:nora_chat:thread:user:user:{PERSON}",
+])
+def test_the_task_user_is_the_person_after_the_last_user_marker(tmp_path, monkeypatch, chat_id):
+    import sqlite3
+
+    conn = sqlite3.connect(tmp_path / "kanban.db")
+    conn.execute("CREATE TABLE kanban_notify_subs (task_id TEXT, platform TEXT, chat_id TEXT, user_id TEXT)")
+    conn.execute("INSERT INTO kanban_notify_subs VALUES ('t_1', 'webhook', ?, 'webhook:nora_chat')", (chat_id,))
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_KANBAN_TASK", "t_1")
+    monkeypatch.setattr(handlers, "_TASK_USER_CACHE", {})
+    assert handlers._kanban_task_user() == PERSON
