@@ -163,7 +163,7 @@ def test_a_letter_from_an_open_editor_is_the_orchestrators_with_the_tool(monkeyp
     assert created == [] and asked == []
     assert decision["routed"] is False and decision["category"] == "DIRECT"
     hint = decision["agent_hint"]
-    assert R._EDITOR_HINT.format(app="word", name="Brouillon.docx") in hint and R._LETTER_HINT in hint
+    assert R._editor_hint({"app": "word", "name": "Brouillon.docx"}) in hint and R._LETTER_HINT in hint
 
 
 def test_a_document_edit_from_the_editor_gets_no_letter_hint(monkeypatch):

@@ -1781,33 +1781,77 @@ _ATELIER_HINT = (
 # //// {surface: "editor", app, document: {name, …}}. « Mets le mot offre en gras, puis ajoute à la fin une
 # //// ligne » was classified as business and became a task of the Support pole (osiris, 14.10): the pole
 # //// holds no document tool (they are NORA's own, NORA_TASKS), so it could only say it could not. A turn
-# //// from an editor is the orchestrator's, with the document tools and _EDITOR_HINT; a note, a space, the
-# //// scheduled tasks and a reminder stay settled in code first, and a question about the company's data
-# //// is still business, which the hint says.
+# //// from an editor is the orchestrator's, with the document tools and its editor's hint (_editor_hint); a
+# //// note, a space, the scheduled tasks and a reminder stay settled in code first, and a question about the
+# //// company's data is still business, which the hint says.
 def _editor_of(page_context: Optional[dict]) -> Optional[dict]:
     """The document the person writes from, from the page context; None outside an editor."""
     if not isinstance(page_context, dict) or page_context.get("surface") != "editor":
         return None
     document = page_context.get("document") if isinstance(page_context.get("document"), dict) else {}
     return {
-        "app": (str(page_context.get("app") or "").strip() or "editor")[:20],
+        # //// Neoffice — lower case, and Word when the panel says none, as the server reads it
+        # //// (neoffice_theme.editor_actions.app_of): the hint and the catalogue are the same editor's (#1690).
+        "app": (str(page_context.get("app") or "").strip().lower() or "word")[:20],
         "name": (str(document.get("name") or "").strip() or "an untitled document")[:140],
     }
 
 
-_EDITOR_HINT = (
+# //// Neoffice — ONE instruction PER EDITOR (22.10, maintenance#1690). The instruction was Word's for all four, and the
+# //// standing instructions of the orchestrator (her SOUL) are full: in NeoGrille the real agent said it could not go
+# //// to B1, when nora_doc_select_text("B1") then nora_doc_type_text("42") does it; NeoPrés and NeoPDF were never told
+# //// their recipes (an outline in one call, a form's fields then form_fill). The words read next to the request
+# //// weigh more than the SOUL (vault note Neoffice-Apps/12). The panel names its editor in the page context's `app`.
+_EDITOR_HINT_HEAD = (
     "[Route: the person writes from an OPEN DOCUMENT in the {app} editor (« {name} »): they see it and every "
     "change you make. Reading it, editing it and answering about its text are YOURS, with your document tools "
     # //// Neoffice — what the real agent got wrong on osiris (14.10): its tool names used as command ids in a batch,
     # //// a line typed over the selection it had just made instead of added at the end, a step repeated.
-    "only: nora_doc_observe FIRST (never change a document you have not read), then ONE step per call: "
-    "nora_doc_select_text then nora_doc_execute to format a passage; nora_doc_type_text(text, where=\"end\") to "
-    "add a line at the end (never select a passage to type after it: typing replaces the selection); "
-    "nora_doc_commands finds a command's id (the names of your tools are not command ids). Do NOT call "
+    "only: nora_doc_observe FIRST (never change a document you have not read; its `how_to` says how this editor "
+    "is worked), then ONE step per call: "
+)
+_EDITOR_HINT_TAIL = (
+    " nora_doc_commands finds a command's id (the names of your tools are not command ids). Do NOT call "
     "kanban_create for the document: no pole holds these tools. Say what changed only after the result says ok; "
     "a change that does not come out right after two tries: stop and say what is there. A request about the "
     "company's own data (a customer, an invoice, stock…) is business as usual: kanban_create.]"
 )
+# //// Neoffice — each editor's own recipes, keyed by the page context's `app` (maintenance#1690).
+_EDITOR_HINTS = {
+    "word": (
+        "nora_doc_select_text then nora_doc_execute to format a passage; nora_doc_type_text(text, where=\"end\") to "
+        "add a line at the end (never select a passage to type after it: typing replaces the selection)."
+    ),
+    "sheet": (
+        "a cell or a range is chosen by its ADDRESS, nora_doc_select_text(\"B4\") (or \"B4:D10\"), never by what it "
+        "shows; nora_doc_type_text then fills from that cell, a tab to the next cell, a line break to the next row "
+        "(« Total in A1, 42 in B1 »: select \"A1\", then type Total, a tab, 42); rows under the data: ONE "
+        "nora_doc_type_text(rows, where=\"end\"); a chart: nora_doc_execute(\"insert.chart\", {{\"range\": "
+        "\"A1:B13\", \"type\": \"column\"}}). Read the sheet again before you say what a cell holds."
+    ),
+    "deck": (
+        "several slides in ONE call, nora_doc_type_text(an outline, where=\"end\"): a line per slide (its title), its "
+        "points under it, each starting with \"- \"; never one call per slide. One slide with its layout: "
+        "nora_doc_execute(\"slide.new\", {{\"layout\": \"titleAndContent\", \"title\": …, \"body\": …}})."
+    ),
+    "pdf": (
+        "a form is nora_doc_execute(\"form_fields\") to list its fields, then ONE nora_doc_execute(\"form_fill\", "
+        "{{\"values\": {{field name: value}}}}) with only the values you know for sure: ask for the rest, never invent "
+        "one. Redactions are applied (redact_apply) only after the person said yes to what is marked; signing is "
+        "theirs. A PDF has no end to write after: text goes in a box on the current page."
+    ),
+}
+# //// Neoffice — an editor the router does not know yet gets the head and the tail: observe, one step per call.
+_EDITOR_HINT_ANY = "nora_doc_select_text then nora_doc_execute to change a passage."
+
+
+# //// Neoffice — the instruction of an editor turn, built per editor (maintenance#1690).
+def _editor_hint(editor: dict) -> str:
+    """The instruction of a turn from an editor: its document, and that editor's own recipes."""
+    recipes = _EDITOR_HINTS.get(editor.get("app") or "", _EDITOR_HINT_ANY)
+    return (_EDITOR_HINT_HEAD + recipes + _EDITOR_HINT_TAIL).format(**editor)
+
+
 # //// END Neoffice ////
 
 
@@ -3627,10 +3671,10 @@ def route_chat_message(
         # //// END Neoffice ////
         # //// Neoffice — the orchestrator gets the reminder instruction, see _ONE_OFF_REMINDER_HINT,
         # //// and a yes in a fresh thread its rule, see _FRESH_THREAD_HINT (#1065).
-        # //// Neoffice — and the document in front of the person its tools, see _EDITOR_HINT (#1573).
+        # //// Neoffice — and the document in front of the person its tools, see _editor_hint (#1573, #1690).
         _direct_hints = [h for h in (_ONE_OFF_REMINDER_HINT if _one_off_reminder else None,
                                      _FRESH_THREAD_HINT if _fresh_yes else None,
-                                     _EDITOR_HINT.format(**_editor) if _editor_turn else None,
+                                     _editor_hint(_editor) if _editor_turn else None,
                                      _LETTER_HINT if _letter_turn else None,  # //// Neoffice — a letter (21.10)
                                      _SCHEDULED_TASKS_HINT if _tasks_turn else None) if h]  # //// Neoffice — 09.10
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
