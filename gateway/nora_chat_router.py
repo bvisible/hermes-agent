@@ -976,6 +976,113 @@ _LETTER_HINT = (
 # //// END Neoffice ////
 
 
+# //// Neoffice — a PRESENTATION to make is NORA's own (22.10, step 4 of « Nora partout »). « Fais-moi une présentation
+# //// de 5 diapositives sur nos services » matched no rule: the classifier, which has no presentation class, would
+# //// decide, and « avec un graphique des ventes » would reach analyse through the chart rule. The orchestrator holds
+# //// the tool (nora_presentation_create, NORA_TASKS) and no pole does: the turn is hers, with _DECK_HINT, decided
+# //// before every other rule, the classifier and the fast answer.
+# //// The shapes, French first, then English, German and Italian:
+# ////   · a making verb in the imperative or the infinitive, then the noun with an indefinite article or a number
+# ////     (« fais-moi une présentation », « prépare 5 diapositives », « crée des slides sur … »), or with a definite one
+# ////     followed by its subject (« prépare la présentation pour lundi »): « fais le point sur la présentation » and
+# ////     « lance la présentation » are not a deck to make, nor a past participle (« j'ai préparé une présentation »);
+# ////   · a wish or a need (« je voudrais une présentation sur … », « il me faut des slides »);
+# ////   · the noun opening the message with its subject (« Une présentation sur nos services », « 5 slides sur … »).
+# //// Never: a question about how to make one (« comment faire une présentation ? », the help), a presentation of NORA
+# //// herself (« fais-moi une présentation de tes capacités »), a recurring job (« tous les lundis »), an e-mail to
+# //// send, a task or a to-do about one, nor a question about what NORA can do without a subject (« tu sais faire des
+# //// présentations ? »).
+# //// Neoffice — the noun in each language. No « deck » in French or German (« un devis pour un deck en bois » is a
+# //// terrace); in English only before its subject (« a deck on our prices »: « a quote for a deck » is the terrace).
+_DECK_NOUN_FR = r"(?:pr[ée]sentations?|diaporamas?|diapositives?|diapos?|slides?|power\s?points?|pptx?)"
+_DECK_NOUN_EN = r"(?:presentations?|slides?|slide\s+decks?|power\s?points?|pptx?|decks?(?=\s+(?:on|about)\b))"
+_DECK_NOUN_DE = r"(?:pr(?:ä|ae)sentation(?:en)?|folien(?:satz)?|slides|power\s?points?)"
+_DECK_NOUN_IT = r"(?:presentazion[ei]|diapositiv[ae]|slide|power\s?points?)"
+_DECK_NOUN = "(?:" + "|".join((_DECK_NOUN_FR, _DECK_NOUN_EN, _DECK_NOUN_DE, _DECK_NOUN_IT)) + ")"
+_DECK_COUNT = (
+    r"(?:une?|des|quelques|\d{1,2}|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|douze|quinze|vingt"
+    r"|an?|some|two|three|four|five|six|seven|eight|ten|eine[nmrs]?|ein|einige|zwei|drei|vier|f(?:ü|ue)nf|sechs"
+    r"|sieben|acht|zehn|una?|alcune|due|tre|quattro|cinque|sei|dieci)"
+)
+# //// Neoffice — at most two words between the article and the noun (« une petite présentation commerciale »), never a
+# //// preposition: « un devis pour une présentation » is a quote, « einen Termin für die Präsentation » an appointment.
+_DECK_ADJECTIVES = (
+    r"(?:(?!(?:pour|avec|sur|dans|chez|par|sans|vers|entre|des|les|une|aux|for|with|about|from|the|and|für|fuer|mit"
+    r"|über|ueber|von|der|die|das|und|con|del|della)\b)[a-zà-ÿäöüß]{3,14}\s+){0,2}"
+)
+_DECK_SUBJECT = r"\b(?:sur|pour|about|on|for|über|ueber|zu|für|fuer|su|per|concernant|de|du|des|d['’])\b"
+_DECK_MAKE_FR = (
+    r"(?:re)?(?:fais|faire|faites|pr[ée]pare[rsz]?|pr[ée]parons|cr[ée]e[rsz]?|cr[ée]ons|r[ée]dige[rsz]?|g[ée]n[èée]re[rsz]?"
+    r"|monte[rsz]?|montons|con[cç]oi[st]|concevoir|concevez|construi[st]|construire|construisez|[ée]labore[rsz]?"
+    r"|compose[rsz]?)"
+)
+# //// Neoffice — between the verb and the article, pronouns only (« fais-moi », « make me », « mach mir »): « crée un
+# //// rendez-vous pour une présentation » makes an appointment, « fais-moi un graphique pour ma présentation » a chart.
+_DECK_PRONOUNS_FR = r"(?:[-\s]+(?:moi|nous|vous|lui|leur|toi|en))*"
+_DECK_PRONOUNS_EN = r"(?:\s+(?:me|us|him|her|them))?"
+_DECK_PRONOUNS_DE = r"(?:\s+(?:mir|uns|ihm|ihr|ihnen))?"
+_DECK_PRONOUNS_IT = r"(?:\s+(?:mi|ci))?"
+_DECK_REQUEST_RE = re.compile(
+    # not how to make one, not NORA presenting herself, not an e-mail
+    r"^(?![\s\S]*\b(?:comment\s+(?:on\s+|je\s+|puis[-\s]je\s+|faire|cr[ée]er|faut[-\s]il)|how\s+(?:do|can|to|should)"
+    r"|wie\s+(?:kann|mache|erstelle|geht)|come\s+(?:si|posso|faccio|fare|creare))\b)"
+    r"(?![\s\S]*\b(?:de\s+toi|de\s+vous[-\s]m[êe]me|tes\s+(?:capacit[ée]s|fonctions|fonctionnalit[ée]s|comp[ée]tences|outils)"
+    r"|ce\s+que\s+tu\s+(?:sais|peux|fais)|yourself|your\s+(?:skills|capabilities|features))\b)"
+    r"(?![\s\S]*\b(?:e-?mails?|mails?|courriels?)\b)"
+    # not a task or a to-do about a presentation (« crée une tâche pour préparer une présentation »)
+    r"(?![\s\S]*\b(?:t[âa]ches?|to-?dos?|todos?)\b)"
+    r"[\s\S]*?(?:"
+    # French
+    r"\b" + _DECK_MAKE_FR + _DECK_PRONOUNS_FR + r"\s+" + _DECK_COUNT + r"\s+" + _DECK_ADJECTIVES + _DECK_NOUN_FR + r"\b"
+    r"|\b" + _DECK_MAKE_FR + _DECK_PRONOUNS_FR + r"\s+(?:la|le|les|cette|ce|ces|ma|mon|mes|notre|nos)\s+"
+    + _DECK_ADJECTIVES + _DECK_NOUN_FR + r"[^.!?\n]{0,25}?\b(?:sur|pour|concernant)\b"
+    r"|\b(?:(?:voudrais|voudrions|aimerais|aimerions|veux|voulons|souhaite\w*|faut)\s+(?:d['’]\s*)?|besoin\s+d['’]\s*)"
+    r"(?:une?|des|\d{1,2})\s+" + _DECK_ADJECTIVES + _DECK_NOUN_FR + r"\b"
+    # the noun opening the message with its subject; never a German noun without its article
+    r"|^\s*(?:une?\s+|des\s+|an?\s+|\d{1,2}\s+)?(?:" + _DECK_NOUN_FR + "|" + _DECK_NOUN_EN + "|" + _DECK_NOUN_IT + r")"
+    r"\s+(?:sur|pour|de\s+\d|about|on|for|su|per)\b"
+    # English
+    r"|\b(?:make|create|prepare|build|draft|write|put\s+together|generate|design)" + _DECK_PRONOUNS_EN + r"\s+"
+    + _DECK_COUNT + r"\s+" + _DECK_ADJECTIVES + _DECK_NOUN_EN + r"\b"
+    r"|\b(?:need|want|like)\s+(?:a|an|some|\d{1,2})\s+" + _DECK_ADJECTIVES + _DECK_NOUN_EN + r"\b"
+    # German: « erstelle eine Präsentation über … », « mach mir fünf Folien zu … »: always with its article or number
+    r"|\b(?:erstell\w*|mach\w*|bereite\w*|entwirf|entwerf\w*|bau\w*|generier\w*)" + _DECK_PRONOUNS_DE + r"\s+"
+    + _DECK_COUNT + r"\s+" + _DECK_ADJECTIVES + _DECK_NOUN_DE + r"\b"
+    r"|\b(?:brauche|br(?:ä|ae)uchte|h(?:ä|ae)tte\s+gern|m(?:ö|oe)chte)" + _DECK_PRONOUNS_DE + r"\s+" + _DECK_COUNT
+    + r"\s+" + _DECK_ADJECTIVES + _DECK_NOUN_DE + r"\b"
+    # Italian
+    r"|\b(?:fammi|fai|fate|prepara\w*|crea\w*|genera\w*|realizza\w*)" + _DECK_PRONOUNS_IT + r"\s+" + _DECK_COUNT
+    + r"\s+" + _DECK_ADJECTIVES + _DECK_NOUN_IT + r"\b"
+    r")",
+    re.IGNORECASE,
+)
+# A subject, the slides' count or a recipient: a request to act on even when it is phrased as a question (« peux-tu me
+# faire une présentation sur nos services ? »), never the question about what NORA can do (« tu sais faire des slides ? »).
+_DECK_WITH_SUBJECT_RE = re.compile(_DECK_NOUN + r"[^.!?\n]{0,25}?" + _DECK_SUBJECT + r"|\d{1,2}\s+" + _DECK_NOUN,
+                                   re.IGNORECASE)
+
+
+def _is_deck_request(msg: Optional[str]) -> bool:
+    """A presentation to make (NORA's nora_presentation_create): not how to make one, not NORA presenting herself, not
+    an e-mail, not a recurring job, and not the question about what NORA can do."""
+    msg = msg or ""
+    if not _DECK_REQUEST_RE.search(msg) or _RECUR_RE.search(msg):
+        return False
+    return not (_CAPABILITY_RE.match(msg) and not _DECK_WITH_SUBJECT_RE.search(msg))
+
+
+_DECK_HINT = (
+    "[Route: a PRESENTATION is asked (slides, a deck). It is yours, in ONE call: nora_presentation_create(title=…, "
+    "outline=…, slides=N when they said a number). `outline` in plain text: a line per slide (its title, no \"- \"), "
+    "its points under it each starting with \"- \" (at most 6 short points), « Notes: » under a slide for what the "
+    "speaker says; no title slide, no Markdown. Write only what they said or a tool returned (the company's own facts: "
+    "nora_company_details): never a figure, a price or a name you made up. No subject given: ask what it is about, in "
+    "one sentence. Then answer with its `reply` as it is: it carries the link that opens it in NeoPrés. Do NOT call "
+    "kanban_create; remember at most that the presentation exists, never its content.]"
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -3373,10 +3480,17 @@ def route_chat_message(
     # //// Neoffice — a one-off reminder is an action nora sets in code (_route_reminder):
     # //// the read-only fast-answer engine has nothing to answer, so it is not asked.
     _one_off_reminder = _is_one_off_reminder(message)
+    # //// Neoffice — a presentation to make (22.10), see _DECK_REQUEST_RE: NORA's own, decided before every rule. From
+    # //// an open NeoPrés it is the editor's turn: the deck is there, its outline goes in it (_editor_hint).
+    _deck_turn = (
+        _offer is None and not _note_request and not _space_turn and not _owned_turn and not _canned_text
+        and not _one_off_reminder and not (_editor and _editor.get("app") == "deck") and _is_deck_request(message)
+    )
+    # //// END Neoffice ////
     # //// Neoffice — a letter to post (21.10), see _LETTER_REQUEST_RE: a gesture, never a read for the fast answer
     _letter_turn = (
         _offer is None and not _note_request and not _space_turn and not _owned_turn and not _canned_text
-        and not _one_off_reminder and _is_letter_request(message)
+        and not _one_off_reminder and not _deck_turn and _is_letter_request(message)  # //// Neoffice — a deck first (22.10)
     )
     # //// END Neoffice ////
     if (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
@@ -3385,6 +3499,7 @@ def route_chat_message(
         and not _owned_turn  # //// Neoffice — nor the scheduled tasks, nor a reminder's moment (09.10)
         and not _editor_turn  # //// Neoffice — nor the document in front of the person (#1573)
         and not _letter_turn  # //// Neoffice — nor a letter to write (21.10)
+        and not _deck_turn  # //// Neoffice — nor a presentation to make (22.10)
         and _asks_fast_answer(language, _canned_text, _one_off_reminder)
     ):
         import concurrent.futures as _cf
@@ -3409,6 +3524,8 @@ def route_chat_message(
         category = "DIRECT"  # //// Neoffice — the scheduled tasks, a reminder's moment (09.10) ////
     elif _editor_turn:
         category = "DIRECT"  # //// Neoffice — the document in front of the person (#1573), classifier skipped ////
+    elif _deck_turn:
+        category = "DIRECT"  # //// Neoffice — a presentation to make is NORA's (22.10), classifier skipped ////
     else:
         category = classify(
             message,
@@ -3443,6 +3560,7 @@ def route_chat_message(
         and not _space_turn  # //// Neoffice — a space composed on a job page is a space (step 3)
         and not _owned_turn  # //// Neoffice — the scheduled tasks are the orchestrator's (09.10)
         and not _editor_turn  # //// Neoffice — nor the document in front of the person (#1573)
+        and not _deck_turn  # //// Neoffice — nor a presentation to make (22.10)
         and _page_project(page_context)
         and not _DIRECT_RE.match((message or "").strip())
         and not _CAPABILITY_RE.match((message or "").strip())
@@ -3461,7 +3579,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and help_request == "ask"
-        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn)  # //// Neoffice — 09.10, #1573
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn)  # //// Neoffice — 09.10, #1573, 22.10
     ):
         logger.info("nora_chat_router: DIRECT → support (a request for help, read by nora)")
         category = "support"
@@ -3476,7 +3594,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and _WHERE_TO_FIND_RE.search(message or "")
-        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn)  # //// Neoffice — #1573
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn)  # //// Neoffice — #1573, 22.10
     ):
         again = classify(
             message,
@@ -3493,7 +3611,7 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and _is_bare_name(message)
-        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn)  # //// Neoffice — #1573
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn)  # //// Neoffice — #1573, 22.10
     ):
         again = classify(
             message,
@@ -3507,7 +3625,7 @@ def route_chat_message(
         category = again if again in POLES else "ventes"
         logger.info("nora_chat_router: DIRECT → %s (a name typed alone)", category)
     # //// END Neoffice ////
-    if not (_owned_turn or _editor_turn or _letter_turn):  # //// Neoffice — the scheduled tasks (09.10), the document (#1573) and a letter (21.10) keep their place
+    if not (_owned_turn or _editor_turn or _letter_turn or _deck_turn):  # //// Neoffice — the scheduled tasks (09.10), the document (#1573), a letter (21.10) and a presentation (22.10) keep their place
         category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
@@ -3633,7 +3751,7 @@ def route_chat_message(
         _is_capability = bool(_CAPABILITY_RE.match(message or ""))
         # //// Neoffice — nor the document in front of the person (#1573): « que peux-tu faire ici ? » asked
         # //// from an editor is about the document tools, which only the orchestrator holds.
-        if not _owned_turn and not _editor_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10)
+        if not _owned_turn and not _editor_turn and not _deck_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10), a deck made (22.10)
             len(message or "") <= 80
             and _SMALLTALK_RE.search(message or "")
             and not _BUSINESS_RE.search(message or "")
@@ -3676,6 +3794,7 @@ def route_chat_message(
                                      _FRESH_THREAD_HINT if _fresh_yes else None,
                                      _editor_hint(_editor) if _editor_turn else None,
                                      _LETTER_HINT if _letter_turn else None,  # //// Neoffice — a letter (21.10)
+                                     _DECK_HINT if _deck_turn else None,  # //// Neoffice — a presentation (22.10)
                                      _SCHEDULED_TASKS_HINT if _tasks_turn else None) if h]  # //// Neoffice — 09.10
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                 "agent_hint": "\n".join(_direct_hints) or None}  # //// Neoffice — #1065
