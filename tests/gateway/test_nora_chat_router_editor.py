@@ -198,6 +198,13 @@ def test_the_spreadsheet_is_worked_by_cell_address(monkeypatch):
     assert "typing replaces the selection" not in hint, "Word's rule is not the sheet's"
 
 
+def test_rows_added_under_a_charted_table_are_put_in_its_chart(monkeypatch):
+    hint = _route(monkeypatch, "Ajoute mai et juin", page=_PAGES["sheet"])["agent_hint"]
+    assert 'nora_doc_execute("chart.selectData", {"chart": ' in hint and '"range": "Sheet1!A1:B7"' in hint
+    assert "the sheet's last chart" in hint and "colours set on a series are lost" in hint
+    assert "chart.selectData" not in "".join(R._editor_hint({"app": a, "name": "x"}) for a in ("word", "deck", "pdf"))
+
+
 def test_a_presentation_takes_several_slides_in_one_call(monkeypatch):
     hint = _route(monkeypatch, "Ajoute trois diapositives sur nos tarifs", page=_PAGES["deck"])["agent_hint"]
     assert 'nora_doc_type_text(an outline, where="end")' in hint and 'starting with "- "' in hint

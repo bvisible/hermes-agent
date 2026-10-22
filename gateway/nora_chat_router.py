@@ -1934,7 +1934,13 @@ _EDITOR_HINTS = {
         "shows; nora_doc_type_text then fills from that cell, a tab to the next cell, a line break to the next row "
         "(« Total in A1, 42 in B1 »: select \"A1\", then type Total, a tab, 42); rows under the data: ONE "
         "nora_doc_type_text(rows, where=\"end\"); a chart: nora_doc_execute(\"insert.chart\", {{\"range\": "
-        "\"A1:B13\", \"type\": \"column\"}}). Read the sheet again before you say what a cell holds."
+        "\"A1:B13\", \"type\": \"column\"}}) (it answers the chart's number). "
+        # //// Neoffice — rows added under a charted table stay out of its chart until its data range is set again
+        # //// (osiris 22.10: mai and juin written, the chart still had four bars).
+        "Rows added under a table that has a chart: then nora_doc_execute(\"chart.selectData\", {{\"chart\": "
+        "that number (without it, the sheet's last chart), \"range\": \"Sheet1!A1:B7\"}}), the whole table with its "
+        "new rows, so the chart takes them in; it rebuilds the series: colours set on a series are lost. Read the "
+        "sheet again before you say what a cell holds."
     ),
     "deck": (
         "several slides in ONE call, nora_doc_type_text(an outline, where=\"end\"): a line per slide (its title), its "
