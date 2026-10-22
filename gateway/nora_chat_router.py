@@ -571,7 +571,11 @@ _RECUR_RE = re.compile(
     r"mittwochs|donnerstags|freitags|samstags|sonntags)\b|"
     r"\bogni\s+(?:giorno|mattina|sera|settimana|mese|ora|luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|"
     r"venerd[iì]|sabato|domenica)\b|\btutti\s+i\s+giorni\b|"
-    r"\b(?:quotidiennement|hebdomadairement|mensuellement|en semaine|du lundi au vendredi)\b)",
+    r"\b(?:quotidiennement|hebdomadairement|mensuellement|en semaine|du lundi au vendredi)\b|"
+    # //// Neoffice — the same working week in the three other languages (23.10, review): « From Monday to Friday,
+    # //// make me a presentation on yesterday's sales » was a one-off when the French one was a recurring job.
+    r"\b(?:from\s+)?monday\s+(?:to|through|thru|until)\s+friday\b|\b(?:von\s+)?montags?\s+bis\s+freitags?\b|"
+    r"\b(?:dal|da)\s+luned[iì]\s+(?:al|a)\s+venerd[iì]\b)",
     # //// END Neoffice ////
     re.IGNORECASE,
 )
@@ -1062,24 +1066,108 @@ _DECK_WITH_SUBJECT_RE = re.compile(_DECK_NOUN + r"[^.!?\n]{0,25}?" + _DECK_SUBJE
                                    re.IGNORECASE)
 
 
+# //// Neoffice — a habit belongs to the request, never to what the slides say (23.10). « Fais-moi une présentation de 3
+# //// diapositives sur nos horaires : du lundi au vendredi de 8 h à 12 h … » was read as a recurring job (« du lundi au
+# //// vendredi » is a _RECUR_RE marker) and went to the classifier, without the presentation's instruction. Two things
+# //// are the slides' content, never a habit:
+# ////   · what follows « : », unless it opens with a habit (« … des ventes : chaque lundi à 8 h », « : every Monday »);
+# ////   · a span of days an hour follows or an hours word precedes (« du lundi au vendredi de 8 h à 18 h », « nos
+# ////     horaires du lundi au vendredi »).
+# //// Every other habit makes it a recurring job, as before: « Du lundi au vendredi, prépare-moi une présentation sur
+# //// les ventes de la veille », « Prépare une présentation chaque lundi sur les ventes » (review of 23.10).
+_DECK_CONTENT_RE = re.compile(r"\s*:(?=\s|$)")
+_HABIT_OPENS_RE = re.compile(
+    r"^\s*(?:chaque|tous\s+les|toutes\s+les|every|each|jede[nrs]?|ogni|tutti\s+i|tutte\s+le)\b",
+    re.IGNORECASE,
+)
+_DAY_FR = r"(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)"
+_DAY_EN = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+_DAY_DE = r"(?:montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)"
+_DAY_IT = r"(?:luned[iì]|marted[iì]|mercoled[iì]|gioved[iì]|venerd[iì]|sabato|domenica)"
+_DAY_SPAN_RE = re.compile(
+    r"\b(?:du|de)\s+" + _DAY_FR + r"\s+(?:au|à|a)\s+" + _DAY_FR + r"\b"
+    r"|\b(?:from\s+)?" + _DAY_EN + r"\s+(?:to|through|thru|until)\s+" + _DAY_EN + r"\b"
+    r"|\b(?:von\s+)?" + _DAY_DE + r"s?\s+bis\s+" + _DAY_DE + r"s?\b"
+    r"|\b(?:dal|da)\s+" + _DAY_IT + r"\s+(?:al|a)\s+" + _DAY_IT + r"\b",
+    re.IGNORECASE,
+)
+_SPAN_HOUR_AFTER_RE = re.compile(
+    r"^[\s,;]*(?:(?:de|dès|des|from|von|ab|dalle|ore|alle)\s+)?\d{1,2}\s*"
+    r"(?:h\b|heures?\b|uhr\b|[ap]\.?m\b|[:.]\d{2}|(?:-|–|à|a|to|bis|alle)\s*\d{1,2}\b)",
+    re.IGNORECASE,
+)
+_HOURS_WORD_BEFORE_RE = re.compile(
+    r"\b(?:horaires?|heures\s+d['’]ouverture|ouverts?|ouvertes?|ferm[ée]e?s?|opening\s+hours|hours|open|closed"
+    r"|[öo]ffnungszeiten|ge[öo]ffnet|geschlossen|orari[oa]?|apert[oi]|chius[oi])\b(?:\s+\S+){0,2}\s*$",
+    re.IGNORECASE,
+)
+
+
+def _deck_request_part(msg: str) -> str:
+    """The words of a presentation request a habit is looked for in: the slides' content left out (see above)."""
+    head, *rest = _DECK_CONTENT_RE.split(msg, maxsplit=1)
+    text = f"{head} {rest[0]}" if rest and _HABIT_OPENS_RE.match(rest[0]) else head
+
+    def span(match):
+        before, after = text[max(0, match.start() - 60) : match.start()], text[match.end() : match.end() + 40]
+        content = _SPAN_HOUR_AFTER_RE.match(after) or _HOURS_WORD_BEFORE_RE.search(before)
+        return " " if content else match.group(0)
+
+    return _DAY_SPAN_RE.sub(span, text)
+
+
 def _is_deck_request(msg: Optional[str]) -> bool:
     """A presentation to make (NORA's nora_presentation_create): not how to make one, not NORA presenting herself, not
     an e-mail, not a recurring job, and not the question about what NORA can do."""
     msg = msg or ""
-    if not _DECK_REQUEST_RE.search(msg) or _RECUR_RE.search(msg):
+    if not _DECK_REQUEST_RE.search(msg) or _RECUR_RE.search(_deck_request_part(msg)):  # //// Neoffice — 23.10
         return False
     return not (_CAPABILITY_RE.match(msg) and not _DECK_WITH_SUBJECT_RE.search(msg))
 
 
 _DECK_HINT = (
     "[Route: a PRESENTATION is asked (slides, a deck). It is yours, in ONE call: nora_presentation_create(title=…, "
-    "outline=…, slides=N when they said a number). `outline` in plain text: a line per slide (its title, no \"- \"), "
-    "its points under it each starting with \"- \" (at most 6 short points), « Notes: » under a slide for what the "
-    "speaker says; no title slide, no Markdown. Write only what they said or a tool returned (the company's own facts: "
-    "nora_company_details): never a figure, a price or a name you made up. No subject given: ask what it is about, in "
-    "one sentence. Then answer with its `reply` as it is: it carries the link that opens it in NeoPrés. Do NOT call "
-    "kanban_create; remember at most that the presentation exists, never its content.]"
+    "outline=…, slides=N when they said a number: N slides besides the title slide). `outline` in plain text: a line "
+    "per slide (its title, no \"- \"), its points under it each starting with \"- \" (at most 6 short points), « Notes: » "
+    "under a slide for what the speaker says; no title slide, no Markdown. Write what they said and what a tool "
+    "returned (the company's own facts: nora_company_details); what you do not know (their hours, prices, names, "
+    "figures) goes in square brackets for them to fill in, in their language (« [à compléter : horaires du samedi] »), "
+    "never a value you made up. No subject at all: ask what it is about, in one sentence. Then answer with its `reply` "
+    "as it is: it carries the link that opens it in NeoPrés and says what is left to complete. Never kanban_create: "
+    "no pole makes presentations. Remember at most that the presentation exists, never its content.]"
 )
+# //// Neoffice — a presentation turn stays the orchestrator's to its end (23.10). With the instruction above, « Fais-moi une
+# //// présentation de 3 diapositives sur nos horaires » still became a kanban_create to rh, which reads no opening hours
+# //// and makes no presentation: the person got a question from rh and no deck. The router marks the TURN, by the id of
+# //// the message it routed (the webhook's delivery id, which the gateway binds to the run as HERMES_SESSION_MESSAGE_ID,
+# //// gateway/platforms/webhook.py), and tools/kanban_tools.py refuses kanban_create in that turn only, with
+# //// DECK_TURN_REFUSAL, which says what to do instead. Another message, even of the same thread in a second tab,
+# //// is another turn: its kanban_create is never refused. A mark lapses after _DECK_TURN_TTL seconds.
+_DECK_TURNS: dict = {}  # the routed message's id -> when its presentation turn was decided
+_DECK_TURN_TTL = 600
+DECK_TURN_REFUSAL = (
+    "No pole makes presentations, and this turn is one: call nora_presentation_create now, with what the person said "
+    "and what nora_company_details returns; what you do not know goes in square brackets for the person to complete. "
+    "Do not call kanban_create again in this turn."
+)
+
+
+def deck_turn_under_way(message_id: Optional[str]) -> bool:
+    """Whether the turn of the routed message `message_id` is a presentation to make (see _DECK_TURNS)."""
+    started = _DECK_TURNS.get(message_id or "")
+    return started is not None and _time_thread.time() - started <= _DECK_TURN_TTL
+
+
+def _mark_deck_turn(message_id: Optional[str]) -> None:
+    if not message_id:
+        return
+    now = _time_thread.time()
+    if len(_DECK_TURNS) > _LAST_ROUTE_MAX:
+        for key in [key for key, started in _DECK_TURNS.items() if now - started > _DECK_TURN_TTL]:
+            del _DECK_TURNS[key]
+        if len(_DECK_TURNS) > _LAST_ROUTE_MAX:
+            _DECK_TURNS.clear()
+    _DECK_TURNS[message_id] = now
 # //// END Neoffice ////
 
 
@@ -3492,6 +3580,8 @@ def route_chat_message(
         _offer is None and not _note_request and not _space_turn and not _owned_turn and not _canned_text
         and not _one_off_reminder and not (_editor and _editor.get("app") == "deck") and _is_deck_request(message)
     )
+    if _deck_turn:  # //// Neoffice — kanban_create refused in this turn, see _DECK_TURNS (23.10)
+        _mark_deck_turn(idempotency_key)
     # //// END Neoffice ////
     # //// Neoffice — a letter to post (21.10), see _LETTER_REQUEST_RE: a gesture, never a read for the fast answer
     _letter_turn = (

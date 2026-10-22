@@ -1427,6 +1427,10 @@ class WebhookAdapter(BasePlatformAdapter):
             ),
             # //// END Neoffice ////
             user_name=route_name,
+            # //// Neoffice — the delivery is the turn's id (HERMES_SESSION_MESSAGE_ID for its run): the pre-router marks
+            # //// a presentation turn by it, and kanban_create is refused in that turn only (nora_chat_router._DECK_TURNS,
+            # //// 23.10). Upstream leaves it empty; the webhook's send ignores reply anchors.
+            message_id=delivery_id,
         )
         if profile and isinstance(profile, str):
             source.profile = profile

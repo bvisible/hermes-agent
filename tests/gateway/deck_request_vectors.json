@@ -1,5 +1,5 @@
 {
- "_comment": "Presentations to make and the sentences that must not be one (22.10, step 4 of the plan). All names are invented. The router's tests read this file: tests/gateway/test_nora_chat_router_presentation.py.",
+ "_comment": "Presentations to make and the sentences that must not be one (22.10, step 4 of the plan). All names are invented. The router's tests read this file: tests/gateway/test_nora_chat_router_presentation.py. `recurring_decks`: presentations asked as a habit, which stay recurring jobs (23.10).",
  "decks": [
   "Fais-moi une présentation de 5 diapositives sur nos services de maintenance",
   "Fais moi une présentation sur nos services",
@@ -24,7 +24,14 @@
   "Erstelle eine Präsentation über unsere Dienstleistungen",
   "Mach mir fünf Folien zu unserem Angebot",
   "Fammi una presentazione sui nostri servizi",
-  "Prepara 5 slide sul nuovo contratto"
+  "Prepara 5 slide sul nuovo contratto",
+  "Fais-moi une présentation de 3 diapositives sur nos horaires",
+  "Fais-moi une présentation de 3 diapositives sur nos horaires : du lundi au vendredi de 8 h à 12 h et de 13 h 30 à 17 h 30, fermé le samedi et les jours fériés",
+  "Make me 3 slides on our opening hours: from Monday to Friday, 8 to 12 and 1:30 to 5:30",
+  "Fais-moi une présentation sur nos horaires du lundi au vendredi",
+  "Fais-moi une présentation sur la permanence du lundi au vendredi de 8 h à 18 h",
+  "Fais-moi une présentation sur notre semaine : du lundi au vendredi, chantier, bureau et atelier",
+  "Erstelle eine Präsentation über unsere Öffnungszeiten von Montag bis Freitag"
  ],
  "not_decks": [
   "Où est la présentation de la société ?",
@@ -69,10 +76,24 @@
   "Fais un deck pour la terrasse",
   "Build a deck for the garden",
   "Präsentation über unsere Dienstleistungen",
-  "Crea un appuntamento per la presentazione"
+  "Crea un appuntamento per la presentazione",
+  "Prépare-moi chaque lundi une présentation de 3 diapositives sur les ventes : chiffre d'affaires, devis et factures"
  ],
  "capability": [
   "Tu sais faire des présentations ?",
   "Est-ce que tu peux faire des slides ?"
+ ],
+ "recurring_decks": [
+  "Prépare une présentation des ventes : chaque lundi à 8 h",
+  "Fais-moi une présentation sur les ventes : tous les lundis",
+  "Du lundi au vendredi, prépare-moi une présentation sur les ventes de la veille",
+  "Make me a presentation on sales: every Monday",
+  "Prépare-moi une présentation sur les ventes du lundi au vendredi",
+  "Nouvelle demande : chaque lundi, prépare-moi une présentation sur les ventes",
+  "From Monday to Friday, make me a presentation on yesterday's sales",
+  "Erstelle eine Präsentation über den Umsatz von Montag bis Freitag",
+  "Erstelle jeden Montag eine Präsentation über den Umsatz",
+  "Fammi una presentazione sulle vendite dal lunedì al venerdì",
+  "Planifie : fais-moi une présentation sur les ventes chaque lundi"
  ]
 }

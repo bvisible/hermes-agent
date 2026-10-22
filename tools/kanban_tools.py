@@ -1447,10 +1447,34 @@ def _neoffice_chat_task_body(body: Any, creator_task_id: Optional[str]) -> Any:
 # //// END Neoffice ////
 
 
+# //// Neoffice — no pole makes presentations (23.10). In a turn NORA's pre-router decided is a presentation to make
+# //// (gateway.nora_chat_router.deck_turn_under_way, by the turn's message id), the orchestrator handed « 3 diapositives
+# //// sur nos horaires » to rh, which reads no opening hours and makes no presentation: the person got rh's question
+# //// and no deck. kanban_create is refused in that turn, with what to do instead. A worker's own child task and every
+# //// other turn, another message of the same thread included, are untouched.
+def _neoffice_deck_turn_rejection() -> Optional[str]:
+    if os.environ.get("HERMES_KANBAN_TASK") and _is_dispatcher_owned_worker():
+        return None
+    try:
+        from gateway.session_context import get_session_env
+        if get_session_env("HERMES_SESSION_PLATFORM", "") != "webhook":
+            return None
+        from gateway.nora_chat_router import DECK_TURN_REFUSAL, deck_turn_under_way
+        return DECK_TURN_REFUSAL if deck_turn_under_way(get_session_env("HERMES_SESSION_MESSAGE_ID", "")) else None
+    except Exception as exc:  # the guard must never fail kanban_create
+        logger.debug("presentation turn guard skipped: %r", exc)
+        return None
+# //// END Neoffice ////
+
+
 @_kanban_handler("kanban_create")
 def _handle_create(args: dict, **kw) -> str:
     """Create a (child) task; orchestrator workers use this to fan out."""
     _reject_delegated_child_mutation("kanban_create")
+    # //// Neoffice — refused in a presentation turn, see _neoffice_deck_turn_rejection
+    _deck_refusal = _neoffice_deck_turn_rejection()
+    _check(not _deck_refusal, _deck_refusal or "")
+    # //// END Neoffice ////
     title = _require_text(args, "title")
     assignee = args.get("assignee")
     _check(assignee, "assignee is required — name the profile that should execute this "
