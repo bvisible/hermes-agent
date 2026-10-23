@@ -23,10 +23,10 @@ _EDIT = "Mets le mot offre en gras, puis ajoute à la fin du document une ligne 
 
 @pytest.fixture(autouse=True)
 def fresh_state():
-    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED):
+    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED, R._DOC_LINK_TURNS):
         d.clear()
     yield
-    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED):
+    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED, R._DOC_LINK_TURNS):
         d.clear()
 
 
@@ -265,7 +265,7 @@ def test_the_gestures_asked_from_the_letter_stay_with_the_document(monkeypatch, 
     assert R._LAST_ROUTE["conv-editor"]["pole"] is None
 
 
-# //// Neoffice — what the open document is in the ERP is NORA's to say, never a pole's (23.10, plan 29 step 3).
+# //// Neoffice — what the open document is in the ERP is NORA's to say, never a pole's (23.10).
 @pytest.mark.parametrize("app", sorted(_PAGES))
 def test_what_the_document_is_in_the_erp_is_answered_by_nora_from_its_reading(monkeypatch, app):
     monkeypatch.setattr(R, "classify", lambda *a, **k: pytest.fail("the classifier must not be asked"))
@@ -276,8 +276,97 @@ def test_what_the_document_is_in_the_erp_is_answered_by_nora_from_its_reading(mo
     assert R._LAST_ROUTE["conv-editor"]["pole"] is None
     assert "nora_doc_observe's `drive_file`, never a pole's" in hint
     assert "say you do not know and offer to look for the party named in the document" in hint
+    assert "(if the document names no party, ask them which one to look for)" in hint
     # The business rule stays, after it: the company's data the document tools do not answer.
     assert hint.index("`drive_file`") < hint.index("company's own data") and hint.endswith("kanban_create.]")
+    # The instruction was not enough with the real agent (osiris, 23.10): the turn is marked, kanban_create refused in it.
+    assert R.doc_link_turn_under_way("k")
+
+
+@pytest.mark.parametrize("message", [
+    "À qui est cette lettre, et à quoi est-elle reliée dans l'ERP ?",
+    "À quel dossier ce document est-il rattaché ?",
+    "Cette lettre est liée à quoi ?",
+    "Cette lettre est-elle reliée à un client dans l'ERP ?",
+    "Est-ce que ce document est rattaché à un client ?",
+    "C'est quoi ce document dans Neoffice ?",
+    "Quel client est associé à ce fichier ?",
+    "À quel client appartient cette lettre ?",
+    "À quel client correspond ce courrier ?",
+    "à qui est ce courrier",
+    "A qui est cette lettre ?",
+    "À qui est ce PDF ?",
+    "What is this letter linked to in the ERP?",
+    "Is this letter linked to anything in the ERP?",
+    "Who does this document belong to?",
+    "Which customer is this letter about?",
+    "Whose letter is this?",
+    "Womit ist dieses Dokument verknüpft?",
+    "Mit was ist dieses Dokument verknüpft?",
+    "Zu welchem Kunden gehört dieser Brief?",
+    "Wem gehört dieser Brief?",
+    "Wem gehört diese Datei?",
+    "A cosa è collegato questo documento?",
+    "A quale cliente appartiene questa lettera?",
+    "A chi è questa lettera?",
+])
+def test_asked_what_the_open_document_is_the_turn_refuses_a_pole(monkeypatch, message):
+    monkeypatch.setattr(R, "classify", lambda *a, **k: pytest.fail("the classifier must not be asked"))
+    assert R._is_document_link_question(message), message
+    decision = _route(monkeypatch, message)
+    assert decision["category"] == "DIRECT" and decision["task_id"] is None, message
+    assert R.doc_link_turn_under_way("k"), message
+
+
+@pytest.mark.parametrize("message", [
+    _EDIT,
+    "Mets le titre en gras",
+    "Ajoute à la fin : Veuillez agréer nos salutations.",
+    "Quel est le solde du client Exemple SA ?",
+    "Traduis ce paragraphe en allemand",
+    "Who are our biggest customers this year?",
+    # The company's own data asked from a document: a pole's, as before (the hint's « business as usual »).
+    "Quel est le solde du client Exemple SA dans Neoffice ?",
+    "Qui est le client Dupont dans l'ERP ?",
+    "What is the stock level of item A-100 in the ERP?",
+    "Quelles factures sont liées à la commande SO-0012 ?",
+    "Quels devis sont rattachés à ce client ?",
+    "Welche Rechnungen sind mit diesem Kunden verknüpft?",
+    "Quel rapport dans Neoffice permet de suivre ce que me doivent mes clients ?",
+])
+def test_other_requests_from_an_editor_are_not_marked(monkeypatch, message):
+    assert not R._is_document_link_question(message), message
+    _route(monkeypatch, message)
+    assert not R.doc_link_turn_under_way("k"), message
+
+
+def test_the_question_from_neomail_s_pane_keeps_the_mail_s_own_instruction(monkeypatch):
+    monkeypatch.setattr(R, "classify", lambda *a, **k: pytest.fail("the classifier must not be asked"))
+    page = {"surface": "editor", "app": "mail", "document": {"name": "Votre offre"}}
+    decision = _route(monkeypatch, "À qui est ce courrier, et à quoi est-il relié dans l'ERP ?", page=page)
+    assert decision["category"] == "DIRECT" and decision["task_id"] is None
+    assert not R.doc_link_turn_under_way("k")
+
+
+def test_the_question_outside_an_editor_is_classified_as_before_and_not_marked(monkeypatch):
+    message = "À quoi est reliée la facture FA-2026-001 dans l'ERP ?"
+    asked = []
+    monkeypatch.setattr(R, "classify", lambda message, **kw: asked.append(message) or "support")
+    decision = _route(monkeypatch, message, page={"route": "app/home"})
+    assert asked == [message] and decision["category"] == "support"
+    assert not R.doc_link_turn_under_way("k")
+
+
+def test_the_mark_lapses_and_a_turn_without_an_id_is_never_marked(monkeypatch):
+    R._mark_doc_link_turn("delivery-9")
+    assert R.doc_link_turn_under_way("delivery-9") and not R.doc_link_turn_under_way("delivery-8")
+    now = R._time_thread.time()
+    monkeypatch.setattr(R._time_thread, "time", lambda: now + R._DECK_TURN_TTL + 1)
+    assert not R.doc_link_turn_under_way("delivery-9")
+    R._mark_doc_link_turn("")
+    R._mark_doc_link_turn(None)
+    assert "" not in R._DOC_LINK_TURNS and None not in R._DOC_LINK_TURNS
+    assert not R.doc_link_turn_under_way("") and not R.doc_link_turn_under_way(None)
 
 
 # //// Neoffice — NeoMail's Nora pane (« Nora partout », step 8): the person's mail, with its own instruction.

@@ -2185,11 +2185,12 @@ _EDITOR_HINT_TAIL = (
     # //// Neoffice — what the open document IS in the ERP is NORA's to say, from the reading of the document
     # //// (`drive_file`, neoffice_theme.editor_document): asked « à quoi est-elle reliée dans l'ERP ? » with no file
     # //// the person may read, the real agent handed the question to the Support pole (osiris, 23.10). Without a
-    # //// file, she does not know, says so, and offers a search by the name the document gives.
+    # //// file, she does not know, says so, and offers a search by the name the document gives (none: she asks which).
     "What the open document IS in the ERP (its letter, its party, the record it is attached to) is yours to say, "
     "from nora_doc_observe's `drive_file`, never a pole's: when `drive_file` says it is unknown or linked to "
     "nothing, say you do not know and offer to look for the party named in the document, by its name as written, "
-    "with your read tools (search_documents), as the person. A request about the "
+    "with your read tools (search_documents), as the person (if the document names no party, ask them which one to "
+    "look for). A request about the "
     # //// Neoffice — « that your tools here do not answer »: a sheet's figures are nora_sheet_fill's (23.10).
     "company's own data that your tools here do not answer (a customer, an invoice, stock…) is business as usual: "
     "kanban_create.]"
@@ -2271,6 +2272,77 @@ _MAIL_HINT = (
     "question about the company's data beyond who the sender is (their invoices, an order, stock…) is business as "
     "usual: kanban_create.]"
 )
+
+# //// Neoffice — what the open document IS in the ERP is NORA's to say, never a pole's (23.10). The instruction above
+# //// was not enough: asked « À qui est cette lettre, et à quoi est-elle reliée dans l'ERP ? » from a document that is
+# //// no Drive file the person may read, the real agent read `drive_file` (« unknown … do not hand the question to a
+# //// pole ») and still made a kanban_create to support, which searched the file's name and found nothing (osiris,
+# //// 23.10). A pole holds neither the open document nor its `drive_file`. In an editor turn that asks what the
+# //// document is linked to, or whose it is, the router marks the turn, as a presentation's (_DECK_TURNS), and
+# //// tools/kanban_tools.py refuses kanban_create in it with DOC_LINK_TURN_REFUSAL. The words of the question: the
+# //// document itself (« cette lettre », « ce document », « this file », « dieser Brief », « questo documento ») with a
+# //// link word (reliée, rattaché, appartient, linked, belongs, verknüpft, gehört, collegato…) or « in the ERP / in
+# //// Neoffice »; or « à qui est cette lettre » and its kin. Without the document named, a question is the company's
+# //// (« quelles factures sont liées à cette commande ? », « le solde du client X dans Neoffice ? »): a pole's, as before.
+# //// A follow-up with a pronoun only (« et à quoi est-elle reliée ? ») keeps the instruction alone.
+_DOC_LINK_WORD_RE = re.compile(
+    r"\b(?:reli[ée]e?s?|li[ée]e?s?|rattach[ée]e?s?|attach[ée]e?s?|associ[ée]e?s?|appartien\w*|correspond\w*|concern\w*"
+    r"|linked|attached|tied|related|belong\w*|about"
+    r"|verkn[üu]pft|verbunden|zugeordnet|angeh[äa]ngt|geh[öo]rt|betrifft"
+    r"|collegat[oaie]|associat[oaie]|allegat[oaie]|appartiene|riguarda)\b",
+    re.IGNORECASE,
+)
+_DOC_LINK_ERP_RE = re.compile(r"\b(?:dans|in|im|nel)\s+(?:l['’]\s*|dem\s+|the\s+)?(?:erp|neoffice)\b", re.IGNORECASE)
+_DOC_SELF_RE = re.compile(
+    r"\b(?:cette|ce|cet|la|le|this|that|the|diese[mnrs]?|die|das|der|quest[oa]|il)\s+"
+    r"(?:lettre|courrier|document|fichier|pdf|doc|classeur|pr[ée]sentation|letter|file|workbook|spreadsheet|deck"
+    r"|presentation|brief|dokument|datei|schreiben|lettera|documento|presentazione)\b",
+    re.IGNORECASE,
+)
+_DOC_WHOSE_RE = re.compile(
+    r"\b[àa]\s+qui\s+(?:est|appartient)\s+(?:cette|ce|cet|la|le)\s+(?:lettre|document|courrier|fichier|pdf)\b"
+    r"|\bwhose\s+(?:letter|document|file)\b|\bwho\s+is\s+this\s+(?:letter|document)\s+(?:for|to|from)\b"
+    r"|\bwem\s+geh[öo]rt\s+(?:diese[rs]?|das|der|die)\s+(?:brief|dokument|datei|schreiben)\b"
+    r"|\ba\s+chi\s+(?:è|e|appartiene)\s+quest[ao]\s+(?:lettera|documento|file)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_document_link_question(message: Optional[str]) -> bool:
+    """Whether the person asks what the open document is linked to in the ERP, or whose it is."""
+    text = message or ""
+    if _DOC_WHOSE_RE.search(text):
+        return True
+    return bool(_DOC_SELF_RE.search(text) and (_DOC_LINK_WORD_RE.search(text) or _DOC_LINK_ERP_RE.search(text)))
+
+
+_DOC_LINK_TURNS: dict = {}  # the routed message's id -> when its question about the open document was decided
+DOC_LINK_TURN_REFUSAL = (
+    "No pole knows what the open document is in the ERP: nora_doc_observe's `drive_file` says it, and only it (call "
+    "nora_doc_observe if you have not yet). When it says the file is unknown or linked to nothing, tell the person you "
+    "do not know, and offer to look for the party the document names (its name as written) with search_documents, as "
+    "the person; when it names none, ask them which party to look for. A question about another record: your own read "
+    "tools, as the person; if you hold none for it, say so. If they asked something else too, answer the part about the "
+    "document and ask them to send the rest as a message of its own. Do not call kanban_create again in this turn."
+)
+
+
+def doc_link_turn_under_way(message_id: Optional[str]) -> bool:
+    """Whether the turn of the routed message `message_id` asks what the open document is (see _DOC_LINK_TURNS)."""
+    started = _DOC_LINK_TURNS.get(message_id or "")
+    return started is not None and _time_thread.time() - started <= _DECK_TURN_TTL
+
+
+def _mark_doc_link_turn(message_id: Optional[str]) -> None:
+    if not message_id:
+        return
+    now = _time_thread.time()
+    if len(_DOC_LINK_TURNS) > _LAST_ROUTE_MAX:
+        for key in [key for key, started in _DOC_LINK_TURNS.items() if now - started > _DECK_TURN_TTL]:
+            del _DOC_LINK_TURNS[key]
+        if len(_DOC_LINK_TURNS) > _LAST_ROUTE_MAX:
+            _DOC_LINK_TURNS.clear()
+    _DOC_LINK_TURNS[message_id] = now
 
 
 # //// Neoffice — the instruction of an editor turn, built per editor (maintenance#1690); NeoMail's is its own.
@@ -3795,6 +3867,10 @@ def route_chat_message(
         _editor is not None and _offer is None and not _note_request and not _space_turn
         and not _owned_turn and not _canned_text
     )
+    # //// Neoffice — asked what the open document is in the ERP: kanban_create refused in this turn, see _DOC_LINK_TURNS.
+    # //// Not from NeoMail's pane: a message is no Drive file, its own instruction says who the sender is (_MAIL_HINT).
+    if _editor_turn and _editor.get("app") != "mail" and _is_document_link_question(message):
+        _mark_doc_link_turn(idempotency_key)
     # //// END Neoffice ////
 
     # //// Neoffice — PARALLEL classify + fast-answer. They were serial (two

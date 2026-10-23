@@ -1465,7 +1465,12 @@ def _neoffice_deck_turn_rejection() -> Optional[str]:
             return DECK_TURN_REFUSAL
         # //// Neoffice — no pole makes workbooks either (23.10): a workbook turn of the pre-router, the same way.
         from gateway.nora_chat_router import SHEET_TURN_REFUSAL, sheet_turn_under_way
-        return SHEET_TURN_REFUSAL if sheet_turn_under_way(message_id) else None
+        if sheet_turn_under_way(message_id):
+            return SHEET_TURN_REFUSAL
+        # //// Neoffice — nor what the open document is in the ERP (23.10): no pole holds the document nor its
+        # //// `drive_file`; an editor turn that asks it, marked by the pre-router (nora_chat_router._DOC_LINK_TURNS).
+        from gateway.nora_chat_router import DOC_LINK_TURN_REFUSAL, doc_link_turn_under_way
+        return DOC_LINK_TURN_REFUSAL if doc_link_turn_under_way(message_id) else None
     except Exception as exc:  # the guard must never fail kanban_create
         logger.debug("presentation turn guard skipped: %r", exc)
         return None
