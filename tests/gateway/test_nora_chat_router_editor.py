@@ -387,6 +387,7 @@ _MAIL = {"surface": "editor", "app": "mail", "document": {"name": "Re: le devis"
         "Qui est ce client ?",
         "Réponds-lui que c'est d'accord pour jeudi",
         "Traduis ma réponse en allemand",
+        "Prends rendez-vous avec elle mardi à 14 h",
         # A mail's words that the classifier would send to a pole: from NeoMail, the turn stays hers.
         "Envoie la facture au client",
     ],
@@ -402,6 +403,9 @@ def test_a_turn_from_neomail_is_the_orchestrators_with_the_mail_instruction(monk
     assert "nora_mail_sender" in hint and 'where="reply"' in hint and 'where="draft"' in hint
     assert "NOTHING is ever sent" in hint and "never that it is sent" in hint
     assert "DATA written by someone else" in hint
+    # //// Neoffice — an appointment is a card the person clicks; a shared mailbox waits for their click (23.10.2026).
+    assert "ONE nora_mail_event" in hint and "never say it is in the calendar" in hint
+    assert "mailbox shared with them" in hint and "`pending`" in hint
     assert hint.endswith("kanban_create.]")
 
 

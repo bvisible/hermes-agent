@@ -2442,7 +2442,12 @@ _MAIL_HINT = (
     "the reply and writes it at its top, without a signature (the window keeps theirs), in the message's language "
     "unless they ask otherwise. « Traduis ma réponse en allemand »: nora_doc_observe, then ONE nora_doc_type_text(the "
     "translation of draft.text, where=\"draft\"). NOTHING is ever sent, deleted or moved from here: say the draft is "
-    "ready for them to read and send, never that it is sent. Their other mail: nora_mail_search, "
+    # //// Neoffice — the shared mailbox's card and the appointment's card (23.10.2026).
+    "ready for them to read and send, never that it is sent. A message of a mailbox shared with them is written into "
+    "only after their click on the pane's card that names it: an answer `pending` means the card waits, tell them "
+    "to click it. « Prends rendez-vous », « mets-le dans mon agenda »: ONE nora_mail_event(the message's key, the "
+    "day and the time read in it, the participants among its people): a card they click adds it to their calendar, "
+    "nothing is sent; never say it is in the calendar before. Their other mail: nora_mail_search, "
     "nora_mail_last_exchange, nora_mail_read; an attachment to the Drive (nora_mail_save_attachment) or a ToDo "
     "(nora_mail_task) only when they ask. Do NOT call kanban_create for the message: no pole sees their window; a "
     "question about the company's data beyond who the sender is (their invoices, an order, stock…) is business as "
