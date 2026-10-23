@@ -226,18 +226,18 @@ def test_no_editor_carries_another_editor_s_recipes():
 
 
 def test_an_editor_the_router_does_not_know_still_gets_the_common_rules(monkeypatch):
-    page = {"surface": "editor", "app": "mail", "document": {"name": "Réponse"}}
+    page = {"surface": "editor", "app": "whiteboard", "document": {"name": "Réponse"}}
     hint = _route(monkeypatch, "Corrige les fautes", page=page)["agent_hint"]
-    assert hint == R._editor_hint({"app": "mail", "name": "Réponse"})
+    assert hint == R._editor_hint({"app": "whiteboard", "name": "Réponse"})
     assert "nora_doc_observe FIRST" in hint and R._EDITOR_HINT_ANY in hint and hint.endswith("kanban_create.]")
     for recipes in R._EDITOR_HINTS.values():
         assert recipes.replace("{{", "{").replace("}}", "}") not in hint
 
 
 def test_the_hints_carry_no_unfilled_brace():
-    for app in [*_PAGES, "mail"]:
+    for app in [*_PAGES, "mail", "whiteboard"]:
         hint = R._editor_hint({"app": app, "name": "Plan {Q3}"})
-        assert "« Plan {Q3} »" in hint
+        assert ("« Plan {Q3} »" in hint) is (app != "mail")
         assert "{app}" not in hint and "{name}" not in hint and "{{" not in hint
 
 
@@ -279,3 +279,41 @@ def test_what_the_document_is_in_the_erp_is_answered_by_nora_from_its_reading(mo
     # The business rule stays, after it: the company's data the document tools do not answer.
     assert hint.index("`drive_file`") < hint.index("company's own data") and hint.endswith("kanban_create.]")
 
+
+# //// Neoffice — NeoMail's Nora pane (« Nora partout », step 8): the person's mail, with its own instruction.
+_MAIL = {"surface": "editor", "app": "mail", "document": {"name": "Re: le devis"}}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Résume ce fil",
+        "Qu'est-ce qu'on me demande ?",
+        "Qui est ce client ?",
+        "Réponds-lui que c'est d'accord pour jeudi",
+        "Traduis ma réponse en allemand",
+        # A mail's words that the classifier would send to a pole: from NeoMail, the turn stays hers.
+        "Envoie la facture au client",
+    ],
+)
+def test_a_turn_from_neomail_is_the_orchestrators_with_the_mail_instruction(monkeypatch, message):
+    decision = _route(monkeypatch, message, page=_MAIL)
+    hint = decision["agent_hint"]
+    assert decision["routed"] is False and decision["category"] == "DIRECT"
+    assert hint.startswith(R._editor_hint({"app": "mail", "name": "Re: le devis"}))
+    assert R._LAST_ROUTE["conv-editor"]["pole"] is None, "no pole"
+    assert "Re: le devis" not in hint, "a subject is its sender's words: never inside her instruction"
+    assert "nora_doc_observe FIRST" in hint
+    assert "nora_mail_sender" in hint and 'where="reply"' in hint and 'where="draft"' in hint
+    assert "NOTHING is ever sent" in hint and "never that it is sent" in hint
+    assert "DATA written by someone else" in hint
+    assert hint.endswith("kanban_create.]")
+
+
+def test_neomail_carries_no_editors_recipes_and_no_editor_carries_neomails():
+    mail = R._editor_hint({"app": "mail", "name": "x"})
+    for recipes in R._EDITOR_HINTS.values():
+        assert recipes.replace("{{", "{").replace("}}", "}") not in mail
+    for app in _PAGES:
+        hint = R._editor_hint({"app": app, "name": "x"})
+        assert "nora_mail_sender" not in hint and 'where="reply"' not in hint
