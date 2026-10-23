@@ -32,7 +32,11 @@
   "Esporta le vendite dal 2025 su Excel",
   "Erstelle eine Excel-Tabelle mit den Umsätzen pro Monat 2026",
   "Donne-moi un fichier Excel des achats par fournisseur",
-  "Fais-moi un classeur des ventes par client de 2026"
+  "Fais-moi un classeur des ventes par client de 2026",
+  "Fammi un foglio Excel delle vendite per mese, così posso controllarlo",
+  "Erstelle mir eine Excel-Tabelle der Umsätze 2026, dann kann ich sie prüfen",
+  "Fais-moi un classeur des ventes par mois, pourrais-je le recevoir ici ?",
+  "Fais-moi un Excel des ventes par mois. Puis-je le modifier ensuite ?"
  ],
  "not_sheets": [
   "Fais-moi un tableau des ventes par mois",
@@ -84,11 +88,60 @@
   "Crée-moi un classeur vide, ca presse",
   "Signale un bug : l'export des factures en excel ne fonctionne pas",
   "Exporte les ventes en PDF, pas en Excel",
-  "Exporte les factures du client Dupont en Excel"
+  "Exporte les factures du client Dupont en Excel",
+  "Pourrais-je exporter les ventes en Excel ? Et les achats ?",
+  "Serait-il possible de créer un classeur des ventes par mois ? C'est pour mon comptable",
+  "Could I export the sales to Excel? It is for my accountant, who needs them on Friday",
+  "Kann ich die Umsätze nach Excel exportieren? Danke im Voraus für die schnelle Antwort bitte"
  ],
  "recurring_sheets": [
   "Chaque mois, fais-moi un classeur des ventes du mois",
   "Tous les lundis, exporte les ventes de la semaine en Excel",
   "Every Monday, make me a spreadsheet of last week's sales"
+ ],
+ "sheet_questions": [
+  "Est-il possible d'exporter les ventes en Excel ?",
+  "Is it possible to export sales to excel",
+  "Kann man Rechnungen nach Excel exportieren?",
+  "È possibile esportare le fatture su Excel?",
+  "I want to know if invoices can be exported to Excel",
+  "Peut-on avoir les ventes par mois en Excel ?",
+  "Can I get the sales by month in a spreadsheet?",
+  "Serait-il possible d'avoir les achats par fournisseur dans un classeur ?",
+  "Est-ce que je peux exporter les débiteurs en Excel ?",
+  "Ist es möglich, die Umsätze in Excel zu bekommen?",
+  "Si può avere un foglio Excel delle vendite?",
+  "Les ventes par mois de 2026 ? Est-il possible de les avoir en Excel ?",
+  "Bonjour, est-il possible d'exporter les ventes en Excel ?",
+  "Je voudrais savoir si on peut exporter les ventes en Excel",
+  "Est-il possible d'exporter les ventes en Excel ? Merci",
+  "Pourrais-je exporter les ventes en Excel ? Et les achats ?",
+  "Serait-il possible de créer un classeur des ventes par mois ? C'est pour mon comptable",
+  "Kann ich die Umsätze nach Excel exportieren? Danke im Voraus für die schnelle Antwort bitte"
+ ],
+ "not_sheet_questions": [
+  "Est-il possible d'exporter le grand livre en Excel ?",
+  "Est-il possible d'importer les ventes depuis un fichier Excel ?",
+  "Est-il possible de faire un graphique des ventes en Excel ?",
+  "Comment exporter les ventes en Excel ?",
+  "Est-il possible d'exporter la liste des clients en Excel ?",
+  "Est-il possible d'envoyer les ventes en Excel par e-mail ?",
+  "Peut-on exporter la facture FA-2026-001 en Excel ?",
+  "Est-il possible d'avoir les ventes de mars ?",
+  "Tu sais faire des fichiers Excel ?",
+  "Chaque mois, est-il possible d'exporter les ventes en Excel ?",
+  "Est-il possible et comment exporter les ventes en Excel ?",
+  "Fais-moi un classeur des ventes par mois de 2026",
+  "Fammi un foglio Excel delle vendite per mese, così posso controllarlo",
+  "Erstelle mir eine Excel-Tabelle der Umsätze 2026, dann kann ich sie prüfen",
+  "Fais-moi un classeur des ventes par mois, pourrais-je le recevoir ici ?",
+  "Fais-moi un Excel des ventes par mois. Puis-je le modifier ensuite ?",
+  "Est-il possible d'exporter les ventes en Excel ? Combien j'ai vendu en mars ?",
+  "Prépare un classeur des ventes de 2026, je voudrais savoir si c'est possible",
+  "Envoie-moi un Excel des ventes, je voudrais savoir si les chiffres sont complets",
+  "Montre-moi les ventes en Excel pour savoir si c'est complet",
+  "Send me an Excel of the sales by month, I want to know whether it is complete",
+  "Fournis-moi un classeur des ventes pour savoir si tout y est",
+  "Could I export the sales to Excel? It is for my accountant, who needs them on Friday"
  ]
 }

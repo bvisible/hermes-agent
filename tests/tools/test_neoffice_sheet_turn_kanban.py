@@ -26,6 +26,7 @@ def board(monkeypatch, tmp_path):
     from gateway import nora_chat_router, session_context
     monkeypatch.setattr(nora_chat_router, "_DECK_TURNS", {})
     monkeypatch.setattr(nora_chat_router, "_SHEET_TURNS", {})
+    monkeypatch.setattr(nora_chat_router, "_SHEET_QUESTIONS", {})
     session_context.reset_session_vars()
     session_context.set_session_vars(platform="webhook", chat_id=CHAT, message_id="delivery-1")
     yield nora_chat_router
@@ -69,3 +70,11 @@ def test_a_presentation_turn_keeps_its_own_refusal(board):
     board._mark_sheet_turn("delivery-1")
     from tools import kanban_tools as kt
     assert kt._neoffice_deck_turn_rejection() == board.DECK_TURN_REFUSAL
+
+
+def test_a_question_about_a_workbook_is_answered_by_nora_not_a_pole(board):
+    """« Est-il possible d'exporter les ventes en Excel ? »: NORA answers and offers; no pole is needed (23.10)."""
+    board._remember(board._SHEET_QUESTIONS, "delivery-1")
+    out = _create()
+    assert out.get("ok") is not True, out
+    assert "answer it yourself" in json.dumps(out, ensure_ascii=False)

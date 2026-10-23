@@ -671,6 +671,28 @@ def _neoffice_stamp_bridge_user(server_name: str, tool_name: str, args) -> None:
         params["bridge_user"] = keep
 # //// END Neoffice ////
 
+
+# //// Neoffice — a tool the turn does not allow (23.10). The pre-router decides some turns in code; one of them only asks
+# //// whether a workbook can be made (« Est-il possible d'exporter les ventes en Excel ? »), and the orchestrator, holding
+# //// nora_sheet_create, made one anyway. The router names what a turn refuses
+# //// (gateway.nora_chat_router.tool_refused_in_turn, by the turn's message id); the call is refused before it leaves,
+# //// with what to do instead. Every other turn, server and platform is untouched; the guard never fails a call.
+def _neoffice_turn_refusal(server_name: str, tool_name: str) -> Optional[str]:
+    if not server_name.startswith("neoffice-"):
+        return None
+    try:
+        from gateway.session_context import get_session_env
+
+        if get_session_env("HERMES_SESSION_PLATFORM", "") != "webhook":
+            return None
+        from gateway.nora_chat_router import tool_refused_in_turn
+
+        return tool_refused_in_turn(tool_name, get_session_env("HERMES_SESSION_MESSAGE_ID", ""))
+    except Exception as exc:  # the guard must never fail a call
+        logger.debug("turn guard skipped for %s.%s: %r", server_name, tool_name, exc)
+        return None
+# //// END Neoffice ////
+
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False):
     """Sync handler (``handler(args_dict, **kwargs)``) calling an MCP tool via the background loop. Always a JSON
     string, except with ``native_images`` (the registry handler the agent loop dispatches): a result carrying
@@ -685,6 +707,11 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         # //// account and the model GUESSED a name — an hour was booked under a
         # //// customer's (16.09). Top level AND params, fail closed: see the helper (#882).
         _neoffice_stamp_bridge_user(server_name, tool_name, args)
+        # //// END Neoffice ////
+        # //// Neoffice — refused in a turn that does not allow it, see _neoffice_turn_refusal (23.10)
+        _turn_refusal = _neoffice_turn_refusal(server_name, tool_name)
+        if _turn_refusal:
+            return tool_error(_turn_refusal)
         # //// END Neoffice ////
         # Security boundary: untrusted-server write tools need approval before ANY transport work (incl. lazy spawn).
         error = _trust_gate_check(server_name, tool_name) or _check_circuit_breaker(server_name)

@@ -1246,6 +1246,18 @@ _SHEET_OPENS_RE = re.compile(
     r"|spreadsheet|workbook|excel-?(?:datei|tabelle)|arbeitsmappe|foglio\s+di\s+calcolo|cartella\s+di\s+lavoro)\b",
     re.IGNORECASE,
 )
+# //// Neoffice — whether a workbook CAN be made, asked as a question (« Est-il possible d'exporter les ventes en Excel ? »,
+# //// « peut-on… », « can I… », « kann man… »), when it opens its sentence: answered by NORA (_is_sheet_question).
+_SHEET_POSSIBLE = (
+    r"\b(?:est[-\s]il\s+possible|est[-\s]ce\s+possible|serait[-\s]il\s+possible|peut[-\s]on|pourrait[-\s]on|on\s+peut"
+    r"|possible\s+d|ai[-\s]je\s+besoin|savoir\s+si|puis[-\s]je|pourrais[-\s]je"
+    r"|est[-\s]ce\s+que\s+(?:je|nous)\s+(?:peux|pouvons|pourrais|pourrions)"
+    r"|is\s+it\s+possible|would\s+it\s+be\s+possible|is\s+there\s+a\s+way|can\s+(?:i|we)|could\s+(?:i|we)"
+    r"|do\s+(?:i|we)\s+need|know\s+(?:if|whether)"
+    r"|kann\s+man|k[öo]nnte\s+man|kann\s+ich|ist\s+es\s+m[öo]glich|w[äa]re\s+es\s+m[öo]glich|brauche\s+ich|wissen\s+ob"
+    r"|[èe]\s+possibile|sarebbe\s+possibile|si\s+pu[òo]|si\s+possono|posso|sapere\s+se)\b"
+)
+_SHEET_POSSIBLE_RE = re.compile(_SHEET_POSSIBLE, re.IGNORECASE)
 _SHEET_NOT_RE = re.compile(
     # how to make one (the help), whether it can be done (a question), a fault in it (a bug report)
     r"\b(?:comment\s+(?:on\s+|je\s+|puis[-\s]je\s+|faire|cr[ée]er|exporter|faut[-\s]il)|how\s+(?:do|can|to|should)"
@@ -1292,6 +1304,10 @@ def _is_sheet_request(msg: Optional[str]) -> bool:
     sentences = _SHEET_SENTENCE_RE.findall(msg)
     for index, sentence in enumerate(sentences):
         if not _SHEET_FILE_RE.search(sentence):
+            continue
+        # //// Neoffice — a sentence that opens on whether it can be done asks, it does not order (_question_opens,
+        # //// 23.10): « Pourrais-je exporter les ventes en Excel ? Et les achats ? » makes nothing.
+        if _question_opens(sentence):
             continue
         # //// Neoffice — a verb, a wish or the file noun opening it, in the file noun's own sentence (review of 23.10)
         if not (_SHEET_MAKE_RE.search(sentence) or _SHEET_WISH_RE.search(sentence) or _SHEET_OPENS_RE.match(sentence)):
@@ -1341,6 +1357,164 @@ def _mark_sheet_turn(message_id: Optional[str]) -> None:
         if len(_SHEET_TURNS) > _LAST_ROUTE_MAX:
             _SHEET_TURNS.clear()
     _SHEET_TURNS[message_id] = now
+# //// END Neoffice ////
+
+
+# //// Neoffice — a question makes nothing (23.10). « Est-il possible d'exporter les ventes en Excel ? » was no workbook
+# //// turn (_SHEET_NOT_RE), yet the orchestrator, holding nora_sheet_create, made one. The person asked whether it can be
+# //// done: NORA answers, says what the workbook would hold and offers to make it (_SHEET_QUESTION_HINT). The router
+# //// marks the turn by the routed message's id, like a workbook turn; tools/mcp_tool_handlers.py refuses
+# //// nora_sheet_create in it (tool_refused_in_turn) and tools/kanban_tools.py kanban_create. The yes that follows,
+# //// within the same window, is a workbook turn (_take_sheet_offer): it makes the workbook asked about.
+# What may come before the question in its sentence (« Bonjour, est-il possible… », « Dis, peut-on… »), and the questions
+# a wish may lead (« je voudrais savoir si… », « I want to know whether… »).
+_SHEET_LEAD_RE = re.compile(
+    r"^[\s,;:!-]*(?:(?:bonjour|bonsoir|salut|coucou|hello|hi|hey|hallo|guten\s+tag|ciao|buongiorno|dis|dites|et|alors"
+    r"|also|und|so|e|nora|svp|stp|please|bitte|per\s+favore)\b[\s,;:!-]*)*$",
+    re.IGNORECASE,
+)
+_SHEET_KNOW_RE = re.compile(r"\b(?:savoir\s+si|know\s+(?:if|whether)|wissen\s+ob|sapere\s+se)\b", re.IGNORECASE)
+
+
+# Another sentence a question may carry (« C'est pour mon comptable. », « Et les achats ? », « Merci. »): no making verb,
+# wish, file or question of its own.
+_SHEET_OTHER_ASK_RE = re.compile(
+    r"\b(?:combien|quels?|quelles?|lesquel\w*|pourquoi|quand|o[uù]|qui|how|what|which|why|when|where|who|wie|was|welche\w*"
+    r"|warum|wann|wo|quant[oiea]|qual[ei]|perch[ée]|quando|dove|chi)\b",
+    re.IGNORECASE,
+)
+
+
+def _question_opens(sentence: str) -> bool:
+    """Whether `sentence` opens on whether something can be done: only greetings or fillers before the phrase, or a
+    « savoir si / know if / wissen ob / sapere se » led by words that ask for nothing (« je voudrais savoir si… »).
+    Nothing to make, no file and no figures may come first: « Envoie-moi un Excel des ventes, je voudrais savoir si
+    tout y est » asks for the workbook."""
+    asked = _SHEET_POSSIBLE_RE.search(sentence)
+    if not asked:
+        return False
+    lead = sentence[: asked.start()]
+    if _SHEET_MAKE_RE.search(lead) or _SHEET_FILE_RE.search(lead) or _SHEET_SUBJECT_RE.search(lead):
+        return False
+    return bool(_SHEET_LEAD_RE.match(lead) or _SHEET_KNOW_RE.match(sentence, asked.start()))
+
+
+def _is_sheet_question(msg: Optional[str]) -> bool:
+    """Whether a workbook of the company's figures CAN be made, asked as a question: the question OPENS a sentence that
+    names a new file and the figures the sheet factory reads (the figures may be in the sentence just before, which
+    asks nothing of its own), and every other sentence only adds to it (no making verb, wish, file or question of its
+    own, at most eight words). A request that only ends on a question (« Fais-moi un classeur des ventes, puis-je le
+    recevoir ici ? ») stays a request; a question beside another one (« … ? Combien j'ai vendu en mars ? ») is left to
+    the classifier, as are how to, a list, one document, a chart, an import, an e-mail and a recurring job."""
+    msg = msg or ""
+    if not _SHEET_POSSIBLE_RE.search(msg) or _RECUR_RE.search(msg):
+        return False
+    if _SHEET_NOT_RE.search(_SHEET_POSSIBLE_RE.sub(" ", msg)):
+        return False
+    sentences = [s for s in _SHEET_SENTENCE_RE.findall(msg) if s.strip()]
+    for index, sentence in enumerate(sentences):
+        if not (_SHEET_FILE_RE.search(sentence) and _SHEET_POSSIBLE_RE.search(sentence)):
+            continue
+        if not _question_opens(sentence):
+            return False
+        before = sentences[index - 1] if index else ""
+        subject_before = bool(before) and bool(_SHEET_SUBJECT_RE.search(before))
+        if not (_SHEET_SUBJECT_RE.search(sentence) or subject_before):
+            return False
+        for other_index, other in enumerate(sentences):
+            if other_index == index:
+                continue
+            if len(other.split()) > 8 or any(
+                rule.search(other) for rule in (_SHEET_MAKE_RE, _SHEET_WISH_RE, _SHEET_FILE_RE, _SHEET_OTHER_ASK_RE)
+            ):
+                return False
+        return True
+    return False
+
+
+_SHEET_QUESTION_HINT = (
+    "[Route: the person ASKS whether a workbook of the company's figures can be made (Excel, a « classeur »): nothing "
+    "is made in this turn. Answer it yourself, in their language, in two short sentences. The figures a workbook can "
+    "hold: sales by month, purchases by month, sales by customer, purchases by supplier, sales by item, what customers "
+    "owe (by due date), what we owe suppliers, the stock value. What they asked is among them: yes, with those figures "
+    "(and the period, if they gave one), opened in NeoGrille; then ask whether they want it now. It is not: say which "
+    "of these you can put in a workbook. Do not call nora_sheet_create in this turn (it is refused until they say yes), "
+    "nor kanban_create: no pole is needed. Never give a figure.]"
+)
+_SHEET_YES_HINT = (
+    "[The person said yes to the workbook they asked about in their previous message: make it now, with the figures "
+    "and the period of that message, unless this message changes them.]"
+)
+SHEET_QUESTION_REFUSAL = (
+    "This turn only asks whether a workbook can be made: answer it yourself (yes, which figures, it opens in "
+    "NeoGrille) and offer to make it. No pole is needed: do not call kanban_create again in this turn."
+)
+SHEET_QUESTION_TOOL_REFUSAL = (
+    "The person only asked whether a workbook can be made: nothing is made in this turn. Answer yes, say which "
+    "figures it would hold, and ask whether they want it now; it is made in the turn of their yes. Do not call "
+    "nora_sheet_create again in this turn."
+)
+_SHEET_QUESTIONS: dict = {}  # the routed message's id -> when its question turn was decided
+_SHEET_OFFERS: dict = {}  # the conversation -> when NORA was asked whether a workbook can be made
+
+
+def sheet_question_under_way(message_id: Optional[str]) -> bool:
+    """Whether the turn of the routed message `message_id` only asks whether a workbook can be made."""
+    started = _SHEET_QUESTIONS.get(message_id or "")
+    return started is not None and _time_thread.time() - started <= _DECK_TURN_TTL
+
+
+def tool_refused_in_turn(tool_name: str, message_id: Optional[str]) -> Optional[str]:
+    """Why the orchestrator may not call `tool_name` (a neoffice-* MCP tool) in this turn, or None."""
+    if tool_name == "nora_sheet_create" and sheet_question_under_way(message_id):
+        return SHEET_QUESTION_TOOL_REFUSAL
+    return None
+
+
+def _remember(store: dict, key: Optional[str]) -> None:
+    """Stamp `key` in `store` now, the store bounded like _LAST_ROUTE."""
+    if not key:
+        return
+    now = _time_thread.time()
+    if len(store) > _LAST_ROUTE_MAX:
+        for old in [old for old, started in store.items() if now - started > _DECK_TURN_TTL]:
+            del store[old]
+        if len(store) > _LAST_ROUTE_MAX:
+            store.clear()
+    store[key] = now
+
+
+_SHEET_NO_RE = re.compile(
+    r"\b(?:non|nein|pas\s+(?:maintenant|besoin|la\s+peine|tout\s+de\s+suite)|plus\s+tard|laisse\s+tomber"
+    r"|not\s+now|later|nicht\s+jetzt|sp[äa]ter|non\s+ora|dopo)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_sheet_yes(msg: Optional[str]) -> bool:
+    """A short yes, in any of the chat's languages (« Oui merci », « Yes please », « Ja, bitte », « Volontiers »), that
+    turns down nothing and asks nothing new."""
+    text = (msg or "").strip()
+    return (
+        len(text) <= 80
+        and bool(_YES_HEAD_RE.match(text))
+        and not _SHEET_NO_RE.search(text)
+        and not _INFO_QUESTION_RE.search(text)
+        and not _RECUR_RE.search(text)
+    )
+
+
+def _sheet_offer_open(conversation_id: Optional[str]) -> bool:
+    """Whether the previous message of this conversation asked whether a workbook can be made, within the window."""
+    started = _SHEET_OFFERS.get(conversation_id or "")
+    return started is not None and _time_thread.time() - started <= _DECK_TURN_TTL
+
+
+def _take_sheet_offer(conversation_id: Optional[str]) -> bool:
+    """_sheet_offer_open, taken once: whatever the person writes next ends the offer."""
+    is_open = _sheet_offer_open(conversation_id)
+    _SHEET_OFFERS.pop(conversation_id or "", None)
+    return is_open
 # //// END Neoffice ////
 
 
@@ -3843,13 +4017,16 @@ def route_chat_message(
             return _confirmed
     # //// END Neoffice ////
 
+    # //// Neoffice — « Oui merci » to NORA's offer of a workbook is the yes, never small talk nor a yes to nothing
+    # //// (23.10, see _SHEET_OFFERS): NORA asked, even when the chat log has not caught up with her reply yet.
+    _sheet_yes_said = _sheet_offer_open(conversation_id) and _is_sheet_yes(message)
     # //// Neoffice — a yes in a thread where NORA has said nothing confirms nothing, see
     # //// _NOTHING_PROPOSED (#1065): a bare one is answered in code, any other gets a rule.
     _fresh_thread = (
         _offer is None and not _note_request and not _space_turn
         and _thread_is_fresh(conversation_id, nora_spoke)
     )
-    _fresh_yes = _fresh_thread and bool(_YES_HEAD_RE.match((message or "").strip()))
+    _fresh_yes = _fresh_thread and bool(_YES_HEAD_RE.match((message or "").strip())) and not _sheet_yes_said  # //// 23.10
     _nothing_to_confirm = _nothing_proposed_reply(message, language) if _fresh_thread else None
     # //// END Neoffice ////
 
@@ -3858,6 +4035,7 @@ def route_chat_message(
     _canned_text = (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
         (_nothing_to_confirm or _canned_smalltalk_reply(message, language))  # //// Neoffice — #1065
         if _offer is None and not _note_request and not _space_turn and not _owned_turn  # //// Neoffice — 09.10
+        and not _sheet_yes_said  # //// Neoffice — 23.10
         else None
     )
     # //// END Neoffice ////
@@ -3897,13 +4075,27 @@ def route_chat_message(
     # //// END Neoffice ////
     # //// Neoffice — a workbook of figures to make (23.10), see _is_sheet_request: NORA's own, decided like a presentation
     # //// (which it gives way to). From an open NeoGrille it is the editor's turn: the figures go into the open sheet.
-    _sheet_turn = (
+    # //// Neoffice — whether one CAN be made is answered by NORA, and the yes that follows makes it (23.10), see
+    # //// _is_sheet_question: both keep a workbook turn's place; only the hint and the marks differ.
+    _sheet_offered = _take_sheet_offer(conversation_id)
+    _sheet_gate = (
         _offer is None and not _note_request and not _space_turn and not _owned_turn and not _canned_text
         and not _one_off_reminder and not _deck_turn and not (_editor and _editor.get("app") == "sheet")
-        and _is_sheet_request(message)
     )
+    # //// Neoffice — the yes to an offer first, then the question, then the request (23.10)
+    _sheet_yes = _sheet_gate and _sheet_offered and _is_sheet_yes(message)
+    _sheet_question = _sheet_gate and not _sheet_yes and _is_sheet_question(message)
+    _sheet_turn = _sheet_gate and not _sheet_question and (_sheet_yes or _is_sheet_request(message))
     if _sheet_turn:  # //// Neoffice — kanban_create refused in this turn, see _SHEET_TURNS (23.10)
         _mark_sheet_turn(idempotency_key)
+    if _sheet_question:  # //// Neoffice — nora_sheet_create and kanban_create refused, see _SHEET_QUESTIONS
+        _remember(_SHEET_QUESTIONS, idempotency_key)
+        _remember(_SHEET_OFFERS, conversation_id)
+    _sheet_hint = (
+        _SHEET_QUESTION_HINT if _sheet_question
+        else ("\n".join((_SHEET_HINT, _SHEET_YES_HINT)) if _sheet_yes else _SHEET_HINT) if _sheet_turn else None
+    )
+    _sheet_turn = _sheet_turn or _sheet_question
     # //// END Neoffice ////
     # //// Neoffice — a letter to post (21.10), see _LETTER_REQUEST_RE: a gesture, never a read for the fast answer
     _letter_turn = (
@@ -4221,7 +4413,7 @@ def route_chat_message(
                                      _editor_hint(_editor) if _editor_turn else None,
                                      _LETTER_HINT if _letter_turn else None,  # //// Neoffice — a letter (21.10)
                                      _DECK_HINT if _deck_turn else None,  # //// Neoffice — a presentation (22.10)
-                                     _SHEET_HINT if _sheet_turn else None,  # //// Neoffice — a workbook (23.10)
+                                     _sheet_hint,  # //// Neoffice — a workbook, or whether one can be made (23.10)
                                      _SCHEDULED_TASKS_HINT if _tasks_turn else None) if h]  # //// Neoffice — 09.10
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                 "agent_hint": "\n".join(_direct_hints) or None}  # //// Neoffice — #1065
