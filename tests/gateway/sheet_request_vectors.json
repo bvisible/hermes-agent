@@ -26,7 +26,13 @@
   "Exportiere die offenen Posten nach Excel",
   "Esporta le vendite del 2026 su Excel",
   "Fais-moi un classeur des ventes depuis janvier",
-  "Fais-moi un fichier Excel de ce que nos clients nous doivent"
+  "Fais-moi un fichier Excel de ce que nos clients nous doivent",
+  "Exporte les ventes depuis janvier en Excel",
+  "Export sales from January to Excel",
+  "Esporta le vendite dal 2025 su Excel",
+  "Erstelle eine Excel-Tabelle mit den Umsätzen pro Monat 2026",
+  "Donne-moi un fichier Excel des achats par fournisseur",
+  "Fais-moi un classeur des ventes par client de 2026"
  ],
  "not_sheets": [
   "Fais-moi un tableau des ventes par mois",
@@ -60,7 +66,25 @@
   "Voici un fichier Excel des ventes, fais-moi un résumé",
   "Fais la relance des clients avec un fichier Excel joint",
   "Exporte la liste des clients en Excel",
-  "Mets à jour les prix des articles depuis le classeur Excel"
+  "Mets à jour les prix des articles depuis le classeur Excel",
+  "Crée une facture pour le client et exporte-la en Excel",
+  "Exporte la facture FA-2026-001 en Excel",
+  "Prepare an invoice for ACME and put it in Excel",
+  "Create a purchase order and export it to Excel",
+  "Mets à jour le stock de l'article X, j'ai un excel",
+  "Exporte la liste des factures en Excel",
+  "Est-il possible d'exporter les ventes en Excel ?",
+  "Is it possible to export sales to excel",
+  "Kann man Rechnungen nach Excel exportieren?",
+  "È possibile esportare le fatture su Excel?",
+  "I want to know if invoices can be exported to Excel",
+  "Je veux un Excel. Crée aussi une commande d'achat pour 10 vis.",
+  "Passe les écritures des achats, je te donne un Excel après",
+  "Peux-tu me donner le CA de 2026 ? Je le mettrai ensuite dans un Excel.",
+  "Crée-moi un classeur vide, ca presse",
+  "Signale un bug : l'export des factures en excel ne fonctionne pas",
+  "Exporte les ventes en PDF, pas en Excel",
+  "Exporte les factures du client Dupont en Excel"
  ],
  "recurring_sheets": [
   "Chaque mois, fais-moi un classeur des ventes du mois",

@@ -1210,25 +1210,29 @@ _SHEET_FILE_IT = (
 _SHEET_FILE_RE = re.compile(
     "(?:" + "|".join((_SHEET_FILE_FR, _SHEET_FILE_EN, _SHEET_FILE_DE, _SHEET_FILE_IT)) + r")\b", re.IGNORECASE
 )
-# //// Neoffice — figures the factory reads, never a list alone: « exporte la liste des clients en Excel », « crée les
-# //// articles de mon classeur » are a pole's (an export, an import), as before (review of 23.10).
+# //// Neoffice — figures the factory reads, never a list or one document: « exporte la liste des clients en Excel »,
+# //// « crée les articles de mon classeur », « exporte la facture FA-… en Excel » are a pole's (an export, an import, a
+# //// document), as before; « factures », « achats » count in the plural only (reviews of 23.10). « CA » in capitals only:
+# //// « ca presse » is no revenue.
 _SHEET_SUBJECT_RE = re.compile(
-    r"\b(?:ventes?|achats?|chiffres?\s+d['’]\s*affaires?|CA|factur\w*|d[ée]biteurs?|cr[ée]ances?|impay[ée]s?"
-    r"|cr[ée]anciers?|dettes?|stocks?|inventaires?"
-    r"|sales|purchases?|revenues?|turnover|invoices?|receivables?|payables?|debtors?|creditors?|inventory"
-    r"|ums[äa]tze?|verk[äa]ufe?|eink[äa]ufe?|rechnungen|debitoren|kreditoren|forderungen|verbindlichkeiten"
-    r"|offenen?\s+posten|lager(?:bestand|wert)?"
+    r"\b(?:ventes?|achats|chiffres?\s+d['’]\s*affaires?|(?-i:CA)|factures|facturation|d[ée]biteurs?|cr[ée]ances?"
+    r"|impay[ée]s?|cr[ée]anciers?|dettes?|stocks?|inventaires?"
+    r"|sales|purchases|revenues?|turnover|invoices|receivables?|payables?|debtors?|creditors?|inventory"
+    r"|ums[äa]tz(?:e|en)?|verk[äa]uf(?:e|en)|eink[äa]uf(?:e|en)|rechnungen|debitoren|kreditoren|forderungen"
+    r"|verbindlichkeiten|offenen?\s+posten|lager(?:bestand|wert)?"
     r"|vendite|acquisti|fatturato|fatture|crediti|debiti|magazzino|scorte"
     # what is owed, said with its verb: « ce que nos clients nous doivent », « what we owe »
     r"|doivent|devons|owe[sd]?|schulden|devono|dobbiamo)\b",
     re.IGNORECASE,
 )
+# A giving verb counts with its pronoun only (« donne-moi », « give me »): « je te donne un Excel après » is the person's.
 _SHEET_MAKE_RE = re.compile(
     r"\b(?:fais|faire|faites|cr[ée]e[rsz]?|cr[ée]ons|pr[ée]pare[rsz]?|pr[ée]parons|g[ée]n[èée]re[rsz]?|exporte[rsz]?"
-    r"|exportons|sors|sortir|sortez|mets|mettre|mettez|donne[rsz]?|compile[rsz]?|monte[rsz]?|construi[st]|construire"
-    r"|[ée]tabli[rsz]?|extrai[st]|extraire|extrayez|sort[-\s]moi"
-    r"|make|create|prepare|build|generate|export|put|give|pull|compile|draw\s+up"
-    r"|erstell\w*|mach\w*|exportier\w*|generier\w*|gib|bereite\w*|zieh\w*"
+    # //// Neoffice — « donne-moi », « give me », « gib mir »: a giving verb with its pronoun only (review of 23.10)
+    r"|exportons|sors|sortir|sortez|mets|mettre|mettez|donne[sz]?[-\s]+(?:moi|nous)|compile[rsz]?|monte[rsz]?"
+    r"|construi[st]|construire|[ée]tabli[rsz]?|extrai[st]|extraire|extrayez|sort[-\s]moi"
+    r"|make|create|prepare|build|generate|export|put|give\s+(?:me|us)|pull|compile|draw\s+up"
+    r"|erstell\w*|mach\w*|exportier\w*|generier\w*|gib\s+(?:mir|uns)|bereite\w*|zieh\w*"
     r"|fammi|fai|fate|crea\w*|prepara\w*|genera\w*|esporta\w*|metti|dammi)\b",
     re.IGNORECASE,
 )
@@ -1243,35 +1247,59 @@ _SHEET_OPENS_RE = re.compile(
     re.IGNORECASE,
 )
 _SHEET_NOT_RE = re.compile(
-    # how to make one (the help)
+    # how to make one (the help), whether it can be done (a question), a fault in it (a bug report)
     r"\b(?:comment\s+(?:on\s+|je\s+|puis[-\s]je\s+|faire|cr[ée]er|exporter|faut[-\s]il)|how\s+(?:do|can|to|should)"
     r"|wie\s+(?:kann|mache|erstelle|exportiere|geht)|come\s+(?:si|posso|faccio|fare|creare|esportare))\b"
-    # a chart (the chart rule's), an e-mail, a task about it
+    # //// Neoffice — whether it can be done, a fault in it: questions and bug reports (review of 23.10)
+    r"|\b(?:est[-\s]il\s+possible|est[-\s]ce\s+possible|peut[-\s]on|on\s+peut|possible\s+d|ai[-\s]je\s+besoin"
+    r"|savoir\s+si|is\s+it\s+possible|is\s+there\s+a\s+way|can\s+(?:i|we)|do\s+(?:i|we)\s+need|know\s+(?:if|whether)"
+    r"|kann\s+man|ist\s+es\s+m[öo]glich|brauche\s+ich|wissen\s+ob|[èe]\s+possibile|si\s+pu[òo]|si\s+possono"
+    r"|sapere\s+se)\b"
+    r"|\b(?:bugs?|ne\s+(?:fonctionne|marche)\s+pas|doesn'?t\s+work|not\s+working|funktioniert\s+nicht"
+    r"|non\s+funziona)\b"
+    # a chart (the chart rule's), an e-mail, a task about it; not in Excel
     r"|\b(?:graphiques?|diagrammes?|histogrammes?|camemberts?|courbes?|charts?|graphs?|grafik\w*|diagramm\w*"
     r"|grafic[oi]|e-?mails?|mails?|courriels?|t[âa]ches?|to-?dos?|todos?)\b"
-    # a file the person brings: an import, an attachment (review of 23.10)
+    # //// Neoffice — « pas en Excel », a list, one customer's documents (review of 23.10)
+    r"|\b(?:pas\s+en|not\s+(?:in|to|as)|nicht\s+(?:in|als)|non\s+in)\s+excel\b"
+    # a list, one document, an update: a pole's (reviews of 23.10)
+    r"|\b(?:listes?|list|elenco)\b"
+    r"|\b(?:du|au|pour\s+le|for(?:\s+the)?|of\s+the|des|vom|del|dello)\s+(?:client|customer|kunden|cliente|fournisseur"
+    r"|supplier|lieferanten|fornitore)\b"
+    r"|\b(?:une|la|cette|an?|the|this|eine|die|diese|una|questa)\s+(?:facture|invoice|rechnung|fattura|commande|order"
+    r"|bestellung|ordine|devis|quote|quotation|offerte?|angebot)\b|\b[A-Z]{2,5}-\d"
+    r"|\b(?:mets?\s+[àa]\s+jour|mettre\s+[àa]\s+jour|update|aktualisier\w*|aggiorn\w*)\b"
+    # a file the person brings: an import, an attachment (review of 23.10); « depuis janvier » is a period
     r"|\b(?:import\w*|importier\w*|joint|ci-joint|attach\w*|allegat\w*|voici|here\s+is|anbei)\b"
-    r"|\b(?:depuis|[àa]\s+partir\s+d['’]?|from|aus|dal|da)\s+(?:\w+\s+){0,2}(?:fichier|classeur|excel|tableur"
-    r"|feuille|file|spreadsheet|workbook|datei|tabelle|foglio)\b",
+    # //// Neoffice — only an article or a possessive before the file: « depuis janvier » is a period (review of 23.10)
+    r"|\b(?:depuis|[àa]\s+partir\s+d['’]?|from|aus|dal|da)\s*(?:(?:un|une|le|la|les|mon|ma|mes|ce|cet|cette|the|an?"
+    r"|my|this|our|einer|der|dem|meiner|uno|una|il|lo|mio|mia)\s+)?(?:fichier|classeur|excel|tableur|feuille|file"
+    r"|spreadsheet|workbook|datei|tabelle|foglio)\b",
     re.IGNORECASE,
 )
-# The file noun and a figure the factory reads must be the request's, within one sentence.
 _SHEET_SENTENCE_RE = re.compile(r"[^.!?\n]+")
 
 
 def _is_sheet_request(msg: Optional[str]) -> bool:
-    """A workbook of the company's figures to make (NORA's nora_sheet_create): a new file named, figures the sheet
-    factory reads and a making verb or a wish, in one sentence; not how to, not a chart, not an e-mail or a task, not a
-    recurring job."""
+    """A workbook of the company's figures to make (NORA's nora_sheet_create): a new file named and a making verb or a
+    wish in one sentence, about figures the sheet factory reads (said in that sentence, or in the one just before when
+    that one asks nothing of its own: « Les ventes par mois de 2026 ? Fais-moi un Excel. »); not how to or whether it
+    can be done, not a list, one document or an update, not a chart, an e-mail, a task or a bug, not a recurring job."""
     msg = msg or ""
     if _SHEET_NOT_RE.search(msg) or _RECUR_RE.search(msg):
         return False
-    # One sentence holds it all, or a short message does (« Les ventes par mois de 2026 ? Fais-moi un Excel. »).
-    pieces = _SHEET_SENTENCE_RE.findall(msg) + ([msg] if len(msg) <= 240 else [])
-    for sentence in pieces:
-        if not (_SHEET_FILE_RE.search(sentence) and _SHEET_SUBJECT_RE.search(sentence)):
+    # //// Neoffice — the file noun and its verb in one sentence; the figures there or just before (review of 23.10)
+    sentences = _SHEET_SENTENCE_RE.findall(msg)
+    for index, sentence in enumerate(sentences):
+        if not _SHEET_FILE_RE.search(sentence):
             continue
-        if _SHEET_MAKE_RE.search(sentence) or _SHEET_WISH_RE.search(sentence) or _SHEET_OPENS_RE.match(sentence):
+        # //// Neoffice — a verb, a wish or the file noun opening it, in the file noun's own sentence (review of 23.10)
+        if not (_SHEET_MAKE_RE.search(sentence) or _SHEET_WISH_RE.search(sentence) or _SHEET_OPENS_RE.match(sentence)):
+            continue
+        if _SHEET_SUBJECT_RE.search(sentence):
+            return True
+        before = sentences[index - 1] if index else ""
+        if before and _SHEET_SUBJECT_RE.search(before) and not _SHEET_MAKE_RE.search(before):
             return True
     return False
 
