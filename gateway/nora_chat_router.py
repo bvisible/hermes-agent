@@ -2241,13 +2241,15 @@ _EDITOR_HINT_ANY = "nora_doc_select_text then nora_doc_execute to change a passa
 _EDITOR_HINT_GESTURES = (
     " Asked to print it: ONE nora_doc_print (the print dialog opens in front of the person; nothing is printed before "
     "they confirm in it). Asked to e-mail it (« envoie-la par e-mail », « fais-en un e-mail »): ONE nora_doc_email, a "
-    "DRAFT with its PDF that the person sends from NeoMail; never say it is sent, and an address only as they wrote it."
+    "DRAFT with the document (a letter as its PDF; any other in its own format, pdf=\"also\" when they ask for its PDF "
+    "too, pdf=\"only\" for its PDF alone) that the person sends from NeoMail; never say it is sent, and an address only "
+    "as they wrote it."
 )
 _EDITOR_HINT_TEMPLATE = (
     " Asked to keep this letter as the company's template (« sauvegarde ce modèle »): ONE nora_doc_make_template; the "
     "person confirms on its card."
 )
-_GESTURE_EDITORS = ("word",)
+_GESTURE_EDITORS = ("word", "sheet", "deck")  # the three panes print and hand the document (23.10)
 
 # //// Neoffice — NeoMail, the mail program (« Nora partout », step 8, 23.10): its Nora pane sends the page context
 # //// {surface: "editor", app: "mail", document: {name: the subject in view}}. The person's mail is no document: a

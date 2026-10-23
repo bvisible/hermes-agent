@@ -249,9 +249,15 @@ def test_printing_mailing_and_the_template_are_one_tool_each_in_neodoc(monkeypat
     assert "never say it is sent" in hint and "ONE nora_doc_make_template" in hint and hint.endswith("kanban_create.]")
 
 
-@pytest.mark.parametrize("app", ["sheet", "deck", "pdf"])
-def test_the_other_editors_are_not_told_gestures_their_pane_does_not_do(app):
+@pytest.mark.parametrize("app", ["sheet", "deck"])
+def test_the_workbook_and_the_presentation_print_and_mail_but_make_no_letter_template(app):
     hint = R._editor_hint({"app": app, "name": "x"})
+    assert "ONE nora_doc_print" in hint and "ONE nora_doc_email" in hint and 'pdf="also"' in hint
+    assert "nora_doc_make_template" not in hint
+
+
+def test_the_pdf_viewer_is_not_told_gestures_its_pane_does_not_do():
+    hint = R._editor_hint({"app": "pdf", "name": "x"})
     assert "nora_doc_print" not in hint and "nora_doc_email" not in hint and "nora_doc_make_template" not in hint
 
 
