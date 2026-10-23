@@ -1460,7 +1460,12 @@ def _neoffice_deck_turn_rejection() -> Optional[str]:
         if get_session_env("HERMES_SESSION_PLATFORM", "") != "webhook":
             return None
         from gateway.nora_chat_router import DECK_TURN_REFUSAL, deck_turn_under_way
-        return DECK_TURN_REFUSAL if deck_turn_under_way(get_session_env("HERMES_SESSION_MESSAGE_ID", "")) else None
+        message_id = get_session_env("HERMES_SESSION_MESSAGE_ID", "")
+        if deck_turn_under_way(message_id):
+            return DECK_TURN_REFUSAL
+        # //// Neoffice — no pole makes workbooks either (23.10): a workbook turn of the pre-router, the same way.
+        from gateway.nora_chat_router import SHEET_TURN_REFUSAL, sheet_turn_under_way
+        return SHEET_TURN_REFUSAL if sheet_turn_under_way(message_id) else None
     except Exception as exc:  # the guard must never fail kanban_create
         logger.debug("presentation turn guard skipped: %r", exc)
         return None

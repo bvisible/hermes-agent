@@ -1171,6 +1171,151 @@ def _mark_deck_turn(message_id: Optional[str]) -> None:
 # //// END Neoffice ////
 
 
+# //// Neoffice — a WORKBOOK of the company's figures to make is NORA's own (23.10, step 5 of « Nora partout »). « Fais-moi
+# //// un classeur des ventes par mois de 2026 » matched the revenue rule and reached compta, which tells a figure in the
+# //// chat and makes no file. The orchestrator holds the tool (nora_sheet_create, NORA_TASKS): the code reads the figures
+# //// as the person and writes the XLSX; the model names what and when, never a figure. Decided like a presentation,
+# //// before every rule, the classifier and the fast answer. It takes three things in the request:
+# ////   · a NEW file named: « un classeur », « un fichier Excel », « en Excel », « dans un tableur », « une feuille de
+# ////     calcul », « un xlsx », « dans NeoGrille », and their English, German and Italian words. « Fais-moi un tableau
+# ////     des ventes par mois » names no file: it is answered in the chat, as before (a table in the reply);
+# ////   · figures the factory reads: sales, purchases, revenue, invoices, what customers owe, what we owe, suppliers,
+# ////     customers, stock, items; « exporte le grand livre en Excel » stays where it went;
+# ////   · a making verb (« fais », « crée », « prépare », « exporte », « sors », « mets … dans un Excel », « génère »),
+# ////     a wish (« je voudrais un classeur des ventes »), or the file noun opening the message (« Un classeur des
+# ////     ventes 2026 »).
+# //// Never: how to make one (« comment exporter les ventes en Excel ? », the help), a chart (« fais un graphique des
+# //// ventes dans NeoGrille »: the chart rule's), an e-mail to send, a task about one, a recurring job (« chaque mois »:
+# //// the scheduled tasks), a file the person already has (« le classeur joint », « du fichier Excel »: no new file).
+# //// From an open NeoGrille the turn is the editor's: the figures go into the open sheet (nora_sheet_fill, _EDITOR_HINTS).
+_SHEET_FILE_FR = (
+    r"(?:\b(?:une?|des|nouveaux?|nouvelles?)\s+(?:petit\s+|nouveau\s+|nouvelle\s+)?"
+    r"(?:classeurs?|tableurs?|feuilles?\s+(?:de\s+calcul|excel)|fichiers?\s+(?:excel|xlsx|tableur)|tableaux?\s+excel"
+    r"|excels?|xlsx)"
+    r"|\b(?:en|sous|au\s+format|format|dans|vers|sur)\s+(?:excel|xlsx)|\bdans\s+(?:un|une)\s+(?:classeur|tableur|excel|fichier\s+excel"
+    r"|feuille\s+de\s+calcul)|\bdans\s+neogrille|\ben\s+classeur)"
+)
+_SHEET_FILE_EN = (
+    r"(?:\b(?:an?|new)\s+(?:new\s+)?(?:spreadsheets?|workbooks?|excel(?:\s+(?:files?|sheets?|workbooks?))?|xlsx(?:\s+files?)?)"
+    r"|\b(?:in(?:to)?|as\s+an?|to|on)\s+(?:excel|xlsx|a\s+spreadsheet|a\s+workbook|neogrille))"
+)
+_SHEET_FILE_DE = (
+    r"(?:\b(?:eine[nm]?|ein|als)\s+(?:neue[nm]?\s+)?(?:excel(?:-?(?:datei|tabelle|liste|mappe))?|tabellenkalkulation"
+    r"|arbeitsmappe|xlsx(?:-?datei)?)|\b(?:in|nach)\s+(?:excel|eine[rm]?\s+excel(?:-?(?:datei|tabelle))?|neogrille))"
+)
+_SHEET_FILE_IT = (
+    r"(?:\b(?:un|uno|una|un['’])\s*(?:nuov[oa]\s+)?(?:foglio\s+(?:di\s+calcolo|excel)|cartella\s+di\s+lavoro"
+    r"|file\s+excel|excel)|\b(?:in|su)\s+(?:excel|un\s+foglio\s+(?:di\s+calcolo|excel)|neogrille))"
+)
+_SHEET_FILE_RE = re.compile(
+    "(?:" + "|".join((_SHEET_FILE_FR, _SHEET_FILE_EN, _SHEET_FILE_DE, _SHEET_FILE_IT)) + r")\b", re.IGNORECASE
+)
+# //// Neoffice — figures the factory reads, never a list alone: « exporte la liste des clients en Excel », « crée les
+# //// articles de mon classeur » are a pole's (an export, an import), as before (review of 23.10).
+_SHEET_SUBJECT_RE = re.compile(
+    r"\b(?:ventes?|achats?|chiffres?\s+d['’]\s*affaires?|CA|factur\w*|d[ée]biteurs?|cr[ée]ances?|impay[ée]s?"
+    r"|cr[ée]anciers?|dettes?|stocks?|inventaires?"
+    r"|sales|purchases?|revenues?|turnover|invoices?|receivables?|payables?|debtors?|creditors?|inventory"
+    r"|ums[äa]tze?|verk[äa]ufe?|eink[äa]ufe?|rechnungen|debitoren|kreditoren|forderungen|verbindlichkeiten"
+    r"|offenen?\s+posten|lager(?:bestand|wert)?"
+    r"|vendite|acquisti|fatturato|fatture|crediti|debiti|magazzino|scorte"
+    # what is owed, said with its verb: « ce que nos clients nous doivent », « what we owe »
+    r"|doivent|devons|owe[sd]?|schulden|devono|dobbiamo)\b",
+    re.IGNORECASE,
+)
+_SHEET_MAKE_RE = re.compile(
+    r"\b(?:fais|faire|faites|cr[ée]e[rsz]?|cr[ée]ons|pr[ée]pare[rsz]?|pr[ée]parons|g[ée]n[èée]re[rsz]?|exporte[rsz]?"
+    r"|exportons|sors|sortir|sortez|mets|mettre|mettez|donne[rsz]?|compile[rsz]?|monte[rsz]?|construi[st]|construire"
+    r"|[ée]tabli[rsz]?|extrai[st]|extraire|extrayez|sort[-\s]moi"
+    r"|make|create|prepare|build|generate|export|put|give|pull|compile|draw\s+up"
+    r"|erstell\w*|mach\w*|exportier\w*|generier\w*|gib|bereite\w*|zieh\w*"
+    r"|fammi|fai|fate|crea\w*|prepara\w*|genera\w*|esporta\w*|metti|dammi)\b",
+    re.IGNORECASE,
+)
+_SHEET_WISH_RE = re.compile(
+    r"\b(?:voudrais|voudrions|aimerais|aimerions|veux|voulons|souhaite\w*|faut|besoin"
+    r"|need|want|like|brauche|br[äa]uchte|h[äa]tte\s+gern|m[öo]chte|vorrei|voglio|serve)\b",
+    re.IGNORECASE,
+)
+_SHEET_OPENS_RE = re.compile(
+    r"^\s*(?:(?:une?|an?|eine?n?|un|una)\s+)?(?:classeur|tableur|fichier\s+excel|feuille\s+de\s+calcul|excel|xlsx"
+    r"|spreadsheet|workbook|excel-?(?:datei|tabelle)|arbeitsmappe|foglio\s+di\s+calcolo|cartella\s+di\s+lavoro)\b",
+    re.IGNORECASE,
+)
+_SHEET_NOT_RE = re.compile(
+    # how to make one (the help)
+    r"\b(?:comment\s+(?:on\s+|je\s+|puis[-\s]je\s+|faire|cr[ée]er|exporter|faut[-\s]il)|how\s+(?:do|can|to|should)"
+    r"|wie\s+(?:kann|mache|erstelle|exportiere|geht)|come\s+(?:si|posso|faccio|fare|creare|esportare))\b"
+    # a chart (the chart rule's), an e-mail, a task about it
+    r"|\b(?:graphiques?|diagrammes?|histogrammes?|camemberts?|courbes?|charts?|graphs?|grafik\w*|diagramm\w*"
+    r"|grafic[oi]|e-?mails?|mails?|courriels?|t[âa]ches?|to-?dos?|todos?)\b"
+    # a file the person brings: an import, an attachment (review of 23.10)
+    r"|\b(?:import\w*|importier\w*|joint|ci-joint|attach\w*|allegat\w*|voici|here\s+is|anbei)\b"
+    r"|\b(?:depuis|[àa]\s+partir\s+d['’]?|from|aus|dal|da)\s+(?:\w+\s+){0,2}(?:fichier|classeur|excel|tableur"
+    r"|feuille|file|spreadsheet|workbook|datei|tabelle|foglio)\b",
+    re.IGNORECASE,
+)
+# The file noun and a figure the factory reads must be the request's, within one sentence.
+_SHEET_SENTENCE_RE = re.compile(r"[^.!?\n]+")
+
+
+def _is_sheet_request(msg: Optional[str]) -> bool:
+    """A workbook of the company's figures to make (NORA's nora_sheet_create): a new file named, figures the sheet
+    factory reads and a making verb or a wish, in one sentence; not how to, not a chart, not an e-mail or a task, not a
+    recurring job."""
+    msg = msg or ""
+    if _SHEET_NOT_RE.search(msg) or _RECUR_RE.search(msg):
+        return False
+    # One sentence holds it all, or a short message does (« Les ventes par mois de 2026 ? Fais-moi un Excel. »).
+    pieces = _SHEET_SENTENCE_RE.findall(msg) + ([msg] if len(msg) <= 240 else [])
+    for sentence in pieces:
+        if not (_SHEET_FILE_RE.search(sentence) and _SHEET_SUBJECT_RE.search(sentence)):
+            continue
+        if _SHEET_MAKE_RE.search(sentence) or _SHEET_WISH_RE.search(sentence) or _SHEET_OPENS_RE.match(sentence):
+            return True
+    return False
+
+
+_SHEET_HINT = (
+    "[Route: a WORKBOOK of the company's figures is asked (Excel, a « classeur »). It is yours, in ONE call: "
+    "nora_sheet_create(source=…, period=…, group_by=… when they said how, title=… when they named it). source: "
+    "sales_by_month, purchases_by_month, sales_by_customer, purchases_by_supplier, sales_by_item, receivables_ageing, "
+    "payables_ageing, stock_value; period: 2026, 2026-03, 2026-Q1, this_year, last_year, this_month, last_month, "
+    "last_12_months (none for what is owed and for the stock, read today). The code reads the figures with their "
+    "rights and writes them: never write, guess or repeat a figure. What they ask fits none of these: say in one "
+    "sentence which figures you can put in a workbook. Then answer with its `reply` as it is: it carries the link "
+    "that opens it in NeoGrille. Never kanban_create: no pole makes workbooks. Remember at most that the workbook "
+    "exists, never its figures.]"
+)
+# //// Neoffice — a workbook turn stays the orchestrator's to its end, as a presentation's (_DECK_TURNS): « les ventes par
+# //// mois » is a figure question a pole would answer, and the workbook would never be made. The router marks the turn by
+# //// the routed message's id; tools/kanban_tools.py refuses kanban_create in it with SHEET_TURN_REFUSAL.
+_SHEET_TURNS: dict = {}  # the routed message's id -> when its workbook turn was decided
+SHEET_TURN_REFUSAL = (
+    "No pole makes workbooks, and this turn is one: call nora_sheet_create now, with the source and the period the "
+    "person asked for; the code reads the figures. Do not call kanban_create again in this turn."
+)
+
+
+def sheet_turn_under_way(message_id: Optional[str]) -> bool:
+    """Whether the turn of the routed message `message_id` is a workbook to make (see _SHEET_TURNS)."""
+    started = _SHEET_TURNS.get(message_id or "")
+    return started is not None and _time_thread.time() - started <= _DECK_TURN_TTL
+
+
+def _mark_sheet_turn(message_id: Optional[str]) -> None:
+    if not message_id:
+        return
+    now = _time_thread.time()
+    if len(_SHEET_TURNS) > _LAST_ROUTE_MAX:
+        for key in [key for key, started in _SHEET_TURNS.items() if now - started > _DECK_TURN_TTL]:
+            del _SHEET_TURNS[key]
+        if len(_SHEET_TURNS) > _LAST_ROUTE_MAX:
+            _SHEET_TURNS.clear()
+    _SHEET_TURNS[message_id] = now
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -2009,7 +2154,9 @@ _EDITOR_HINT_TAIL = (
     " nora_doc_commands finds a command's id (the names of your tools are not command ids). Do NOT call "
     "kanban_create for the document: no pole holds these tools. Say what changed only after the result says ok; "
     "a change that does not come out right after two tries: stop and say what is there. A request about the "
-    "company's own data (a customer, an invoice, stock…) is business as usual: kanban_create.]"
+    # //// Neoffice — « that your tools here do not answer »: a sheet's figures are nora_sheet_fill's (23.10).
+    "company's own data that your tools here do not answer (a customer, an invoice, stock…) is business as usual: "
+    "kanban_create.]"
 )
 # //// Neoffice — each editor's own recipes, keyed by the page context's `app` (maintenance#1690).
 _EDITOR_HINTS = {
@@ -2028,7 +2175,13 @@ _EDITOR_HINTS = {
         "Rows added under a table that has a chart: then nora_doc_execute(\"chart.selectData\", {{\"chart\": "
         "that number (without it, the sheet's last chart), \"range\": \"Sheet1!A1:B7\"}}), the whole table with its "
         "new rows, so the chart takes them in; it rebuilds the series: colours set on a series are lost. Read the "
-        "sheet again before you say what a cell holds."
+        "sheet again before you say what a cell holds. "
+        # //// Neoffice — the company's figures INTO the open sheet are written by the server (23.10, step 5): the model
+        # //// names what, when and where, never a figure (nora_sheet_fill); a pole would only tell them in the chat.
+        "The company's own figures into this sheet (sales or purchases by month, by customer, supplier or item, what "
+        "is owed by age, the stock's value): ONE nora_sheet_fill(source=…, period=…, at=\"A1\" or \"end\"), the "
+        "server writes them with their total; never type a figure of Neoffice, never kanban_create for them. A new "
+        "workbook of them: nora_sheet_create."
     ),
     "deck": (
         "several slides in ONE call, nora_doc_type_text(an outline, where=\"end\"): a line per slide (its title), its "
@@ -3583,10 +3736,21 @@ def route_chat_message(
     if _deck_turn:  # //// Neoffice — kanban_create refused in this turn, see _DECK_TURNS (23.10)
         _mark_deck_turn(idempotency_key)
     # //// END Neoffice ////
+    # //// Neoffice — a workbook of figures to make (23.10), see _is_sheet_request: NORA's own, decided like a presentation
+    # //// (which it gives way to). From an open NeoGrille it is the editor's turn: the figures go into the open sheet.
+    _sheet_turn = (
+        _offer is None and not _note_request and not _space_turn and not _owned_turn and not _canned_text
+        and not _one_off_reminder and not _deck_turn and not (_editor and _editor.get("app") == "sheet")
+        and _is_sheet_request(message)
+    )
+    if _sheet_turn:  # //// Neoffice — kanban_create refused in this turn, see _SHEET_TURNS (23.10)
+        _mark_sheet_turn(idempotency_key)
+    # //// END Neoffice ////
     # //// Neoffice — a letter to post (21.10), see _LETTER_REQUEST_RE: a gesture, never a read for the fast answer
     _letter_turn = (
         _offer is None and not _note_request and not _space_turn and not _owned_turn and not _canned_text
         and not _one_off_reminder and not _deck_turn and _is_letter_request(message)  # //// Neoffice — a deck first (22.10)
+        and not _sheet_turn  # //// Neoffice — a workbook too (23.10)
     )
     # //// END Neoffice ////
     if (  # //// Neoffice — never for a note (#1040) nor a space turn (step 3)
@@ -3596,6 +3760,7 @@ def route_chat_message(
         and not _editor_turn  # //// Neoffice — nor the document in front of the person (#1573)
         and not _letter_turn  # //// Neoffice — nor a letter to write (21.10)
         and not _deck_turn  # //// Neoffice — nor a presentation to make (22.10)
+        and not _sheet_turn  # //// Neoffice — nor a workbook to make (23.10)
         and _asks_fast_answer(language, _canned_text, _one_off_reminder)
     ):
         import concurrent.futures as _cf
@@ -3622,6 +3787,8 @@ def route_chat_message(
         category = "DIRECT"  # //// Neoffice — the document in front of the person (#1573), classifier skipped ////
     elif _deck_turn:
         category = "DIRECT"  # //// Neoffice — a presentation to make is NORA's (22.10), classifier skipped ////
+    elif _sheet_turn:
+        category = "DIRECT"  # //// Neoffice — a workbook to make is NORA's (23.10), classifier skipped ////
     else:
         category = classify(
             message,
@@ -3657,6 +3824,7 @@ def route_chat_message(
         and not _owned_turn  # //// Neoffice — the scheduled tasks are the orchestrator's (09.10)
         and not _editor_turn  # //// Neoffice — nor the document in front of the person (#1573)
         and not _deck_turn  # //// Neoffice — nor a presentation to make (22.10)
+        and not _sheet_turn  # //// Neoffice — nor a workbook to make (23.10)
         and _page_project(page_context)
         and not _DIRECT_RE.match((message or "").strip())
         and not _CAPABILITY_RE.match((message or "").strip())
@@ -3675,7 +3843,8 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and help_request == "ask"
-        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn)  # //// Neoffice — 09.10, #1573, 22.10
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn
+                 or _sheet_turn)  # //// Neoffice — 09.10, #1573, 22.10, 23.10
     ):
         logger.info("nora_chat_router: DIRECT → support (a request for help, read by nora)")
         category = "support"
@@ -3690,7 +3859,8 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and _WHERE_TO_FIND_RE.search(message or "")
-        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn)  # //// Neoffice — #1573, 22.10
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn
+                 or _sheet_turn)  # //// Neoffice — #1573, 22.10, 23.10
     ):
         again = classify(
             message,
@@ -3707,7 +3877,8 @@ def route_chat_message(
     if (
         category == "DIRECT"
         and _is_bare_name(message)
-        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn)  # //// Neoffice — #1573, 22.10
+        and not (_canned_text or _note_request or _space_turn or _owned_turn or _editor_turn or _deck_turn
+                 or _sheet_turn)  # //// Neoffice — #1573, 22.10, 23.10
     ):
         again = classify(
             message,
@@ -3721,7 +3892,7 @@ def route_chat_message(
         category = again if again in POLES else "ventes"
         logger.info("nora_chat_router: DIRECT → %s (a name typed alone)", category)
     # //// END Neoffice ////
-    if not (_owned_turn or _editor_turn or _letter_turn or _deck_turn):  # //// Neoffice — the scheduled tasks (09.10), the document (#1573), a letter (21.10) and a presentation (22.10) keep their place
+    if not (_owned_turn or _editor_turn or _letter_turn or _deck_turn or _sheet_turn):  # //// Neoffice — the scheduled tasks (09.10), the document (#1573), a letter (21.10), a presentation (22.10) and a workbook (23.10) keep their place
         category = _pole_for_an_employee_record(category, message, deliver_extra)  # //// Neoffice — #843 ////
     # Remember this turn so the NEXT message resolves a follow-up in context. Track DIRECT
     # too (pole=None) so a follow-up to a greeting doesn't inherit a stale pole.
@@ -3847,7 +4018,7 @@ def route_chat_message(
         _is_capability = bool(_CAPABILITY_RE.match(message or ""))
         # //// Neoffice — nor the document in front of the person (#1573): « que peux-tu faire ici ? » asked
         # //// from an editor is about the document tools, which only the orchestrator holds.
-        if not _owned_turn and not _editor_turn and not _deck_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10), a deck made (22.10)
+        if not _owned_turn and not _editor_turn and not _deck_turn and not _sheet_turn and (_is_capability or (  # //// Neoffice — a task turn is acted on (09.10), a deck (22.10) or a workbook (23.10) made
             len(message or "") <= 80
             and _SMALLTALK_RE.search(message or "")
             and not _BUSINESS_RE.search(message or "")
@@ -3891,6 +4062,7 @@ def route_chat_message(
                                      _editor_hint(_editor) if _editor_turn else None,
                                      _LETTER_HINT if _letter_turn else None,  # //// Neoffice — a letter (21.10)
                                      _DECK_HINT if _deck_turn else None,  # //// Neoffice — a presentation (22.10)
+                                     _SHEET_HINT if _sheet_turn else None,  # //// Neoffice — a workbook (23.10)
                                      _SCHEDULED_TASKS_HINT if _tasks_turn else None) if h]  # //// Neoffice — 09.10
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,
                 "agent_hint": "\n".join(_direct_hints) or None}  # //// Neoffice — #1065
