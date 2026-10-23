@@ -467,6 +467,26 @@ def _neutralize_git_safe_directory_read(request, monkeypatch):
     monkeypatch.setattr(_subprocess_compat, "_user_safe_directories", lambda base_env: [], raising=False)
 
 
+# //// Neoffice — every test starts with the gateway's session context unbound (23.10). The session ContextVars
+# //// (gateway.session_context) live in the main thread's context for the whole run, and the gateway's own
+# //// clear_session_vars (its `finally`) leaves each one at "", which masks os.environ by design: after
+# //// test_kanban_provenance.py cleared its session, test_kanban_tools.py::test_create_subscribes_gateway_session,
+# //// which binds its session with monkeypatch.setenv only, read "" for the platform and subscribed nothing: red
+# //// after that file, green alone. Reset to « never bound » (_UNSET) around each test, the latch with it.
+@pytest.fixture(autouse=True)
+def _neoffice_unbound_session_context(monkeypatch):
+    try:
+        from gateway import session_context
+    except Exception:  # an environment without the gateway: nothing to reset
+        yield
+        return
+    session_context.reset_session_vars()
+    monkeypatch.setattr(session_context, "_session_context_engaged", False)
+    yield
+    session_context.reset_session_vars()
+# //// END Neoffice ////
+
+
 @pytest.fixture(autouse=True)
 def _close_leaked_session_dbs():
     """Close every SessionDB a test constructed but forgot to close.
