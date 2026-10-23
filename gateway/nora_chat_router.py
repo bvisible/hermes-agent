@@ -2197,12 +2197,30 @@ _EDITOR_HINTS = {
 }
 # //// Neoffice — an editor the router does not know yet gets the head and the tail: observe, one step per call.
 _EDITOR_HINT_ANY = "nora_doc_select_text then nora_doc_execute to change a passage."
+# //// Neoffice — what the person asks her to do WITH the document (23.10, step 7 of « Nora partout »,
+# //// maintenance#1822): print it, make an e-mail draft of it, make a letter the company's template. One tool each,
+# //// each ending on the person's own click (the print dialog, NeoMail's Send button, the card's Confirm). The editor
+# //// whose pane does them (craft-nora's doc_print and doc_export_pdf): NeoDoc, for its letters, for now.
+_EDITOR_HINT_GESTURES = (
+    " Asked to print it: ONE nora_doc_print (the print dialog opens in front of the person; nothing is printed before "
+    "they confirm in it). Asked to e-mail it (« envoie-la par e-mail », « fais-en un e-mail »): ONE nora_doc_email, a "
+    "DRAFT with its PDF that the person sends from NeoMail; never say it is sent, and an address only as they wrote it."
+)
+_EDITOR_HINT_TEMPLATE = (
+    " Asked to keep this letter as the company's template (« sauvegarde ce modèle »): ONE nora_doc_make_template; the "
+    "person confirms on its card."
+)
+_GESTURE_EDITORS = ("word",)
 
 
 # //// Neoffice — the instruction of an editor turn, built per editor (maintenance#1690).
 def _editor_hint(editor: dict) -> str:
     """The instruction of a turn from an editor: its document, and that editor's own recipes."""
-    recipes = _EDITOR_HINTS.get(editor.get("app") or "", _EDITOR_HINT_ANY)
+    app = editor.get("app") or ""
+    recipes = _EDITOR_HINTS.get(app, _EDITOR_HINT_ANY)
+    # //// Neoffice — print, e-mail, the letter's template (23.10, maintenance#1822)
+    if app in _GESTURE_EDITORS:
+        recipes += _EDITOR_HINT_GESTURES + (_EDITOR_HINT_TEMPLATE if app == "word" else "")
     return (_EDITOR_HINT_HEAD + recipes + _EDITOR_HINT_TAIL).format(**editor)
 
 

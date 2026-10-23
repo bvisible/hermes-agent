@@ -239,3 +239,28 @@ def test_the_hints_carry_no_unfilled_brace():
         hint = R._editor_hint({"app": app, "name": "Plan {Q3}"})
         assert "« Plan {Q3} »" in hint
         assert "{app}" not in hint and "{name}" not in hint and "{{" not in hint
+
+
+# //// Neoffice — print, e-mail, the letter's template (23.10, maintenance#1822): one tool each, said where the pane does
+# //// them; « envoie-la par e-mail » is the document's, never a pole's e-mail.
+def test_printing_mailing_and_the_template_are_one_tool_each_in_neodoc(monkeypatch):
+    hint = _route(monkeypatch, "Envoie-la par e-mail", page=_PAGES["word"])["agent_hint"]
+    assert "ONE nora_doc_print" in hint and "ONE nora_doc_email" in hint and "DRAFT" in hint
+    assert "never say it is sent" in hint and "ONE nora_doc_make_template" in hint and hint.endswith("kanban_create.]")
+
+
+@pytest.mark.parametrize("app", ["sheet", "deck", "pdf"])
+def test_the_other_editors_are_not_told_gestures_their_pane_does_not_do(app):
+    hint = R._editor_hint({"app": app, "name": "x"})
+    assert "nora_doc_print" not in hint and "nora_doc_email" not in hint and "nora_doc_make_template" not in hint
+
+
+@pytest.mark.parametrize("message", ["Imprime-la", "Envoie-la par e-mail", "Fais-en un e-mail", "Sauvegarde ce modèle",
+                                     "Envoie cette lettre par e-mail à notre gérance"])
+def test_the_gestures_asked_from_the_letter_stay_with_the_document(monkeypatch, message):
+    monkeypatch.setattr(R, "classify", lambda *a, **k: pytest.fail("the classifier must not be asked"))
+    decision = _route(monkeypatch, message)
+    assert decision["routed"] is False and decision["category"] == "DIRECT", message
+    assert decision["agent_hint"].startswith(R._editor_hint(_EDITOR)), message
+    assert R._LAST_ROUTE["conv-editor"]["pole"] is None
+
