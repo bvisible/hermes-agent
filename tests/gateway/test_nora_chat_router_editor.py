@@ -264,3 +264,18 @@ def test_the_gestures_asked_from_the_letter_stay_with_the_document(monkeypatch, 
     assert decision["agent_hint"].startswith(R._editor_hint(_EDITOR)), message
     assert R._LAST_ROUTE["conv-editor"]["pole"] is None
 
+
+# //// Neoffice — what the open document is in the ERP is NORA's to say, never a pole's (23.10, plan 29 step 3).
+@pytest.mark.parametrize("app", sorted(_PAGES))
+def test_what_the_document_is_in_the_erp_is_answered_by_nora_from_its_reading(monkeypatch, app):
+    monkeypatch.setattr(R, "classify", lambda *a, **k: pytest.fail("the classifier must not be asked"))
+    page = _PAGES[app]
+    decision = _route(monkeypatch, "À qui est cette lettre, et à quoi est-elle reliée dans l'ERP ?", page=page)
+    hint = decision["agent_hint"]
+    assert decision["routed"] is False and decision["category"] == "DIRECT" and decision["task_id"] is None
+    assert R._LAST_ROUTE["conv-editor"]["pole"] is None
+    assert "nora_doc_observe's `drive_file`, never a pole's" in hint
+    assert "say you do not know and offer to look for the party named in the document" in hint
+    # The business rule stays, after it: the company's data the document tools do not answer.
+    assert hint.index("`drive_file`") < hint.index("company's own data") and hint.endswith("kanban_create.]")
+

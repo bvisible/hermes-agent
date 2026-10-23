@@ -2181,7 +2181,15 @@ _EDITOR_HINT_HEAD = (
 _EDITOR_HINT_TAIL = (
     " nora_doc_commands finds a command's id (the names of your tools are not command ids). Do NOT call "
     "kanban_create for the document: no pole holds these tools. Say what changed only after the result says ok; "
-    "a change that does not come out right after two tries: stop and say what is there. A request about the "
+    "a change that does not come out right after two tries: stop and say what is there. "
+    # //// Neoffice — what the open document IS in the ERP is NORA's to say, from the reading of the document
+    # //// (`drive_file`, neoffice_theme.editor_document): asked « à quoi est-elle reliée dans l'ERP ? » with no file
+    # //// the person may read, the real agent handed the question to the Support pole (osiris, 23.10). Without a
+    # //// file, she does not know, says so, and offers a search by the name the document gives.
+    "What the open document IS in the ERP (its letter, its party, the record it is attached to) is yours to say, "
+    "from nora_doc_observe's `drive_file`, never a pole's: when `drive_file` says it is unknown or linked to "
+    "nothing, say you do not know and offer to look for the party named in the document, by its name as written, "
+    "with your read tools (search_documents), as the person. A request about the "
     # //// Neoffice — « that your tools here do not answer »: a sheet's figures are nora_sheet_fill's (23.10).
     "company's own data that your tools here do not answer (a customer, an invoice, stock…) is business as usual: "
     "kanban_create.]"
