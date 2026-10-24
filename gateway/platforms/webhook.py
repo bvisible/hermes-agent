@@ -1970,6 +1970,42 @@ class WebhookAdapter(BasePlatformAdapter):
             except OSError:
                 pass
 
+    # //// Neoffice — whether work still goes on for this conversation when a reply is delivered (24.10). The agent's
+    # //// answer may only hand over to a pole: the pole's card and its result come minutes later, and an editor's pane
+    # //// that stopped reading 1.5 s after the answer never showed them. The pane reads on while the instance says so.
+    @staticmethod
+    def _neoffice_open_tasks(chat_id: str) -> Optional[tuple]:
+        """(how many kanban tasks still work for this chat (todo, ready, running), when the newest of them was created
+        (epoch seconds, or None)), or None when it cannot be read: a task blocked on a question, in review or scheduled
+        waits on someone else, and holds no pane open. The instance keeps open only the work of the turn under way (a
+        task created after its message): an earlier turn's pole still at work holds no new turn."""
+        try:
+            import sqlite3
+
+            from hermes_cli import kanban_db
+
+            path = kanban_db.kanban_db_path()
+            if not path.exists():
+                return 0, None
+            conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=2)
+            try:
+                row = conn.execute(
+                    "SELECT COUNT(DISTINCT t.id), MAX(t.created_at) FROM tasks t JOIN kanban_notify_subs s ON s.task_id = t.id "
+                    "WHERE s.chat_id = ? AND t.status IN ('todo', 'ready', 'running')",
+                    (chat_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            count = int(row[0] or 0) if row else 0
+            try:
+                newest = int(row[1]) if count and row[1] is not None else None
+            except (TypeError, ValueError):  # a date the board kept as text: the count alone, as before
+                newest = None
+            return count, newest
+        except Exception as exc:  # noqa: BLE001 — the reply is delivered whatever this says
+            logger.info("[webhook] open tasks of %s not read: %s", chat_id, exc)
+            return None
+
     async def _deliver_nora(
         self, content: str, chat_id: str, delivery: dict
     ) -> SendResult:
@@ -1999,10 +2035,18 @@ class WebhookAdapter(BasePlatformAdapter):
         try:
             import aiohttp
 
+            # //// Neoffice — the work still open for this conversation, when it can be read (see _neoffice_open_tasks)
+            body = {"conversation_id": conversation_id, "text": content, "user": (chat_id.rsplit(":", 1)[-1] if chat_id else "")}
+            open_work = await asyncio.to_thread(self._neoffice_open_tasks, chat_id) if chat_id else None
+            if open_work is not None:
+                body["open_tasks"], newest = open_work
+                if newest is not None:
+                    body["open_since"] = newest
+            # //// END Neoffice ////
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     url,
-                    json={"conversation_id": conversation_id, "text": content, "user": (chat_id.rsplit(":", 1)[-1] if chat_id else "")},
+                    json=body,  # //// Neoffice — with the open work (see above) ////
                     headers={
                         "X-Hermes-Token": token,
                         "Content-Type": "application/json",
