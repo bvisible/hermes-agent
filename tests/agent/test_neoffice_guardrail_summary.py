@@ -207,6 +207,8 @@ def upstream_attempt(monkeypatch):
         # v0.21.6 hands agent._interruptible_api_call to _managed_summary_call (replaced below).
         _interruptible_api_call=lambda kwargs: None,
         _get_transport=lambda: SimpleNamespace(normalize_response=lambda raw, **kw: state["response"]),
+        # v0.22.3 reads the provider (a mixture-of-agents client consumes the prepared request itself).
+        provider="custom", client=None,
     )
     monkeypatch.setattr(cch, "sanitize_outbound_kwargs", lambda agent, kwargs: None)
     monkeypatch.setattr(cch, "_managed_summary_call", lambda agent, request_id, request, callback, retry_count: "raw")

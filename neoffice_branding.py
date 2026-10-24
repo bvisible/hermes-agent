@@ -316,6 +316,9 @@ _CATALOG_NOTICES = (
     ("gateway.errors.previous_turn_cleanup", "resend"),
     ("gateway.errors.session_storage_unavailable", "resend"),
     ("gateway.errors.session_storage_unavailable_disk", "resend"),
+    # v0.22.3: a message the gateway refused to run (a scheduled job's chat, a working folder gone).
+    ("gateway.errors.cron_session_read_only", "resend"),
+    ("gateway.errors.workspace_unavailable", "resend"),
 )
 # The notices a customer causes by typing while NORA works: ordinary impatience, logged at INFO.
 _IMPATIENCE_REPLIES = frozenset({"steered", "redirected", "queued", "interrupting", "restarting"})

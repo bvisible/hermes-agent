@@ -72,6 +72,28 @@ def neoffice_hesitation_nudge(rounds: int, first: int | None = None) -> str:
 # //// END Neoffice ////
 
 
+# //// Neoffice — the summary a terminal kanban call carries (kanban_complete's summary, kanban_block's reason).
+def _neoffice_terminal_summary(assistant_message: Any) -> str:
+    """The text a terminal kanban tool call hands over, '' when it carries none."""
+    import json as _json
+
+    for call in getattr(assistant_message, "tool_calls", None) or []:
+        function = getattr(call, "function", None)
+        if getattr(function, "name", "") not in ("kanban_complete", "kanban_block"):
+            continue
+        try:
+            args = _json.loads(getattr(function, "arguments", "") or "{}")
+        except (TypeError, ValueError):
+            continue
+        if isinstance(args, dict):
+            for key in ("summary", "result", "reason"):
+                value = args.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return ""
+# //// END Neoffice ////
+
+
 @dataclass
 class KanbanBreakerVerdict:
     """``action``: ``"fallthrough"`` (nothing to do — honour the tool round's own
@@ -143,6 +165,12 @@ def neoffice_kanban_no_progress_breaker(
             # //// END Neoffice ////
             return _verdict("fallthrough")
 
+        # //// Neoffice — a goal-mode card keeps upstream's continuation: its goal loop (hermes_cli.goals,
+        # //// run by gateway/session_kanban.py) consults the model again after the card is completed, by
+        # //// design. NORA creates no goal-mode card; the stop below is for the cards it does create.
+        if os.environ.get("HERMES_KANBAN_GOAL_MODE") == "1":
+            return _verdict("fallthrough")
+        # //// END Neoffice ////
         # A SUCCESSFUL terminal kanban tool ends the run. The model is told to stop
         # after one (KANBAN_GUIDANCE rule 5) but weak models keep acting, and a second
         # pass has created duplicate purchase orders (2026-08-21). Re-read the live
@@ -168,6 +196,12 @@ def neoffice_kanban_no_progress_breaker(
                 kanban_task, status,
             )
             _turn_exit_reason = f"kanban_terminal_tool(status={status})"
+            # //// Neoffice — the card's own answer is the turn's answer. Since the profile owner runs the card
+            # //// (v0.22.3, gateway/session_kanban.py) the worker's exit code is read from this turn's result
+            # //// (hermes_cli.turn_exit): a turn that ends on the tool call, with no text, counted as « not
+            # //// completed » and the worker exited 1 although its card was done (upstream's owner probe).
+            if not final_response:
+                final_response = _neoffice_terminal_summary(assistant_message) or f"kanban task {status}"
             return _verdict("break")
         return _verdict("fallthrough")
 

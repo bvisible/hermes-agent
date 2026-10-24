@@ -21,13 +21,24 @@ from __future__ import annotations
 from typing import Any, Optional
 
 MONITOR_CHANNEL = "monitor"
+# Since the durable queue (v0.22.3) an admitted event is rebuilt from its committed envelope when it runs, and the
+# envelope keeps no ``raw_message``: the payload is gone by the time the turn starts. What survives is the source,
+# so the webhook adapter names a probe's chat ``webhook/<route>/monitor`` (WebhookAdapter._admit_agent_run).
+MONITOR_CHAT_SUFFIX = "/monitor"
+
+
+def is_monitoring_probe_payload(payload: Any) -> bool:
+    """Whether a webhook payload is a monitoring probe (its ``context.channel``)."""
+    context = payload.get("context") if isinstance(payload, dict) else None
+    return isinstance(context, dict) and str(context.get("channel") or "").strip().lower() == MONITOR_CHANNEL
 
 
 def is_monitoring_event(event: Any) -> bool:
-    """Whether ``event`` is a monitoring probe (its webhook payload's ``context.channel``)."""
-    raw = getattr(event, "raw_message", None)
-    context = raw.get("context") if isinstance(raw, dict) else None
-    return isinstance(context, dict) and str(context.get("channel") or "").strip().lower() == MONITOR_CHANNEL
+    """Whether ``event`` is a monitoring probe: its webhook payload's ``context.channel`` (the event as the
+    adapter built it), or the chat name the adapter gave the probe (the event rebuilt from the queue)."""
+    if is_monitoring_probe_payload(getattr(event, "raw_message", None)):
+        return True
+    return str(getattr(getattr(event, "source", None), "chat_name", "") or "").endswith(MONITOR_CHAT_SUFFIX)
 
 
 def bind_turn_memory(event: Any):

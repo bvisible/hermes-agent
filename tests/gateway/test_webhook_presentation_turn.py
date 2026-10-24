@@ -4,38 +4,28 @@ run of that message carries the same id as its source's message id, which the ga
 HERMES_SESSION_MESSAGE_ID: kanban_create (tools/kanban_tools.py) is refused in that turn only. The next message of the
 same thread is another turn, never refused.
 
-Through the REAL ``_spawn_agent_run`` -> ``handle_message`` pipeline, as test_webhook_conversation_thread_session.py:
-the runner-side handler is stubbed to record what each turn's source says, and the pre-router to a presentation turn
-for the first message and a plain DIRECT turn for the second, both marking as the real one does.
+Through the real durable pipeline (tests/gateway/fixtures/neoffice_webhook_authority.py): admission by
+``_admit_agent_run``, the authority's FIFO, the event restored from what was committed. Since v0.22.3 the run reads
+the COMMITTED source, so the delivery id must survive the queue. The turn is stubbed to record what each turn's
+source says, and the pre-router to a presentation turn for the first message and a plain DIRECT turn for the
+second, both marking as the real one does.
 """
 
-import asyncio
 import time
 
 import pytest
+import pytest_asyncio
 
-from gateway.config import GatewayConfig, Platform, PlatformConfig
-from gateway.platforms.webhook import WebhookAdapter, _INSECURE_NO_AUTH
-from gateway.session import SessionSource, SessionStore
+from gateway.platforms.webhook import _INSECURE_NO_AUTH
+from tests.gateway.fixtures import neoffice_webhook_authority as authority_fixture
 
 PERSON = "person@example.com"
 THREAD = "nora-0a1b2c3d4e5f6071"
+ROUTE = {"secret": _INSECURE_NO_AUTH, "prompt": "{message}", "deliver": "log", "session_key": "user"}
 
 
-class _FakeRunner:
-    def __init__(self, store: SessionStore):
-        self.session_store = store
-        self._session_db = store._db
-
-    def _session_key_for_source(self, source: SessionSource) -> str:
-        return self.session_store._generate_session_key(source)
-
-    def _profile_name_for_source(self, source, adapter_profile=None):
-        return None
-
-
-@pytest.fixture
-def harness(tmp_path, monkeypatch):
+@pytest_asyncio.fixture
+async def harness(tmp_path, monkeypatch):
     from gateway import nora_chat_router
 
     monkeypatch.setattr(nora_chat_router, "_DECK_TURNS", {})
@@ -48,36 +38,23 @@ def harness(tmp_path, monkeypatch):
                 "agent_hint": nora_chat_router._DECK_HINT if deck else None}
 
     monkeypatch.setattr(nora_chat_router, "route_chat_message", route_chat_message)
-    sessions_dir = tmp_path / "sessions"
-    sessions_dir.mkdir()
-    store = SessionStore(sessions_dir=sessions_dir,
-                         config=GatewayConfig(platforms={Platform.WEBHOOK: PlatformConfig(enabled=True)}))
-    adapter = WebhookAdapter(PlatformConfig(enabled=True, extra={"host": "127.0.0.1", "port": 0, "routes": {}}))
-    adapter.gateway_runner = _FakeRunner(store)
     turns = []
 
-    async def _message_handler(event):
+    async def turn(event, ref, history):
         message_id = event.source.message_id
         turns.append({"message_id": message_id, "event_id": event.message_id,
                       "deck": nora_chat_router.deck_turn_under_way(message_id)})
-        return ""
 
-    adapter._message_handler = _message_handler
-    yield adapter, turns
-    store._db.close()
+    h = await authority_fixture.start(monkeypatch, {"nora_chat": ROUTE}, turn)
+    yield h.adapter, turns
+    await authority_fixture.stop(h)
 
 
 async def _send(adapter, message: str) -> str:
     payload = {"event_type": "chat", "user": PERSON, "message": message, "conversation_id": THREAD}
     delivery_id = f"{THREAD}:{time.monotonic_ns()}"
-    adapter._spawn_agent_run(payload, message, delivery_id, time.time(),
-                             route_config={"secret": _INSECURE_NO_AUTH, "prompt": "{message}", "deliver": "log",
-                                           "session_key": "user"},
-                             route_name="nora_chat", profile=None, event_type="chat")
-    deadline = asyncio.get_event_loop().time() + 5.0
-    while adapter._background_tasks and asyncio.get_event_loop().time() < deadline:
-        await asyncio.sleep(0.02)
-    await asyncio.sleep(0.05)
+    await authority_fixture.admit(adapter, payload, message, delivery_id, "nora_chat", ROUTE)
+    await authority_fixture.settled(adapter)
     return delivery_id
 
 

@@ -33,7 +33,12 @@ def _adapter(route_name):
 def _app(adapter):
     from aiohttp import web
 
+    from tests.gateway.fixtures.webhook_route_authority import mount_authority
+
     app = web.Application(client_max_size=adapter._max_body_bytes)
+    # Since the durable queue (v0.22.3) a message the router does not consume is committed by a real
+    # session authority (execution held, as upstream's route tests do).
+    mount_authority(app, adapter)
     app.router.add_post("/webhooks/{route_name}", adapter._handle_webhook)
     return app
 

@@ -51,6 +51,11 @@ async def test_a_memory_burst_does_not_refuse_a_chat_message(caplog):
     adapter._handle_memory_read = fake_read
     adapter.handle_message = capture
     app = web.Application()
+    # Since the durable queue (v0.22.3) the chat message is committed by a real session authority
+    # (execution held, as upstream's route tests do).
+    from tests.gateway.fixtures.webhook_route_authority import mount_authority
+
+    mount_authority(app, adapter)
     app.router.add_post("/webhooks/{route_name}", adapter._handle_webhook)
 
     async with TestClient(TestServer(app)) as cli:

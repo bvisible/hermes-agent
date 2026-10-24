@@ -22,6 +22,7 @@ import subprocess
 import time
 import uuid
 from collections import deque
+from datetime import datetime, timezone, UTC
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from typing import Any, Deque, Dict, List, Optional
@@ -44,6 +45,8 @@ from gateway.platforms.tcp_site import start_tcp_site
 from gateway.platforms.webhook_coalesce import WebhookCoalescer, validate_coalesce_config
 from gateway.neoffice_scope import with_launch_profile_secrets  # //// Neoffice — memory webhooks, outside any turn
 from gateway.platforms.webhook_filters import DEFAULT_SCRIPT_TIMEOUT_SECONDS, WebhookRouteProcessor
+from gateway.platforms.webhook_mcp_events import (
+    handle_mcp_event_control, mcp_event_delivery_id, render_mcp_event_prompt)
 from gateway.response_filters import is_autonomous_silence_response
 
 logger = logging.getLogger(__name__)
@@ -75,6 +78,12 @@ _REPO_RE = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 _GH_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN")
 
 
+def _header_delivery_id(headers) -> str:
+    """The provider's delivery id (GitHub, Svix, Standard Webhooks, generic), else a fresh one."""
+    return headers.get("X-GitHub-Delivery", headers.get("svix-id", headers.get(
+        "webhook-id", headers.get("X-Request-ID", uuid.uuid4().hex))))
+
+
 @dataclass(frozen=True)
 class _WebhookDeliveryIdentity:
     """Collision-free identity for one provider delivery on one routed webhook route."""
@@ -96,6 +105,17 @@ class _WebhookDeliveryIdentity:
         ).encode("utf-8")
         token = base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
         return f"webhook:v2:{token}"
+
+    @staticmethod
+    def route_from_chat_id(chat_id: str) -> str:
+        """The route a delivery chat id names: decoded from a ``webhook:v2:`` token, else the legacy
+        ``webhook:{route}:{delivery}`` spelling that admissions queued before the upgrade still carry."""
+        prefix = "webhook:v2:"
+        if chat_id.startswith(prefix):
+            token = chat_id[len(prefix):]
+            _profile, route, _delivery = json.loads(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)))
+            return str(route)
+        return chat_id.split(":", 2)[1]
 
 
 def _is_loopback_host(host: Optional[str]) -> bool:
@@ -150,6 +170,8 @@ def _json_error(message: str, status: int) -> web.Response:
     return web.json_response({"error": message}, status=status)
 
 
+# //// Neoffice — kept after upstream dropped it with the per-session end it served: the quiet WhatsApp chat check
+# //// (_neoffice_close_a_quiet_chat) still looks a session up by key without creating one.
 def _peek_session_id(store, session_key: str):
     """Prefer the store's lock-held accessor; the private-path fallback is for older stores / test doubles."""
     if callable(peek := getattr(store, "peek_session_id", None)):
@@ -159,6 +181,7 @@ def _peek_session_id(store, session_key: str):
             store._ensure_loaded()
     entry = (getattr(store, "_entries", {}) or {}).get(session_key)
     return getattr(entry, "session_id", None) if entry else None
+# //// END Neoffice ////
 
 
 def check_webhook_requirements() -> bool:
@@ -283,8 +306,8 @@ def _neoffice_provider_delivery_id(route_name: str, payload: Any, delivery_id: s
 
 
 # //// Neoffice — a conversation THREAD is the agent's session (22.10). A conversational route
-# //// (`session_key: user`, see _spawn_agent_run) keyed the agent's session on the person alone, and
-# //// upstream closes a webhook's session when its run ends (on_processing_complete, written for one
+# //// (`session_key: user`, see _admit_agent_run) keyed the agent's session on the person alone, and
+# //// upstream closes a webhook's session when its run ends (finalize_webhook since v0.22.3, written for one
 # //// session per delivery): the next message found the row ended in state.db, the routing self-heal
 # //// minted a new session, and every turn of the orchestrator began with history=0. From an editor's
 # //// Nora panel, « J'applique le caviardage ? » then « Oui » reached an agent that had asked nothing,
@@ -292,7 +315,7 @@ def _neoffice_provider_delivery_id(route_name: str, payload: Any, delivery_id: s
 # //// session would mix the person's threads instead: the desk chat and every open document. So the
 # //// thread the payload names (`conversation_id`: the desk, the mobile app, Raven, the editor panels)
 # //// goes into the session chat id, and that session stays open for the thread's next message
-# //// (on_processing_complete): « Nouvelle conversation » sends a new id, hence a new session.
+# //// (see _finalize_delivery): « Nouvelle conversation » sends a new id, hence a new session.
 # //// A route keyed on the sender's PHONE (WhatsApp, 24.10) sends no conversation_id: its chat with the number
 # //// is one conversation, so that chat is the thread (_NEOFFICE_CHAT_THREAD), keyed by the gateway on the
 # //// number in the central router's payload (the route's token authenticates the router), never by the model. The number is in the chat id, so two numbers never
@@ -400,13 +423,26 @@ def _neoffice_chat_idle_seconds() -> float:
         return 1800.0
 
 
+def _neoffice_authority_db(runner: Any) -> Any:
+    """The state db of the authority the gateway's launch profile belongs to (our routes run unscoped, in
+    it), None when the runner has none. Since the durable queue (v0.22.3) a session's messages and its
+    admissions live in the authority's db, not in a runner-wide ``_session_db``."""
+    try:
+        from gateway.session_authorities import active_authority
+
+        return getattr(active_authority(runner), "db", None)
+    except Exception:  # a bare runner (tests) has no authority
+        return None
+
+
 def _neoffice_idle_update_sql() -> str:
-    """The conditional end of an idle thread session: it ends only if still open and still idle, tested in the
-    UPDATE itself, under the write lock."""
+    """The conditional end of an idle thread session: it ends only if still open, still idle and with no
+    admission queued, started or unknown, tested in the UPDATE itself, under the write lock."""
     from hermes_state_common import _sql_session_last_active
 
     return ("UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL"
-            f" AND (SELECT {_sql_session_last_active('s')} FROM sessions s WHERE s.id = ?) < ?")
+            f" AND (SELECT {_sql_session_last_active('s')} FROM sessions s WHERE s.id = ?) < ?"
+            " AND NOT EXISTS (SELECT 1 FROM session_admissions WHERE target_session_id = ? AND status != 'terminal')")
 
 
 def _neoffice_end_session_if_idle(db: Any, session_id: str, cutoff: float, update: Optional[str] = None) -> int:
@@ -414,7 +450,7 @@ def _neoffice_end_session_if_idle(db: Any, session_id: str, cutoff: float, updat
     write path as SessionDB.end_session (the end stamp and its generation bump)."""
     update = update or _neoffice_idle_update_sql()
     return db._execute_write(lambda conn: db._end_and_bump(
-        conn, update, (time.time(), "webhook_thread_idle", session_id, session_id, cutoff), session_id,
+        conn, update, (time.time(), "webhook_thread_idle", session_id, session_id, cutoff, session_id), session_id,
         "webhook_thread_idle",
     )) or 0
 
@@ -423,7 +459,8 @@ def _neoffice_end_idle_thread_sessions(db: Any, cutoff: float, limit: int, busy_
     """Close (``webhook_thread_idle``) at most *limit* open thread sessions last active before *cutoff*;
     returns how many. Last activity is the freshest of the heartbeat and the latest message. A session
     whose key has a turn in flight (*busy_keys*) is kept, and the idle test is repeated in the UPDATE
-    itself, under the write lock: a message written since the SELECT keeps its session."""
+    itself, under the write lock: a message written since the SELECT keeps its session, and so does an
+    admission queued since (the durable queue's own sign that a turn is pending)."""
     from hermes_state_common import _sql_session_last_active
 
     last_active = _sql_session_last_active("s")
@@ -512,6 +549,14 @@ class WebhookAdapter(BasePlatformAdapter):
         # Opt-in per-route debounce of rapid same-entity events (route ``coalesce`` block). #92066
         self._coalescer = WebhookCoalescer(dispatch=self._spawn_agent_run, render=self._render_prompt)
 
+    @property
+    def token(self):
+        # Bind native replay to the configured signing credentials. Static routes only: dynamic
+        # subscriptions hot-reload on every POST, and an unrelated ``webhook subscribe`` must not
+        # re-key the connector of already-admitted deliveries (their send() would see profile_mismatch).
+        return json.dumps([self._global_secret, {name: route.get("secret", self._global_secret)
+                           for name, route in self._static_routes.items()}], sort_keys=True)
+
     # --- Lifecycle ---
 
     def _validate_route(self, name: str, route: dict) -> None:
@@ -585,12 +630,9 @@ class WebhookAdapter(BasePlatformAdapter):
         if is_autonomous_silence_response(content):
             logger.info("[webhook] Response for %s is a silence marker — not delivering", chat_id)
             return SendResult(success=True)
-
-        # //////////////////////////////////////////////////////////////////////////
-        # //// Neoffice — desk delivery: branding anti-leak (was tagged "NORA CORE PATCH",
-        # //// the legacy alias) + async desk conversation_id rebuild. grep "//// Neoffice"
+        # //// Neoffice — delivery of NORA's customer chats (desk, WhatsApp): branding anti-leak (was tagged
+        # //// "NORA CORE PATCH", the legacy alias) and the destination of a CONVERSATION. grep "//// Neoffice"
         # //// across the tree to list every divergence before an upstream rebase.
-        # //////////////////////////////////////////////////////////////////////////
         # Branding: for the customer there is only Nora. Strip the internal vocabulary the
         # model may still emit in a reply or an ack ("le spécialiste `compta`…", "kanban").
         # Runs once, at the single delivery chokepoint. The SAME rules are applied to the
@@ -607,43 +649,83 @@ class WebhookAdapter(BasePlatformAdapter):
         # //// so the persisted transcript (agent/session_persistence.py), which has no
         # //// language in scope, still removes exactly the same machinery — only the
         # //// wording of a failure sentence can differ, and only on a failed turn.
-        delivery = self._delivery_info.get(chat_id, {})
-        content = strip_internal_mechanics(content, delivery.get("language"))
+        # //// Since the durable admission (v0.22.3) the language also comes back from the retained
+        # //// destination, so a reply that outlives the 1 h in-memory info keeps it.
+        delivery = self._neoffice_chat_destination(chat_id, metadata)
+        content = strip_internal_mechanics(content, (delivery or self._delivery_info.get(chat_id) or {}).get("language"))
         # //// END Neoffice ////
+        if delivery is None:
+            from gateway.platforms.webhook_delivery import retained_destination
+            try:
+                delivery = retained_destination(self, chat_id)
+            except Exception:
+                logger.warning("[webhook] Destination unavailable for %s", chat_id, exc_info=True)
+                return SendResult(success=False, error="Webhook destination unavailable or unauthorized")
+        return await self._deliver_to(delivery, chat_id, content)
+
+    # //// Neoffice — the destination of a customer chat (desk, WhatsApp) is the CONVERSATION's, not a delivery's.
+    # //// Upstream gives every delivery its own chat id and reads the destination back from the one admission
+    # //// that carries it (retained_destination); our chat id is the person's or the thread's, shared by every
+    # //// message of the conversation, and a late reply (a kanban worker finishing minutes later) answers the
+    # //// conversation, not one message. Order, as before the durable queue: the in-memory info of the last
+    # //// message, else the route's own config with the conversation id the notifier passes in metadata, else
+    # //// (a restart emptied the memory) the newest retained admission of the chat.
+    def _neoffice_chat_destination(self, chat_id: str, metadata: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+        """The destination of *chat_id* when it is one of our customer chats, else None (upstream's lookup)."""
+        from gateway.platforms.webhook_delivery import neoffice_chat_route, retained_destination
+        if not neoffice_chat_route(self, chat_id):
+            return None
+        delivery = self._delivery_info.get(chat_id) or {}
         # NORA #41: an async kanban notifier delivery carries the desk conversation_id
         # in metadata. The volatile _delivery_info may have expired (1h TTL) or never
         # resolved the "{conversation_id}" placeholder; rebuild a delivery from the
         # STABLE route config (callback_url/token) + that conversation_id so the late
         # reply still reaches the desk under the exact id it polls.
         _md_cid = (metadata or {}).get("conversation_id") if metadata else None
-        if _md_cid:
-            if not delivery:
-                _rname = chat_id.split(":")[1] if chat_id.count(":") >= 1 else ""
-                _rc = self._routes.get(_rname) or {}
-                if _rc.get("deliver"):
-                    _de = dict(_rc.get("deliver_extra", {}))
-                    # NORA #41 WhatsApp fix: a kanban worker reply runs in a separate
-                    # process (no _delivery_info, no original payload), so the raw route
-                    # deliver_extra still carries the literal "{phone}". The chat_id is
-                    # session-keyed by phone -> resolve {phone} from it so the async
-                    # reply reaches the real number, not "{phone}".
-                    if any(isinstance(v, str) and "{phone}" in v for v in _de.values()):
-                        import re as _rephone
-                        # //// Neoffice — the number is what follows the LAST `:phone:` (24.10): a thread
-                        # //// goes before it in the chat id (_neoffice_thread_chat_id), and a thread id with
-                        # //// six digits in a row would otherwise send the late reply to that "number".
-                        _m = _rephone.search(r"\+?\d{6,}", chat_id.rpartition(":phone:")[2] or chat_id)
-                        if _m:
-                            _ph = _m.group(0)
-                            _de = {k: (v.replace("{phone}", _ph) if isinstance(v, str) else v) for k, v in _de.items()}
-                    delivery = {"deliver": _rc["deliver"], "deliver_extra": _de}
-            if isinstance(delivery.get("deliver_extra"), dict):
-                delivery = {
-                    **delivery,
-                    "deliver_extra": {**delivery["deliver_extra"], "conversation_id": _md_cid},
-                }
-        # //// END Neoffice ////
-        deliver_type = delivery.get("deliver", "log")
+        if not delivery and _md_cid:
+            _rname = chat_id.split(":")[1] if chat_id.count(":") >= 1 else ""
+            _rc = self._routes.get(_rname) or {}
+            if _rc.get("deliver"):
+                _de = dict(_rc.get("deliver_extra", {}))
+                # NORA #41 WhatsApp fix: a kanban worker reply runs in a separate
+                # process (no _delivery_info, no original payload), so the raw route
+                # deliver_extra still carries the literal "{phone}". The chat_id is
+                # session-keyed by phone -> resolve {phone} from it so the async
+                # reply reaches the real number, not "{phone}".
+                if any(isinstance(v, str) and "{phone}" in v for v in _de.values()):
+                    import re as _rephone
+                    # //// Neoffice — the number is what follows the LAST `:phone:` (24.10): a thread
+                    # //// goes before it in the chat id (_neoffice_thread_chat_id), and a thread id with
+                    # //// six digits in a row would otherwise send the late reply to that "number".
+                    _m = _rephone.search(r"\+?\d{6,}", chat_id.rpartition(":phone:")[2] or chat_id)
+                    if _m:
+                        _ph = _m.group(0)
+                        _de = {k: (v.replace("{phone}", _ph) if isinstance(v, str) else v) for k, v in _de.items()}
+                delivery = {"deliver": _rc["deliver"], "deliver_extra": _de}
+        if not delivery:
+            try:
+                delivery = self._neoffice_complete_destination(chat_id, retained_destination(self, chat_id))
+            except Exception:
+                logger.debug("[webhook] no retained destination for %s", chat_id, exc_info=True)
+        if _md_cid and isinstance(delivery.get("deliver_extra"), dict):
+            delivery = {**delivery, "deliver_extra": {**delivery["deliver_extra"], "conversation_id": _md_cid}}
+        return delivery or {"deliver": "log", "deliver_extra": {}}
+
+    def _neoffice_complete_destination(self, chat_id: str, retained: dict[str, Any]) -> dict[str, Any]:
+        """A retained destination (per-message fields only, see webhook_delivery._NEOFFICE_CHAT_FIELDS) with its
+        route's callback / router settings put back, rendered with those fields as the original message was."""
+        route_name = _WebhookDeliveryIdentity.route_from_chat_id(chat_id)
+        route = self._routes.get(route_name) or {}
+        extra = self._render_delivery_extra(route.get("deliver_extra", {}), dict(retained.get("deliver_extra") or {}))
+        completed = {"deliver": retained["deliver"], "deliver_extra": extra, "route": route_name}
+        for key in ("profile", "language"):
+            if retained.get(key):
+                completed[key] = retained[key]
+        return completed
+    # //// END Neoffice ////
+
+    async def _deliver_to(self, delivery: dict[str, Any], chat_id: str, content: str) -> SendResult:
+        deliver_type = delivery["deliver"]
         if deliver_type == "log":
             logger.info("[webhook] Response for %s: %s", chat_id, content[:200])
             return SendResult(success=True)
@@ -678,7 +760,11 @@ class WebhookAdapter(BasePlatformAdapter):
                                     metadata: Optional[Dict[str, Any]] = None) -> SendResult:
         # A status carries thread metadata only, never the conversation_id that lets send()
         # rebuild an expired delivery: without delivery info it is logged, as upstream does.
-        if (self._delivery_info.get(chat_id) or {}).get("deliver") in ("nora", "whatsapp_router"):
+        # //// Neoffice — decided by the chat's ROUTE, not by the in-memory info: since the durable queue a
+        # //// chat that outlived the info (a restart, the 1 h TTL) still finds its destination in send(),
+        # //// so a status for it would reach the customer.
+        from gateway.platforms.webhook_delivery import neoffice_chat_route
+        if neoffice_chat_route(self, chat_id):
             logger.debug("[webhook] %s status for %s kept out of a customer chat", status_key, chat_id)
             return SendResult(success=True)
         return await self.send(chat_id, content, metadata=metadata)
@@ -1218,6 +1304,16 @@ class WebhookAdapter(BasePlatformAdapter):
             raw_body, error_response = await self._read_authenticated_body(request, route_name, route_config)
         if error_response is not None:
             return error_response
+        headers = request.headers
+        delivery_id = _header_delivery_id(headers)
+        # A parked profile is retried, before any delivery id is recorded. The check resolves
+        # ``profile_routes`` against the very source admission builds for this delivery.
+        from gateway.platforms.webhook_ingress import parked_profile_refusal
+        error_response = parked_profile_refusal(
+            self.gateway_runner, profile, route_config,
+            lambda: self._admission_source(route_name, profile, delivery_id))
+        if error_response is not None:
+            return error_response
         payload = self._parse_body(raw_body)
         # //// Neoffice — NORA's own memory events (the nightly consolidation, NORA Live's
         # //// reads) are counted in a bucket of their own. They shared the chat route's
@@ -1240,7 +1336,13 @@ class WebhookAdapter(BasePlatformAdapter):
             return _json_error("Rate limit exceeded", 429)
         if payload is _UNPARSEABLE:
             return _json_error("Cannot parse body", 400)
-        headers = request.headers
+        mcp_control = await handle_mcp_event_control(self, route_name, route_config, payload, profile)
+        if mcp_control is not None:
+            return mcp_control
+        delivery_id = mcp_event_delivery_id(route_config, payload) or delivery_id
+        # //// Neoffice — see _neoffice_provider_delivery_id (the router retries with the same message id).
+        delivery_id = _neoffice_provider_delivery_id(route_name, payload, delivery_id)
+        # //// END Neoffice ////
         event_type = (headers.get("X-GitHub-Event", "") or headers.get("X-GitLab-Event", "")
                       or payload.get("event_type", "") or payload.get("type", "") or "unknown")
         # //// Neoffice — end-of-day memory consolidation write-path. NORA's nightly cron POSTs
@@ -1310,18 +1412,24 @@ class WebhookAdapter(BasePlatformAdapter):
             # //// was two hours behind and gave the WRONG DAY between midnight and 02:00.
             _neoffice_inject_datetime_tokens(payload)
             # //// END Neoffice ////
-            prompt = self._render_prompt(route_config.get("prompt", ""), payload, event_type, route_name)
+            prompt = (render_mcp_event_prompt(self, route_config, payload, event_type, route_name)
+                      or self._render_prompt(route_config.get("prompt", ""), payload, event_type, route_name))
             # cron_job routes: the job's own skills apply; the rendered prompt is only per-run context.
             if (skills := route_config.get("skills", [])) and not route_config.get("cron_job"):
                 prompt = self._apply_skills(prompt, skills)
-        delivery_id = headers.get("X-GitHub-Delivery", headers.get("svix-id", headers.get(
-            "webhook-id", headers.get("X-Request-ID", uuid.uuid4().hex))))
-        # //// Neoffice — see _neoffice_provider_delivery_id (the router retries with the same message id).
-        delivery_id = _neoffice_provider_delivery_id(route_name, payload, delivery_id)
-        # //// END Neoffice ////
         now = time.time()  # idempotency: skip duplicate deliveries (webhook retries)
         delivery_identity = _WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id)
-        if not self._record_delivery_id(delivery_identity, now):
+        coalesce = route_config.get("coalesce")
+        # deliver_only, cron_job and coalesced events act before (or without) a durable admission, so
+        # the ledger cannot dedupe a provider retry or a replayed signed delivery; the route-scoped
+        # in-memory guard is their only replay defence (main dedupes every route here).
+        # //// Neoffice — the WhatsApp route too: a router retry (same message id, 4 s later) renders another
+        # //// time into the prompt, so the ledger sees a different payload and refuses it as a conflict; the
+        # //// in-memory guard (released again below if the admission fails) is what recognises the retry.
+        non_durable = bool(route_config.get("deliver_only") or route_config.get("cron_job")
+                           or isinstance(coalesce, dict) or route_name in _NEOFFICE_PROVIDER_ID_ROUTES)
+        # //// END Neoffice ////
+        if non_durable and not self._record_delivery_id(delivery_identity, now):
             logger.info("[webhook] Skipping duplicate delivery %s on route %s", delivery_id, route_name)
             return web.json_response({"status": "duplicate", "delivery_id": delivery_id}, status=200)
         if route_config.get("cron_job"):
@@ -1329,28 +1437,80 @@ class WebhookAdapter(BasePlatformAdapter):
         if route_config.get("deliver_only"):
             return await self._handle_deliver_only(prompt, payload, route_config, route_name, event_type, delivery_id,
                                                    profile)
-        coalesce = route_config.get("coalesce")
         if isinstance(coalesce, dict) and self._coalescer.enqueue(
                 route_name=route_name, coalesce=coalesce, payload=payload, event_type=event_type, prompt=prompt,
                 delivery_id=delivery_id, now=now, route_config=route_config, profile=profile):
             return web.json_response({"status": "coalesced", "route": route_name, "event": event_type,
                                       "delivery_id": delivery_id}, status=202)
-        return self._dispatch_agent_run(request, route_config, route_name, profile, payload, prompt, event_type,
+        return await self._dispatch_agent_run(request, route_config, route_name, profile, payload, prompt, event_type,
                                         delivery_id, now)
 
-    def _dispatch_agent_run(self, request, route_config: dict, route_name: str, profile, payload: Any, prompt: str,
+    async def _dispatch_agent_run(self, request, route_config: dict, route_name: str, profile, payload: Any, prompt: str,
                             event_type: str, delivery_id: str, now: float) -> web.Response:
-        """Spawn the agent run for one POST and return 202 immediately."""
+        """Acknowledge only after the authority commits the immutable delivery."""
         logger.info("[webhook] %s event=%s route=%s prompt_len=%d delivery=%s", request.method, event_type, route_name,
                     len(prompt), delivery_id)
-        self._spawn_agent_run(payload, prompt, delivery_id, now, route_config=route_config, route_name=route_name,
-                              profile=profile, event_type=event_type)
+        outcome = await self._admit_agent_run(payload, prompt, delivery_id, now, route_config=route_config,
+                                              route_name=route_name, profile=profile, event_type=event_type)
+        if outcome is None:
+            # //// Neoffice — a refused admission gives the delivery id back, so the router's retry is processed.
+            if route_name in _NEOFFICE_PROVIDER_ID_ROUTES:
+                self._seen_deliveries.pop(_WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id), None)
+            # //// END Neoffice ////
+            return _json_error("Admission unavailable; retry this delivery", 503)
+        if outcome == "duplicate":
+            return web.json_response({"status": "duplicate", "delivery_id": delivery_id}, status=200)
         return web.json_response({"status": "accepted", "route": route_name, "event": event_type,
                                   "delivery_id": delivery_id}, status=202)
 
     def _spawn_agent_run(self, payload: Any, prompt: str, delivery_id: str, now: float, *, route_config: dict,
-                         route_name: str, profile, event_type: str) -> asyncio.Task:
-        """Record delivery info and fire the agent run (shared by the immediate and coalesced paths)."""
+                         route_name: str, profile, event_type: str, superseded=()) -> asyncio.Task:
+        """Coalesced-path dispatch (settled timer / disconnect flush): admit the merged event as a task
+        so ``WebhookCoalescer.flush`` can await the hand-off. The HTTP ack for these deliveries was
+        already ``coalesced``: an admission failure is logged and gives back the batch's delivery ids
+        (*superseded* too), so a resend of any of them is processed, not answered as a duplicate."""
+        async def _admit_or_log():
+            outcome = await self._admit_agent_run(payload, prompt, delivery_id, now, route_config=route_config,
+                                                  route_name=route_name, profile=profile, event_type=event_type)
+            if outcome is None:
+                logger.error("[webhook] Coalesced delivery %s on route %s was not admitted", delivery_id, route_name)
+                for released in (*superseded, delivery_id):
+                    self._seen_deliveries.pop(_WebhookDeliveryIdentity.from_parts(profile, route_name, released), None)
+        task = asyncio.create_task(_admit_or_log())
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    def _admission_source(self, route_name: str, profile, delivery_id: str, *,
+                          chat_id: Optional[str] = None, user_id: Optional[str] = None):  # //// Neoffice — see below
+        """The ``SessionSource`` admission builds for one delivery, ``profile_routes`` resolved on it.
+        The edge's coalesced-route check (``parked_profile_refusal``) asks this same source, so a
+        route rule matches there exactly when it matches at admission."""
+        # //// Neoffice — a conversational route names its own chat id (the person's or the thread's, see
+        # //// _admit_agent_run) and its user (desk = the Frappe user, WhatsApp = the number: per-user mem0
+        # //// scoping); the delivery id rides on the source as the turn's id (HERMES_SESSION_MESSAGE_ID
+        # //// for its run: the pre-router marks a presentation turn by it, nora_chat_router._DECK_TURNS,
+        # //// 23.10). Upstream's per-delivery chat id and route user are the defaults.
+        identity = _WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id)
+        source = self.build_source(chat_id=chat_id or identity.session_chat_id, chat_name=f"webhook/{route_name}",
+                                   chat_type="webhook", user_id=user_id or f"webhook:{route_name}",
+                                   user_name=route_name, message_id=delivery_id)
+        # //// END Neoffice ////
+        if profile and isinstance(profile, str):
+            # The ``/p/<profile>/`` prefix names the profile and wins over ``profile_routes``; the
+            # edge already refused it (retryable 503) when that profile is not served. Drop what
+            # ``build_source`` resolved from the routes, or a rejected route would refuse it here.
+            source.profile = profile
+            source.profile_route_rejected, source._rejected_route_profile = False, None
+        return source
+
+    async def _admit_agent_run(self, payload: Any, prompt: str, delivery_id: str, now: float, *, route_config: dict,
+                               route_name: str, profile, event_type: str) -> Optional[str]:
+        """Record delivery info and admit the run through the durable producer (shared by the immediate
+        and coalesced paths). ``"accepted"`` / ``"duplicate"``, or None when admission failed."""
+        # (profile, route, delivery_id) in the session key → concurrent webhooks get independent runs.
+        identity = _WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id)
+        session_chat_id = identity.session_chat_id
         # //// Neoffice — per-route session_key (was tagged "NORA CORE PATCH"). Upstream always
         # //// keys the session on delivery_id, so every inbound is an independent run — right
         # //// for a GitHub or monitoring webhook, wrong for a conversation: each desk message
@@ -1358,14 +1518,11 @@ class WebhookAdapter(BasePlatformAdapter):
         # //// short-term memory. A route may set `session_key: phone` (or any dotted payload
         # //// path) so every message from the same user reuses one chat_id. Default stays
         # //// upstream's "unique". Drop when upstream supports conversational webhook routes.
+        # //// Since the durable queue (v0.22.3) the same chat id is shared by many admissions: the queue
+        # //// runs them one after the other in the session they all target, which is what a conversation is.
         session_key_mode = route_config.get("session_key", "unique")
         _neoffice_person_chat_id = None  # //// Neoffice — the person's chat id, see _neoffice_thread_chat_id (22.10)
-        if session_key_mode == "unique":
-            # upstream's own key: one collision-free identity per delivery (concurrent webhooks on
-            # one route get independent runs).
-            identity = _WebhookDeliveryIdentity.from_parts(profile, route_name, delivery_id)
-            session_chat_id = identity.session_chat_id
-        else:
+        if session_key_mode != "unique":
             # Dotted-path lookup into payload ("phone", "sender.id", ...).
             _sk_value: Any = payload
             for _part in session_key_mode.split("."):
@@ -1415,6 +1572,13 @@ class WebhookAdapter(BasePlatformAdapter):
         # classify (1-word LLM) then CREATE the kanban task in code + deliver the ack
         # deterministically. DIRECT (greetings/meta) or any failure falls through to the
         # normal agent dispatch below — the message is never dropped. grep "//// Neoffice".
+        # //// Neoffice — where it runs since the durable queue (v0.22.3): HERE, before the delivery is
+        # //// admitted, at the seam upstream gives its ``pre_gateway_dispatch`` plugin hook (``skip`` = a
+        # //// message consumed and never committed, ``rewrite`` = the text that is committed). It is not that
+        # //// hook on purpose: a hook exists only where a plugin is enabled in the profile's config and is
+        # //// dropped by a forced plugin reload, while the router is the product's own routing and must
+        # //// run on every instance. It runs on a worker thread (its classifier is an LLM call of up to
+        # //// 8 s that held the gateway's event loop), with the same contextvars.
         if route_name in ("nora_chat", "whatsapp_inbox") and isinstance(payload, dict):
             try:
                 from agent.auxiliary_client import call_llm
@@ -1423,7 +1587,8 @@ class WebhookAdapter(BasePlatformAdapter):
 
                 _user_msg = str(payload.get("message") or payload.get("text") or "")
                 if _user_msg.strip():
-                    _decision = route_chat_message(
+                    _decision = await asyncio.to_thread(
+                        route_chat_message,
                         message=_user_msg,
                         session_chat_id=session_chat_id,
                         conversation_id=payload.get("conversation_id"),
@@ -1465,10 +1630,9 @@ class WebhookAdapter(BasePlatformAdapter):
                             route_name, _decision.get("category"),
                             _decision.get("task_id"),
                         )
-                        # Since v2026.9.24 this block runs inside _spawn_agent_run, whose
-                        # caller answers the POST itself: the router has created the task,
-                        # so there is no agent run to hand back.
-                        return None
+                        # The router has created the task and posted its ack: the message is consumed,
+                        # nothing is admitted, and the POST is answered ``accepted`` by the caller.
+                        return "accepted"
                     # //// Neoffice — an instruction the router attaches for the agent
                     # //// (a one-off reminder, nora_chat_router._ONE_OFF_REMINDER_HINT).
                     if _decision.get("agent_hint"):
@@ -1497,25 +1661,17 @@ class WebhookAdapter(BasePlatformAdapter):
             pass
         # //// END Neoffice ////
 
-        # Build source and event
-        source = self.build_source(
-            chat_id=session_chat_id,
-            chat_name=f"webhook/{route_name}",
-            chat_type="webhook",
-            # //// Neoffice — per-user mem0 scoping (desk=Frappe user, WhatsApp=phone) ////
-            user_id=(
-                str(payload.get("user") or payload.get("phone") or "").strip()
-                or f"webhook:{route_name}"
-            ),
-            # //// END Neoffice ////
-            user_name=route_name,
-            # //// Neoffice — the delivery is the turn's id (HERMES_SESSION_MESSAGE_ID for its run): the pre-router marks
-            # //// a presentation turn by it, and kanban_create is refused in that turn only (nora_chat_router._DECK_TURNS,
-            # //// 23.10). Upstream leaves it empty; the webhook's send ignores reply anchors.
-            message_id=delivery_id,
+        # //// Neoffice — per-user mem0 scoping (desk=Frappe user, WhatsApp=phone), see _admission_source.
+        source = self._admission_source(
+            route_name, profile, delivery_id, chat_id=session_chat_id,
+            user_id=(str(payload.get("user") or payload.get("phone") or "").strip() if isinstance(payload, dict) else ""),
         )
-        if profile and isinstance(profile, str):
-            source.profile = profile
+        # //// Neoffice — a monitoring probe leaves no trace in memory (gateway/neoffice_turn_memory.py); its payload
+        # //// does not reach the turn that runs from the queue, so the probe is named on the source, which does.
+        from gateway.neoffice_turn_memory import MONITOR_CHAT_SUFFIX, is_monitoring_probe_payload
+        if is_monitoring_probe_payload(payload):
+            source.chat_name = f"webhook/{route_name}{MONITOR_CHAT_SUFFIX}"
+        # //// END Neoffice ////
         # //// Neoffice — per-user response language (multilingual NORA). Carry it as a
         # channel_prompt: a per-message ephemeral system line that lands at the BACK of the
         # prompt (after the cached SOUL), so llama.cpp's prefix cache for the big SOUL prefix
@@ -1554,38 +1710,64 @@ class WebhookAdapter(BasePlatformAdapter):
         # //// Neoffice — text carries the language directive and channel_prompt the ephemeral
         # //// system line (both built just above); upstream passes the raw prompt and no
         # //// channel_prompt. Drop when the webhook DIRECT path resolves channel_prompt itself.
-        event = MessageEvent(text=_event_text, message_type=MessageType.TEXT, source=source,
-                             raw_message=payload, message_id=delivery_id,
+        event = MessageEvent(text=_event_text, message_type=MessageType.TEXT, source=source, raw_message=payload,
+                             message_id=delivery_id, timestamp=datetime.fromtimestamp(0, UTC),
                              channel_prompt=_lang_channel_prompt)
         # //// END Neoffice ////
-        # The per-delivery session is closed by ``on_processing_complete`` once the run finishes
-        # (``handle_message`` is fire-and-forget, so nothing can be closed here).
         # //// Neoffice — a WhatsApp chat quiet for the router's 30 minutes starts a new session first (24.10),
-        # //// see _neoffice_close_a_quiet_chat; upstream schedules handle_message directly.
-        task = asyncio.create_task(self._neoffice_handle_message(event))
+        # //// see _neoffice_close_a_quiet_chat; it runs before the new message is committed to the chat.
+        await self._neoffice_close_a_quiet_chat(event)
+        # //// END Neoffice ////
+        from gateway.platforms.webhook_ingress import admit_producer
+        try:
+            receipt = await admit_producer(self, event)
+        except Exception:
+            logger.exception("[webhook] Durable admission failed for %s", delivery_id)
+            return None
+        if getattr(event, '_webhook_duplicate', False):
+            return "duplicate"
+        if receipt is None:
+            # A post_gateway_admission plugin consumed the delivery: nothing was committed, so the
+            # reply goes to the destination this request just validated, not a retained row.
+            reply = getattr(event, '_consumer_reply', None)
+            if reply:
+                from gateway.platforms.webhook_delivery import snapshot_destination
+                await self._deliver_to(snapshot_destination(self, self._delivery_info.get(session_chat_id)),
+                                       session_chat_id, reply)
+            return "accepted"
+        from gateway.session_authorities import active_authority, authority_for_profile_id
+        runner = self._message_handler.__self__
+        authority = authority_for_profile_id(runner, receipt.ref.profile_id) or active_authority(runner)
+        task = asyncio.create_task(self._finalize_delivery(event, authority, receipt))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
-        return task
+        return "accepted"
 
-    async def on_processing_complete(self, event: MessageEvent, outcome: Any) -> None:
-        """Close the one-shot per-delivery session: ``prune_sessions`` only reaps rows with ``ended_at`` set, so
-        unclosed webhook sessions leak unbounded. Fires at the true end of the run; ``end_session()`` is
-        first-reason-wins."""
-        # //// Neoffice — a conversation thread's session stays open for the thread's next message (22.10):
-        # //// closing it began every turn of the thread with history=0, see _neoffice_thread_chat_id. Its
-        # //// row stays open as a messaging chat's does (one per thread, not one per delivery), until the
-        # //// thread has been idle for a day.
-        if _neoffice_is_thread_session(event):
-            await self._neoffice_close_idle_threads()
-            return
-        # //// END Neoffice ////
-        await self._end_webhook_session(event, event.source.chat_id)
+    async def _finalize_delivery(self, event, authority, receipt):
+        from hermes_state_runtime import get_session_admission
+        try:
+            row = get_session_admission(authority.db, admission_id=receipt.admission_id)
+            if row['status'] in {'queued', 'started'}:
+                waiter = authority.waiters.setdefault(receipt.admission_id,
+                    asyncio.get_running_loop().create_future())
+                await asyncio.shield(waiter)
+                row = get_session_admission(authority.db, admission_id=receipt.admission_id)
+            event._webhook_receipt = (authority, authority._receipt(row))
+            # //// Neoffice — a conversation thread's session stays open for the thread's next message (22.10):
+            # //// closing it began every turn of the thread with history=0, see _neoffice_thread_chat_id. Its
+            # //// row stays open as a messaging chat's does (one per thread, not one per delivery), until the
+            # //// thread has been idle for a day: a thread's turn runs the idle sweep. Upstream ends the session
+            # //// of each admitted webhook once its receipt settles (written for one session per delivery);
+            # //// finalize_webhook's UPDATE leaves a thread's session alone (webhook_ingress.py), for this call
+            # //// and for its two other callers (a provider's retry, the startup recovery).
+            if _neoffice_is_thread_session(event):
+                await self._neoffice_close_idle_threads(authority)
+            # //// END Neoffice ////
+            await self._end_webhook_session(event, event.source.chat_id)
+        except Exception:
+            logger.exception("[webhook] Could not finalize admitted delivery %s", receipt.admission_id)
 
     # //// Neoffice — a WhatsApp chat's thread ends after the router's silence, see _neoffice_chat_idle_seconds.
-    async def _neoffice_handle_message(self, event: "MessageEvent") -> None:
-        await self._neoffice_close_a_quiet_chat(event)
-        await self.handle_message(event)
-
     async def _neoffice_close_a_quiet_chat(self, event: "MessageEvent") -> bool:
         """End the session of a WhatsApp chat whose last message is older than the router's thread idle, before
         the new message is routed (it then gets a new session); True when it ended one. Never raises."""
@@ -1593,19 +1775,17 @@ class WebhookAdapter(BasePlatformAdapter):
             return False
         runner = self.gateway_runner
         store, key_fn = getattr(runner, "session_store", None), getattr(runner, "_session_key_for_source", None)
-        session_db = getattr(runner, "_session_db", None)
-        db = getattr(session_db, "_db", session_db)  # AsyncSessionDB wraps the SessionDB
+        db = _neoffice_authority_db(runner)
         if store is None or key_fn is None or not all(
             callable(getattr(db, name, None)) for name in ("_execute_write", "_end_and_bump")
         ):
             return False
         try:
             session_key = key_fn(event.source)
-            if session_key in (getattr(self, "_active_sessions", {}) or {}):
-                return False  # a turn of this chat is running: the chat is not quiet
             session_id = _peek_session_id(store, session_key)
             if not session_id:
                 return False
+            # A session with an admission still queued or running is not quiet: the UPDATE itself tests it.
             ended = await asyncio.to_thread(
                 _neoffice_end_session_if_idle, db, session_id, time.time() - _neoffice_chat_idle_seconds(),
             )
@@ -1617,21 +1797,19 @@ class WebhookAdapter(BasePlatformAdapter):
         return bool(ended)
 
     # //// Neoffice — closes the threads nobody wrote in for a day, see _neoffice_end_idle_thread_sessions.
-    async def _neoffice_close_idle_threads(self) -> int:
+    async def _neoffice_close_idle_threads(self, authority: Any = None) -> int:
         """At most one sweep every _NEOFFICE_THREAD_SWEEP_EVERY seconds; never raises."""
         now = time.time()
         if now - getattr(self, "_neoffice_last_thread_sweep", 0.0) < _NEOFFICE_THREAD_SWEEP_EVERY:
             return 0
         self._neoffice_last_thread_sweep = now
-        session_db = getattr(self.gateway_runner, "_session_db", None)
-        db = getattr(session_db, "_db", session_db)  # AsyncSessionDB wraps the SessionDB
+        db = getattr(authority, "db", None) or _neoffice_authority_db(self.gateway_runner)
         if db is None or not all(callable(getattr(db, name, None)) for name in ("_read_ctx", "_execute_write", "_end_and_bump")):
             return 0
-        busy_keys = frozenset(getattr(self, "_active_sessions", {}) or {})  # turns in flight, read on the loop
         try:
             closed = await asyncio.to_thread(
                 _neoffice_end_idle_thread_sessions, db, now - _NEOFFICE_THREAD_IDLE_SECONDS,
-                _NEOFFICE_THREAD_SWEEP_LIMIT, busy_keys,
+                _NEOFFICE_THREAD_SWEEP_LIMIT,
             )
         except Exception as exc:  # a sweep must never cost a turn
             logger.debug("[webhook] idle thread sweep failed: %s", exc)
@@ -1642,26 +1820,11 @@ class WebhookAdapter(BasePlatformAdapter):
     # //// END Neoffice ////
 
     async def _end_webhook_session(self, event: MessageEvent, session_chat_id: str) -> None:
-        """Mark the per-delivery session ended via ``SessionDB.end_session`` (never a hand-written UPDATE),
-        resolving session_id from the SAME source the run was keyed on."""
-        runner = self.gateway_runner
-        session_db, store = getattr(runner, "_session_db", None), getattr(runner, "session_store", None)
-        key_fn = getattr(runner, "_session_key_for_source", None)
-        if runner is None or session_db is None or store is None or key_fn is None:
-            return
-        try:
-            session_key = key_fn(event.source)
-            session_id = _peek_session_id(store, session_key)
-            if not session_id:
-                logger.debug("[webhook] No session_id to close for %s (key=%s)", session_chat_id, session_key)
-                return
-            # AsyncSessionDB forwards end_session via to_thread; plain SessionDB is sync.
-            result = session_db.end_session(session_id, "webhook_complete")
-            if asyncio.iscoroutine(result):
-                await result
-            logger.debug("[webhook] Closed session %s for delivery %s", session_id, session_chat_id)
-        except Exception as e:
-            logger.debug("[webhook] Failed to close session for %s: %s", session_chat_id, e)
+        from gateway.platforms.webhook_ingress import finalize_webhook
+        binding = getattr(event, '_webhook_receipt', None)
+        if binding is not None:
+            authority, receipt = binding
+            finalize_webhook(authority, receipt)
 
     # --- Signature validation ---
 
