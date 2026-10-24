@@ -245,3 +245,33 @@ def test_the_mark_lapses(monkeypatch):
 def test_the_instruction_says_what_to_do_without_the_facts():
     assert "square brackets" in R._DECK_HINT and "Never kanban_create" in R._DECK_HINT
     assert "nora_presentation_create" in R.DECK_TURN_REFUSAL
+
+
+# //// Neoffice — the company's figures in a presentation are read by the code (24.10): the deck turn says how.
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Prépare une présentation de nos ventes 2026",
+        "Une présentation pour le comité avec le chiffre d'affaires par mois",
+        "Prépare 4 diapositives sur nos achats par fournisseur de l'an dernier",
+    ],
+)
+def test_a_presentation_of_our_figures_is_a_deck_turn_told_to_pass_the_source(monkeypatch, message):
+    created = _fake_kanban(monkeypatch)
+    decision, asked = _route(monkeypatch, message, key="delivery-figures")
+    assert created == [] and asked == [], "neither a pole nor the fast answer: the deck is NORA's"
+    assert decision["category"] == "DIRECT" and decision["agent_hint"] == R._DECK_HINT
+    assert R.deck_turn_under_way("delivery-figures")
+    hint = R._DECK_HINT
+    assert 'figures="source:period"' in hint and "never written by you" in hint and "write no slide nor point" in hint
+    for source in ("sales_by_month", "purchases_by_supplier", "receivables_ageing", "stock_value"):
+        assert source in hint
+
+
+def test_a_question_about_a_figure_makes_no_presentation(monkeypatch):
+    _fake_kanban(monkeypatch)
+    for message in ("Combien a-t-on vendu ?", "Combien a-t-on vendu en 2026 ?"):
+        assert not R._is_deck_request(message), message
+        decision, _asked = _route(monkeypatch, message, classify_to="compta", fast_answer=None, key="delivery-q")
+        assert R._DECK_HINT not in (decision.get("agent_hint") or ""), message
+        assert not R.deck_turn_under_way("delivery-q"), message
