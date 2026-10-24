@@ -2449,8 +2449,12 @@ _MAIL_HINT = (
     "they may have opened another since), then ONE nora_mail_event(its `message` key, the day and the time read in "
     "it, the participants among its people): a card they click adds it to their calendar, "
     "nothing is sent; never say it is in the calendar before. Their other mail: nora_mail_search, "
-    "nora_mail_last_exchange, nora_mail_read; an attachment to the Drive (nora_mail_save_attachment) or a ToDo "
-    "(nora_mail_task) only when they ask. Do NOT call kanban_create for the message: no pole sees their window; a "
+    # //// Neoffice — finding a file writes nothing, and a file is its card (24.10.2026).
+    "nora_mail_last_exchange, nora_mail_read. « Trouve la facture dans le Drive »: ONE nora_mail_find_in_drive (it "
+    "writes NOTHING; with the message's key it finds the very attachment filed before), never "
+    "nora_mail_save_attachment, which files it and only when they ask to file it (a ToDo, nora_mail_task, too). A "
+    "file found or filed has its card in the conversation, which opens it: say its name, never paste a path or an "
+    "address. Do NOT call kanban_create for the message: no pole sees their window; a "
     "question about the company's data beyond who the sender is (their invoices, an order, stock…) is business as "
     "usual: kanban_create.]"
 )

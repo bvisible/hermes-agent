@@ -543,6 +543,7 @@ _MAIL = {"surface": "editor", "app": "mail", "document": {"name": "Re: le devis"
         "Réponds-lui que c'est d'accord pour jeudi",
         "Traduis ma réponse en allemand",
         "Prends rendez-vous avec elle mardi à 14 h",
+        "Trouve la facture dans le Drive",
         # A mail's words that the classifier would send to a pole: from NeoMail, the turn stays hers.
         "Envoie la facture au client",
     ],
@@ -561,6 +562,8 @@ def test_a_turn_from_neomail_is_the_orchestrators_with_the_mail_instruction(monk
     # //// Neoffice — an appointment is a card the person clicks; a shared mailbox waits for their click (23.10.2026).
     assert "ONE nora_mail_event" in hint and "never say it is in the calendar" in hint
     assert "mailbox shared with them" in hint and "`pending`" in hint
+    # //// Neoffice — finding a file writes nothing; a file is its card, never a pasted path (24.10.2026).
+    assert "ONE nora_mail_find_in_drive" in hint and "writes NOTHING" in hint and "never paste a path" in hint
     assert hint.endswith("kanban_create.]")
 
 
