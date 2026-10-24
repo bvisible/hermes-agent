@@ -5,6 +5,7 @@ import logging
 import asyncio
 import contextvars
 import os  # //// Neoffice — read the kanban task of this worker ////
+import re  # //// Neoffice — a conversation thread id read from a chat id (24.10) ////
 import inspect
 import json
 import time
@@ -617,11 +618,55 @@ def _kanban_task_user() -> str:
                 found = chat_id.rsplit(marker, 1)[1].strip()
             elif "@" in (row[1] or ""):
                 found = (row[1] or "").strip()
+            # //// Neoffice — the task's conversation thread too, read from the same chat id (24.10): see
+            # //// _neoffice_thread_of_chat_id.
+            _TASK_THREAD_CACHE[task_id] = _neoffice_thread_of_chat_id(chat_id)
             break
     except Exception:  # a worker outside kanban, a locked probe — the tool stays as it was
         found = ""
-    _TASK_USER_CACHE[task_id] = found
+        _TASK_THREAD_CACHE.pop(task_id, None)  # //// Neoffice — nor a thread (24.10) ////
+    # //// Neoffice — only a hit is kept (24.10): a notify sub written after the worker's first call is read at its next
+    # //// one, as the generated servers do since #485; a miss kept for good left the task without its person and thread.
+    if found:
+        _TASK_USER_CACHE[task_id] = found
     return found
+
+
+# //// Neoffice — WHICH conversation a call serves (24.10). A person with two editors open (NeoDoc in one tab,
+# //// NeoGrille in another) has two conversation threads. The tools of an editor act in « the person's
+# //// conversation », and without a word from the gateway the instance took the person's LATEST one: a turn of
+# //// NeoDoc whose tool ran after a message sent from NeoGrille read the workbook, and would have written in it
+# //// (measured on osiris, 24.10). The answering session's chat id names its thread
+# //// (``webhook:<route>:thread:<thread>:<mode>:<value>``, gateway/platforms/webhook.py _neoffice_thread_chat_id);
+# //// a worker's task names it in its notify sub's chat id.
+_TASK_THREAD_CACHE: dict = {}
+_NEOFFICE_THREAD_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,140}$")
+# //// The FastMCP servers (neoffice-devops scripts/hermes-poc: mcp-wiki, mcp-whatsapp, mcp-nora) reject an argument their
+# //// function does not declare: `bridge_user` once made every wiki call fail. They get no thread, and lose any the model
+# //// wrote. Every other neoffice-* server is generated from nora's tools (neoffice-frappe, neoffice-tasks, the poles'),
+# //// hands every argument to the instance, and gets it: a server left out would fall back to the latest conversation.
+_NEOFFICE_NO_THREAD_SERVERS = frozenset({"neoffice-wiki", "neoffice-whatsapp", "neoffice-nora"})
+
+
+def _neoffice_thread_of_chat_id(chat_id: str) -> str:
+    """The Nora conversation a session chat id names, or '': only the `nora_chat` route carries one (the desk's chat,
+    the editors' panes); a per-person or per-delivery chat id names none, and a WhatsApp chat's thread (« chat ») is
+    the hub's marker, not a conversation."""
+    parts = str(chat_id or "").split(":")
+    if len(parts) < 6 or parts[0] != "webhook" or parts[1] != "nora_chat" or parts[2] != "thread":
+        return ""
+    thread = parts[3].strip()
+    return thread if _NEOFFICE_THREAD_ID_RE.match(thread) else ""
+
+
+def _kanban_task_thread() -> str:
+    """The conversation thread of this worker's task, or ''."""
+    task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    if not task_id:
+        return ""
+    _kanban_task_user()  # reads the task's notify sub once, the thread with the person
+    return _TASK_THREAD_CACHE.get(task_id, "")
+# //// END Neoffice ////
 
 
 # //// Neoffice — carry WHO is asking into the call itself (#882). Upstream passes the
@@ -637,7 +682,7 @@ def _kanban_task_user() -> str:
 # ////      it never keeps the model's value. The server then applies its own narrow rule
 # ////      for an unnamed caller.
 def _neoffice_stamp_bridge_user(server_name: str, tool_name: str, args) -> None:
-    """Overwrite ``bridge_user`` in *args* (and ``args["params"]``) for a neoffice-* server."""
+    """Overwrite ``bridge_user`` and ``bridge_conversation`` in *args* (and ``args["params"]``) for a neoffice-* server."""
     if not isinstance(args, dict) or not server_name.startswith("neoffice-"):
         return
     raw = ""
@@ -665,10 +710,30 @@ def _neoffice_stamp_bridge_user(server_name: str, tool_name: str, args) -> None:
         logger.warning(
             "[bridge_user] %s.%s: resolving the person failed (%s) — the call names nobody",
             server_name, tool_name, exc)
-    args["bridge_user"] = keep
+    # //// Neoffice — and the conversation thread of the turn, as `bridge_conversation` (24.10, see
+    # //// _neoffice_thread_of_chat_id): the instance acts in that conversation's editor, never in the person's latest
+    # //// one. The same three rules: both places, always written, and '' when it cannot be read.
+    thread = ""
+    names_thread = server_name not in _NEOFFICE_NO_THREAD_SERVERS
+    if names_thread:
+        try:
+            from gateway.session_context import get_session_env
+
+            chat_id = (get_session_env("HERMES_SESSION_CHAT_ID") or "").strip()
+            thread = _neoffice_thread_of_chat_id(chat_id) if chat_id else _kanban_task_thread()
+        except Exception as exc:  # fail closed: the call names no conversation
+            thread = ""
+            logger.warning(
+                "[bridge_conversation] %s.%s: resolving the thread failed (%s) — the call names none",
+                server_name, tool_name, exc)
+    # //// Neoffice — both written at the top level and in `params`; the thread removed where the server takes none ////
     params = args.get("params")
-    if isinstance(params, dict):
-        params["bridge_user"] = keep
+    for target in (args, params) if isinstance(params, dict) else (args,):
+        target["bridge_user"] = keep
+        if names_thread:
+            target["bridge_conversation"] = thread
+        else:
+            target.pop("bridge_conversation", None)
 # //// END Neoffice ////
 
 
