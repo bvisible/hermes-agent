@@ -389,6 +389,44 @@ async def test_a_whatsapp_chat_idle_for_a_day_is_closed_and_starts_anew(harness)
     assert turns[2]["history"] == []
 
 
+@pytest.mark.asyncio
+async def test_a_whatsapp_message_31_minutes_later_starts_without_history(harness):
+    """The central router renews a WhatsApp thread after 30 minutes of silence: the agent's session ends with
+    it, so a « oui » sent later never confirms an old question (24.10)."""
+    adapter, store, turns = harness
+    await _send_whatsapp(adapter, "Supprime le rappel de vendredi.", PHONE_A)
+    old = turns[0]["session_id"]
+    _age(store, old, hours=31 / 60)
+
+    await _send_whatsapp(adapter, "Oui", PHONE_A)
+    assert turns[1]["session_id"] != old
+    assert turns[1]["history"] == []
+    assert store._db.get_session(old)["end_reason"] == "webhook_thread_idle"
+
+
+@pytest.mark.asyncio
+async def test_a_whatsapp_message_29_minutes_later_keeps_the_thread(harness):
+    adapter, store, turns = harness
+    await _send_whatsapp(adapter, "Quelles factures sont échues ?", PHONE_A)
+    _age(store, turns[0]["session_id"], hours=29 / 60)
+
+    await _send_whatsapp(adapter, "Et le mois dernier ?", PHONE_A)
+    assert turns[1]["session_id"] == turns[0]["session_id"]
+    assert _asked(turns[1]["history"]) == ["Quelles factures sont échues ?"]
+
+
+@pytest.mark.asyncio
+async def test_a_desk_thread_31_minutes_later_keeps_its_day(harness):
+    """Only WhatsApp follows the router's 30 minutes: a desk or editor thread keeps its 24 h."""
+    adapter, store, turns = harness
+    await _send(adapter, "Caviarde l'adresse e-mail puis applique.", conversation_id="nora-6599cd3abdf5410a")
+    _age(store, turns[0]["session_id"], hours=31 / 60)
+
+    await _send(adapter, "Oui", conversation_id="nora-6599cd3abdf5410a")
+    assert turns[1]["session_id"] == turns[0]["session_id"]
+    assert _asked(turns[1]["history"]) == ["Caviarde l'adresse e-mail puis applique."]
+
+
 @pytest.mark.parametrize("extra", [
     {},
     {"conversation_id": "41790000002"},  # a thread id made of digits, a number's look-alike
