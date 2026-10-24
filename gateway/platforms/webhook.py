@@ -367,16 +367,56 @@ def _neoffice_thread_chat_id(route_name: str, session_key_mode: str, value: str,
     return f"webhook:{route_name}:thread:{thread}:{session_key_mode}:{value}" if thread else None
 
 
-def _neoffice_is_thread_session(event: MessageEvent) -> bool:
-    """Whether *event* ran in a thread's session (see _neoffice_thread_chat_id): its chat id is
+# //// Neoffice — the thread an event's session belongs to, read from its chat id (24.10).
+def _neoffice_event_thread(event: MessageEvent) -> Optional[str]:
+    """The thread whose session *event* runs in (see _neoffice_thread_chat_id), else None: its chat id is
     ``webhook:<route>:thread:<thread>:<mode>:<value>`` and the thread is the one its payload gives. A
     per-delivery chat id (``webhook:v2:<base64url>``) never holds ``:thread:``."""
     # //// Neoffice — read from the chat id, then checked against the payload: the chat's thread too (24.10).
     chat_id = str(getattr(event.source, "chat_id", "") or "")
     parts = chat_id.split(":")
     if len(parts) < 6 or parts[0] != "webhook" or parts[1] == "v2" or parts[2] != "thread":
-        return False
-    return parts[3] == _neoffice_thread_of(parts[4], event.raw_message)
+        return None
+    return parts[3] if parts[3] == _neoffice_thread_of(parts[4], event.raw_message) else None
+
+
+def _neoffice_is_thread_session(event: MessageEvent) -> bool:
+    """Whether *event* ran in a thread's session (see _neoffice_event_thread)."""
+    return _neoffice_event_thread(event) is not None
+
+
+# //// Neoffice — a WhatsApp chat's thread ends after the central router's own silence (24.10, Jérémy's call): the
+# //// router renews its WhatsApp thread (prior pole, film, pending question) after _CHAT_THREAD_IDLE seconds with
+# //// no message from either side. An agent session kept 24 h past that let a « oui » sent hours later confirm a
+# //// question the person had long forgotten, in a thread the router already saw as new. The other threads keep
+# //// their 24 h: the desk and the editors show their thread on screen, and « Nouvelle conversation » ends it.
+def _neoffice_chat_idle_seconds() -> float:
+    """How long a WhatsApp chat's thread outlives its last message: the router's own thread idle."""
+    try:
+        from gateway.nora_chat_router import _CHAT_THREAD_IDLE
+
+        return float(_CHAT_THREAD_IDLE)
+    except Exception:  # the router's value cannot be read: its value of 09.10
+        return 1800.0
+
+
+def _neoffice_idle_update_sql() -> str:
+    """The conditional end of an idle thread session: it ends only if still open and still idle, tested in the
+    UPDATE itself, under the write lock."""
+    from hermes_state_common import _sql_session_last_active
+
+    return ("UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL"
+            f" AND (SELECT {_sql_session_last_active('s')} FROM sessions s WHERE s.id = ?) < ?")
+
+
+def _neoffice_end_session_if_idle(db: Any, session_id: str, cutoff: float, update: Optional[str] = None) -> int:
+    """End (``webhook_thread_idle``) *session_id* if it was last active before *cutoff*; 1 when it ended. The same
+    write path as SessionDB.end_session (the end stamp and its generation bump)."""
+    update = update or _neoffice_idle_update_sql()
+    return db._execute_write(lambda conn: db._end_and_bump(
+        conn, update, (time.time(), "webhook_thread_idle", session_id, session_id, cutoff), session_id,
+        "webhook_thread_idle",
+    )) or 0
 
 
 def _neoffice_end_idle_thread_sessions(db: Any, cutoff: float, limit: int, busy_keys=frozenset()) -> int:
@@ -394,19 +434,15 @@ def _neoffice_end_idle_thread_sessions(db: Any, cutoff: float, limit: int, busy_
             f" AND {last_active} < ? ORDER BY s.started_at LIMIT ?",
             (cutoff, limit),
         ).fetchall()
-    update = (
-        "UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ? AND ended_at IS NULL"
-        f" AND (SELECT {last_active} FROM sessions s WHERE s.id = ?) < ?"
-    )
+    # //// Neoffice — the same conditional end as a quiet WhatsApp chat's (24.10), see _neoffice_end_session_if_idle.
+    update = _neoffice_idle_update_sql()
     closed = 0
     for row in rows:
         session_id, session_key = row[0], row[1]
         if session_key and session_key in busy_keys:
             continue
-        # The same write path as SessionDB.end_session (the end stamp and its generation bump).
-        closed += db._execute_write(lambda conn, sid=session_id: db._end_and_bump(
-            conn, update, (time.time(), "webhook_thread_idle", sid, sid, cutoff), sid, "webhook_thread_idle",
-        )) or 0
+        # //// Neoffice — ended only if still idle, tested under the write lock.
+        closed += _neoffice_end_session_if_idle(db, session_id, cutoff, update)
     return closed
 # //// END Neoffice ////
 
@@ -1524,7 +1560,9 @@ class WebhookAdapter(BasePlatformAdapter):
         # //// END Neoffice ////
         # The per-delivery session is closed by ``on_processing_complete`` once the run finishes
         # (``handle_message`` is fire-and-forget, so nothing can be closed here).
-        task = asyncio.create_task(self.handle_message(event))
+        # //// Neoffice — a WhatsApp chat quiet for the router's 30 minutes starts a new session first (24.10),
+        # //// see _neoffice_close_a_quiet_chat; upstream schedules handle_message directly.
+        task = asyncio.create_task(self._neoffice_handle_message(event))
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
         return task
@@ -1542,6 +1580,41 @@ class WebhookAdapter(BasePlatformAdapter):
             return
         # //// END Neoffice ////
         await self._end_webhook_session(event, event.source.chat_id)
+
+    # //// Neoffice — a WhatsApp chat's thread ends after the router's silence, see _neoffice_chat_idle_seconds.
+    async def _neoffice_handle_message(self, event: "MessageEvent") -> None:
+        await self._neoffice_close_a_quiet_chat(event)
+        await self.handle_message(event)
+
+    async def _neoffice_close_a_quiet_chat(self, event: "MessageEvent") -> bool:
+        """End the session of a WhatsApp chat whose last message is older than the router's thread idle, before
+        the new message is routed (it then gets a new session); True when it ended one. Never raises."""
+        if _neoffice_event_thread(event) != _NEOFFICE_CHAT_THREAD:
+            return False
+        runner = self.gateway_runner
+        store, key_fn = getattr(runner, "session_store", None), getattr(runner, "_session_key_for_source", None)
+        session_db = getattr(runner, "_session_db", None)
+        db = getattr(session_db, "_db", session_db)  # AsyncSessionDB wraps the SessionDB
+        if store is None or key_fn is None or not all(
+            callable(getattr(db, name, None)) for name in ("_execute_write", "_end_and_bump")
+        ):
+            return False
+        try:
+            session_key = key_fn(event.source)
+            if session_key in (getattr(self, "_active_sessions", {}) or {}):
+                return False  # a turn of this chat is running: the chat is not quiet
+            session_id = _peek_session_id(store, session_key)
+            if not session_id:
+                return False
+            ended = await asyncio.to_thread(
+                _neoffice_end_session_if_idle, db, session_id, time.time() - _neoffice_chat_idle_seconds(),
+            )
+        except Exception as exc:  # a check must never cost the message
+            logger.debug("[webhook] quiet chat check failed: %s", exc)
+            return False
+        if ended:
+            logger.info("[webhook] a WhatsApp chat quiet for %.0f min starts a new session", _neoffice_chat_idle_seconds() / 60)
+        return bool(ended)
 
     # //// Neoffice — closes the threads nobody wrote in for a day, see _neoffice_end_idle_thread_sessions.
     async def _neoffice_close_idle_threads(self) -> int:

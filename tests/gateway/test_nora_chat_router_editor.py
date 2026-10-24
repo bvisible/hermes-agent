@@ -563,7 +563,8 @@ def test_a_turn_from_neomail_is_the_orchestrators_with_the_mail_instruction(monk
     assert "ONE nora_mail_event" in hint and "never say it is in the calendar" in hint
     assert "mailbox shared with them" in hint and "`pending`" in hint
     # //// Neoffice — finding a file writes nothing; a file is its card, never a pasted path (24.10.2026).
-    assert "ONE nora_mail_find_in_drive" in hint and "writes NOTHING" in hint and "never paste a path" in hint
+    assert "ONE nora_mail_find_in_drive(its `message` key" in hint and "writes NOTHING" in hint
+    assert "never paste a path" in hint and 'found `how`: "name"' in hint and "NOT known to be that attachment" in hint
     assert hint.endswith("kanban_create.]")
 
 
