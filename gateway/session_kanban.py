@@ -42,11 +42,13 @@ def build_kanban_policy(connection, params, config):
             if bound and json.loads(bound[0])['request_id'] != 'kanban:' + json.dumps([board, task.id, task.current_run_id], separators=(',', ':')):
                 raise RuntimeStoreError('stale_kanban_claim')
             context = kb.build_worker_context(conn, task.id)
-            # //// Neoffice — the card turn's text: the task itself inlined, see _neoffice_worker_prompt. Built
-            # //// here, where the card is read, and carried in the policy so a retry of the attempt resubmits the
-            # //// same bytes (the store compares them) even if the card was edited since.
+            # //// Neoffice — the card turn's text: « work kanban task <id> » with, for an accounting question to
+            # //// the compta pole, the protocol of the real chart (see _neoffice_worker_prompt). The card itself is
+            # //// not repeated: the owner's turn already opens on it (build_worker_context, with our « already
+            # //// executed » header). Built here, where the card is read, and carried in the policy so a retry of the
+            # //// attempt resubmits the same bytes (the store compares them) even if the card was edited since.
             from hermes_cli.kanban_db_dispatch import _neoffice_worker_prompt
-            neoffice_prompt = _neoffice_worker_prompt(task)
+            neoffice_prompt = _neoffice_worker_prompt(task, inline_card=False)
             # //// END Neoffice ////
             skills = list(task.skills or ())
             if kb._retry_status_for_run(conn, task.id, task.current_run_id) == 'review':
@@ -145,9 +147,9 @@ async def run_task(connection, params):
     from hermes_state_runtime import find_session_admission
     committed = None if not saved else await asyncio.to_thread(find_session_admission, authority.db,
         principal_id=connection.actor.subject, session_id=ref.session_id, request_id=request_id)
-    # //// Neoffice — the inlined task (see build_kanban_policy) instead of the bare « work kanban task <id> »:
-    # //// the model reads the card in the prompt and skips the first kanban_show (~3 s of an Olares turn). An
-    # //// attempt admitted before the upgrade resubmits the text it was committed with.
+    # //// Neoffice — the card turn's text with the accounting protocol when it applies (see build_kanban_policy)
+    # //// instead of the bare « work kanban task <id> ». An attempt admitted before the upgrade resubmits the text it
+    # //// was committed with.
     payload: dict = {'text': (committed['payload']['text'] if committed is not None else None)
                      or context.get('neoffice_prompt') or f'work kanban task {params["task_id"]}'}
     # //// END Neoffice ////

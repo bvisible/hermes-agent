@@ -2643,8 +2643,10 @@ def _worker_profile_scope(hermes_home: str, *, bind_home: bool = True):
 # //// Neoffice — added helper (no upstream equivalent): builds the spawn prompt that
 # //// inlines the card, plus the accounting protocol for the compta pole. See the call
 # //// site in the spawn builder for why.
-def _neoffice_worker_prompt(task: Any) -> str:
-    """Spawn prompt carrying the task itself, so a self-contained worker skips kanban_show."""
+def _neoffice_worker_prompt(task: Any, inline_card: bool = True) -> str:
+    """Spawn prompt carrying the task itself, so a self-contained worker skips kanban_show. With
+    ``inline_card=False`` the card is left out (the owner-run card turn already opens on it, see
+    gateway/session_kanban.py) and only the accounting protocol is added."""
     import re as _re
     import unicodedata as _unicodedata
 
@@ -2658,10 +2660,11 @@ def _neoffice_worker_prompt(task: Any) -> str:
     ctx = (title + "\n\n" + body).strip()
     if not ctx:
         return prompt
-    prompt += (
-        "\n\n[kanban_show — ALREADY EXECUTED for this task; the FULL task is below. "
-        "Do NOT call kanban_show for THIS task]\n\n" + ctx[:6000]
-    )
+    if inline_card:
+        prompt += (
+            "\n\n[kanban_show — ALREADY EXECUTED for this task; the FULL task is below. "
+            "Do NOT call kanban_show for THIS task]\n\n" + ctx[:6000]
+        )
     # A concrete accounting answer must start from the tenant's real chart, never from a
     # plausible Käfer-family number found in doctrine. Stating the protocol in the task
     # prompt puts it at the decision point, so a weak worker does not burn its context on
