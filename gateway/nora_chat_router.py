@@ -2466,7 +2466,8 @@ _MAIL_HINT = (
 # //// link word (reliée, rattaché, appartient, linked, belongs, verknüpft, gehört, collegato…) or « in the ERP / in
 # //// Neoffice »; or « à qui est cette lettre » and its kin. Without the document named, a question is the company's
 # //// (« quelles factures sont liées à cette commande ? », « le solde du client X dans Neoffice ? »): a pole's, as before.
-# //// A follow-up with a pronoun only (« et à quoi est-elle reliée ? ») keeps the instruction alone.
+# //// A follow-up with a pronoun only (« et à quoi est-elle reliée ? »), right after, is marked too: see
+# //// _is_document_link_follow_up (24.10).
 _DOC_LINK_WORD_RE = re.compile(
     r"\b(?:reli[ée]e?s?|li[ée]e?s?|rattach[ée]e?s?|attach[ée]e?s?|associ[ée]e?s?|appartien\w*|correspond\w*|concern\w*"
     r"|linked|attached|tied|related|belong\w*|about"
@@ -2525,6 +2526,134 @@ def _mark_doc_link_turn(message_id: Optional[str]) -> None:
         if len(_DOC_LINK_TURNS) > _LAST_ROUTE_MAX:
             _DOC_LINK_TURNS.clear()
     _DOC_LINK_TURNS[message_id] = now
+
+
+# //// Neoffice — the follow-up that does not name the document (24.10). After « À qui est cette lettre ? », the person
+# //// asks « et à quoi est-elle reliée ? », « c'est pour quel client ? », « il est lié à quoi ? »: the same question,
+# //// about the same document, with a pronoun for it. _is_document_link_question does not see it (no « cette
+# //// lettre »), and only the instruction covered it. Such a turn is marked as the question was, ONLY when it comes
+# //// right after a marked turn of the same conversation, from the same document, within _DECK_TURN_TTL: any other turn
+# //// (an edit, a note, a reminder, another page) closes the thread (the pronoun may then be a customer's), small talk
+# //// answered in code leaves it as it is. A follow-up that names a record of the company (« la commande SO-12, elle
+# //// est liée à quel client ? », « quelle facture est liée… », « mon client Dupont, il est lié à quoi ? ») is the
+# //// company's question: a pole's, as before.
+_DOC_FOLLOW_UP_PARTY = (
+    r"(?:client|cliente|fournisseur|tiers|partie|soci[ée]t[ée]|entreprise|contact|destinataire|dossier|projet"
+    r"|customer|supplier|vendor|party|company|record|project|recipient"
+    r"|kunden?|kundin|lieferanten?|firma|kontakt|empf[äa]nger|projekt|datensatz|vorgang"
+    r"|fornitore|parte|societ[àa]|azienda|contatto|destinatario|progetto|pratica)"
+)
+_DOC_FOLLOW_UP_LINK = (
+    r"(?:reli[ée]e?|li[ée]e?|rattach[ée]e?|attach[ée]e?|associ[ée]e?|connect[ée]e?"
+    r"|linked|attached|tied|related|connected|associated"
+    r"|verkn[üu]pft|verbunden|zugeordnet|angeh[äa]ngt"
+    r"|collegat[oa]|associat[oa]|allegat[oa]|legat[oa])"
+)
+_DOC_FOLLOW_UP_RE = re.compile(
+    "|".join((
+        # French: « est-elle reliée », « elle est liée », « c'est rattaché à quoi », « elle appartient à qui »,
+        # « à qui appartient-elle », « c'est pour quel client », « pour qui est-ce », « quel client ? »
+        rf"\best[- ](?:t[- ])?(?:elle|il)\s+(?:bien\s+)?{_DOC_FOLLOW_UP_LINK}",
+        rf"\b(?:qu['’]\s*)?(?:elle|il|ça|ca|cela|celle-ci|celui-ci)\s+(?:est|serait|était)\s+(?:bien\s+)?"
+        rf"{_DOC_FOLLOW_UP_LINK}",
+        rf"\bc['’]\s*est\s+(?:bien\s+)?{_DOC_FOLLOW_UP_LINK}",
+        r"\b(?:elle|il|ça|ca|cela)\s+(?:appartient|concerne|correspond|se\s+rapporte)\b",
+        r"\b(?:appartient|concerne|correspond)[- ](?:t[- ])?(?:elle|il)\b",
+        r"\bc['’]\s*est\s+(?:pour|[àa]|de|chez)\s+(?:qui|quel(?:le)?s?)\b",
+        r"\b(?:(?:elle|il|ça|ca|cela)\s+est|est[- ](?:t[- ])?(?:elle|il))\s+(?:pour|[àa]|de|chez)\s+(?:qui|quel(?:le)?s?)\b",
+        rf"\bc['’]\s*est\s+quel(?:le)?\s+{_DOC_FOLLOW_UP_PARTY}\b",
+        rf"\b(?:[àa]|pour|de)\s+(?:qui|quel(?:le)?\s+{_DOC_FOLLOW_UP_PARTY})\s+(?:est[- ](?:elle|il|ce)|c['’]\s*est)\b",
+        rf"^\s*(?:et\s+)?(?:c['’]\s*est\s+)?(?:pour\s+|[àa]\s+|de\s+)?(?:qui|quel(?:le)?\s+{_DOC_FOLLOW_UP_PARTY})"
+        r"\s*(?:alors|donc|du\s+coup)?\s*\?*\s*$",
+        # English: « what is it linked to », « it's attached to », « who does it belong to », « who is it for »
+        rf"(?:\b(?:is|was)|['’]s)\s+it\s+{_DOC_FOLLOW_UP_LINK}",
+        rf"\bit(?:['’]s|\s+is|\s+was)\s+{_DOC_FOLLOW_UP_LINK}",
+        r"\b(?:does|did)\s+it\s+(?:belong|relate)\b|\bit\s+(?:belongs|relates)\b|\bwhose\s+is\s+it\b",
+        rf"\b(?:who|whom|which\s+{_DOC_FOLLOW_UP_PARTY}|what\s+{_DOC_FOLLOW_UP_PARTY})\s*(?:['’]s|\s+is|\s+was)\s+it\s+"
+        r"(?:for|from|to|addressed)\b",
+        rf"^\s*(?:and\s+)?(?:for\s+)?(?:whom|which\s+{_DOC_FOLLOW_UP_PARTY})\s*\?*\s*$",
+        # German: « womit ist sie verknüpft », « wem gehört er », « für welchen Kunden ist das »
+        rf"\b(?:ist|war|wird|wurde)\s+(?:(?:er|sie|es)\s+(?:\w+\s+){{0,4}}?|das\s+(?:(?:mit|zu|an)\s+(?:\w+\s+){{0,3}}?)?)"
+        rf"{_DOC_FOLLOW_UP_LINK}",
+        r"\b(?:geh[öo]rt|betrifft)\s+(?:er|sie|es)\b|\b(?:geh[öo]rt|betrifft)\s+das\s*\?*\s*$"
+        r"|\b(?:er|sie|es|das)\s+(?:geh[öo]rt|betrifft)\b",
+        rf"\bf[üu]r\s+(?:wen|welche[nmrs]?\s+{_DOC_FOLLOW_UP_PARTY})\s+(?:ist|war)\s+(?:(?:er|sie|es)\b|das\s*\?*\s*$)",
+        rf"^\s*(?:und\s+)?(?:f[üu]r\s+)?(?:wen|welche[nmrs]?\s+{_DOC_FOLLOW_UP_PARTY})\s*\?*\s*$",
+        # Italian (no subject pronoun): « a cosa è collegata », « è collegata a un cliente », « a chi appartiene »,
+        # « per quale cliente è »
+        rf"\b(?:a|con)\s+(?:cosa|che\s+cosa|chi|quale\s+{_DOC_FOLLOW_UP_PARTY})\s+(?:è|é|e['’]?)\s+{_DOC_FOLLOW_UP_LINK}",
+        rf"^\s*(?:(?:e|ed|ma)\s+)?(?:è|é|e['’])\s+{_DOC_FOLLOW_UP_LINK}\b",
+        rf"\b(?:a|di)\s+(?:chi|quale\s+{_DOC_FOLLOW_UP_PARTY})\s+(?:appartiene|è|é|e['’])(?=\s|\?|$)",
+        rf"\bper\s+(?:chi|quale\s+{_DOC_FOLLOW_UP_PARTY})\s+(?:è|é|e['’])(?=\s|\?|$)",
+        rf"\b(?:chi|quale\s+{_DOC_FOLLOW_UP_PARTY})\s+riguarda\b",
+        rf"^\s*(?:e\s+)?(?:per\s+)?(?:chi|quale\s+{_DOC_FOLLOW_UP_PARTY})\s*\?*\s*$",
+    )),
+    re.IGNORECASE,
+)
+# A record of the company named in the follow-up (by an article or a possessive, never a question word: « la commande »,
+# « du client », « mon client », « this invoice », « dem Auftrag », « l'ordine »), or a transaction asked about by a
+# question word (« quelle facture est liée… », « which order », « welche Rechnung », « quale fattura »): the question is
+# about it, not about the document. A party asked by a question word (« pour quel client ? ») is the document's.
+_DOC_FOLLOW_UP_TRANSACTION = (
+    r"(?:commandes?|factures?|devis|offres?|paiements?|r[èe]glements?|livraisons?|avoirs?|contrats?|abonnements?"
+    r"|tickets?|orders?|invoices?|quotes?|quotations?|payments?|deliver(?:y|ies)|contracts?|subscriptions?"
+    r"|auftr[äa]ge?|auftrags?|bestellung(?:en)?|rechnung(?:en)?|angebot(?:e|s)?|zahlung(?:en)?|lieferung(?:en)?"
+    r"|vertr[äa]ge?|vertrags?|ordin[ei]|fattur[ae]|preventiv[oi]|offert[ae]|pagament[oi]|consegn[ae]|contratt[oi])"
+)
+_DOC_FOLLOW_UP_OTHER_RECORD_RE = re.compile(
+    "|".join((
+        # The transaction is the subject (« Quelle facture est(-elle) liée… », « Quale fattura è collegata… », « Which
+        # invoice… », « Welche Rechnung… »), never the object of the document's pronoun (« À quelle commande est-elle
+        # reliée ? », « C'est pour quelle commande ? », « Which order is it linked to? », « Welcher Auftrag ist es… »).
+        rf"^\s*(?:(?:et|e|ed)\s+)?(?:quel(?:le)?s?|quale|quali)\s+{_DOC_FOLLOW_UP_TRANSACTION}\b",
+        rf"^\s*(?:and\s+)?(?:which|what)\s+{_DOC_FOLLOW_UP_TRANSACTION}\b(?!\s+(?:is|was)\s+it\b)(?!['’]s\s+it\b)",
+        rf"^\s*(?:und\s+)?welche[nmrs]?\s+{_DOC_FOLLOW_UP_TRANSACTION}\b(?!\s+(?:ist|war|wird|wurde)\s+(?:er|sie|es)\b)",
+        r"(?:\b(?:du|des|la|le|les|au|aux|ce|cet|cette|ces|mon|ma|mes|ton|ta|tes|son|sa|ses|notre|nos|votre|vos|leurs?)\s+"
+        r"|\bl['’]\s*|\bde\s+la\s+|\bde\s+l['’]\s*|\b[àa]\s+la\s+)"
+        r"(?:commandes?|factures?|devis|offres?|clients?|clientes?|fournisseurs?|articles?|produits?|stocks?|soldes?"
+        r"|paiements?|r[èe]glements?|projets?|employ[ée]e?s?|contrats?|livraisons?|bons?\s+de\s+\w+|avoirs?"
+        r"|abonnements?|opportunit[ée]s?|prospects?)\b",
+        r"\b(?:the|this|that|these|those|my|your|his|her|our|their)\s+(?:orders?|invoices?|quotes?|quotations?|customers?|clients?|suppliers?"
+        r"|vendors?|items?|products?|payments?|projects?|employees?|contracts?|deliver(?:y|ies)|subscriptions?|leads?"
+        r"|opportunit(?:y|ies)|balance)\b",
+        r"\b(?:der|die|das|dem|den|des|diese[mnrs]?|zum|zur|beim|vom|mein(?:e[mnrs]?)?|unser(?:e[mnrs]?)?|ihr(?:e[mnrs]?)?"
+        r"|sein(?:e[mnrs]?)?|dein(?:e[mnrs]?)?)\s+(?:auftr[äa]ge?|auftrags?|bestellung(?:en)?"
+        r"|rechnung(?:en)?|angebot(?:e|s)?|kunden?|kundin|lieferanten?|artikels?|produkte?s?|zahlung(?:en)?"
+        r"|projekte?s?|mitarbeiter(?:in)?|vertr[äa]ge?|vertrags?|lieferung(?:en)?|saldo)\b",
+        r"(?:\b(?:il|lo|la|i|gli|le|del|dello|della|dei|degli|delle|al|allo|alla|ai|agli|alle|questo|questa|quest)\s+"
+        r"(?:(?:mio|mia|miei|mie|nostro|nostra|nostri|nostre|suo|sua|suoi|sue|vostro|vostra|loro)\s+)?"
+        r"|\b(?:l|dell|all|quest)['’]\s*|\b(?:mio|mia|nostro|nostra|suo|sua)\s+)"
+        r"(?:ordin[ei]|fattur[ae]|preventiv[oi]|offert[ae]|client[ei]|fornitor[ei]|articol[oi]|prodott[oi]"
+        r"|pagament[oi]|progett[oi]|dipendent[ei]|contratt[oi]|consegn[ae]|saldo)\b",
+    )),
+    re.IGNORECASE,
+)
+_DOC_LINK_THREADS: dict = {}  # the conversation -> (when its last question about the document was, that document)
+
+
+def _is_document_link_follow_up(message: Optional[str]) -> bool:
+    """Whether `message` asks again what « it » is linked to, or whose it is, naming neither the document nor another
+    record of the company: a follow-up of a question about the open document (_DOC_LINK_THREADS)."""
+    text = message or ""
+    return bool(_DOC_FOLLOW_UP_RE.search(text)) and not _DOC_FOLLOW_UP_OTHER_RECORD_RE.search(text)
+
+
+def _doc_link_thread_open(conversation_id: Optional[str], document: str) -> bool:
+    """Whether the last turn of this conversation that was decided asked about `document`, within the window."""
+    opened = _DOC_LINK_THREADS.get(conversation_id or "")
+    return bool(opened) and opened[1] == document and _time_thread.time() - opened[0] <= _DECK_TURN_TTL
+
+
+def _open_doc_link_thread(conversation_id: Optional[str], document: str) -> None:
+    if not conversation_id:
+        return
+    now = _time_thread.time()
+    if len(_DOC_LINK_THREADS) > _LAST_ROUTE_MAX:
+        for key in [key for key, (opened, _doc) in _DOC_LINK_THREADS.items() if now - opened > _DECK_TURN_TTL]:
+            del _DOC_LINK_THREADS[key]
+        if len(_DOC_LINK_THREADS) > _LAST_ROUTE_MAX:
+            _DOC_LINK_THREADS.clear()
+    _DOC_LINK_THREADS[conversation_id] = (now, document)
 
 
 # //// Neoffice — the instruction of an editor turn, built per editor (maintenance#1690); NeoMail's is its own.
@@ -4055,8 +4184,17 @@ def route_chat_message(
     )
     # //// Neoffice — asked what the open document is in the ERP: kanban_create refused in this turn, see _DOC_LINK_TURNS.
     # //// Not from NeoMail's pane: a message is no Drive file, its own instruction says who the sender is (_MAIL_HINT).
-    if _editor_turn and _editor.get("app") != "mail" and _is_document_link_question(message):
+    # //// Neoffice — and the turn right after it that asks again with a pronoun only (« et à quoi est-elle reliée ? »,
+    # //// « c'est pour quel client ? »), from the same document, see _is_document_link_follow_up (24.10). Any other turn
+    # //// closes the thread; small talk answered in code above leaves it.
+    if _editor_turn and _editor.get("app") != "mail" and (
+        _is_document_link_question(message)
+        or (_doc_link_thread_open(conversation_id, _editor["name"]) and _is_document_link_follow_up(message))
+    ):
         _mark_doc_link_turn(idempotency_key)
+        _open_doc_link_thread(conversation_id, _editor["name"])
+    elif not _canned_text:  # //// Neoffice — a note, a reminder, a space, another page: closes it too
+        _DOC_LINK_THREADS.pop(conversation_id or "", None)
     # //// END Neoffice ////
 
     # //// Neoffice — PARALLEL classify + fast-answer. They were serial (two

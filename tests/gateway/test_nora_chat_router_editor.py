@@ -23,10 +23,12 @@ _EDIT = "Mets le mot offre en gras, puis ajoute à la fin du document une ligne 
 
 @pytest.fixture(autouse=True)
 def fresh_state():
-    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED, R._DOC_LINK_TURNS):
+    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED, R._DOC_LINK_TURNS,
+              R._DOC_LINK_THREADS):
         d.clear()
     yield
-    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED, R._DOC_LINK_TURNS):
+    for d in (R._LAST_ROUTE, R._PENDING_SPACE, R._PENDING_NOTE, R._CONV_HISTORY, R._SPACE_ASKED, R._DOC_LINK_TURNS,
+              R._DOC_LINK_THREADS):
         d.clear()
 
 
@@ -60,14 +62,14 @@ def _no_llm(**_kw):
     raise AssertionError("a turn from an editor is decided without the classifier")
 
 
-def _route(monkeypatch, message, page=_PAGE, http=None, call_llm_fn=_no_llm, **kwargs):
+def _route(monkeypatch, message, page=_PAGE, http=None, call_llm_fn=_no_llm, key="k", **kwargs):
     import urllib.request
 
     monkeypatch.setattr(urllib.request, "urlopen", http or _Http({"hermes_callback.deliver": {"message": "ok"}}))
     monkeypatch.setattr(R, "_asks_fast_answer", lambda *a, **k: False)
     return R.route_chat_message(
         message=message, session_chat_id="webhook:nora_chat:test", conversation_id="conv-editor",
-        thread_id=None, user_id="u", notifier_profile="default", idempotency_key="k",
+        thread_id=None, user_id="u", notifier_profile="default", idempotency_key=key,
         call_llm_fn=call_llm_fn, main_runtime=None, deliver_extra=dict(_EXTRA), chat_user="staff@example.test",
         page_context=page, **kwargs)
 
@@ -373,6 +375,159 @@ def test_the_mark_lapses_and_a_turn_without_an_id_is_never_marked(monkeypatch):
     R._mark_doc_link_turn(None)
     assert "" not in R._DOC_LINK_TURNS and None not in R._DOC_LINK_TURNS
     assert not R.doc_link_turn_under_way("") and not R.doc_link_turn_under_way(None)
+
+
+# //// Neoffice — the follow-up that does not name the document is marked too, right after the question (24.10).
+_FOLLOW_UPS = [
+    "Et à quoi est-elle reliée ?",
+    "et à quoi est-elle reliée dans l'ERP ?",
+    "C'est pour quel client ?",
+    "Il est lié à quoi ?",
+    "Elle est rattachée à quel dossier ?",
+    "c'est lié à quoi ?",
+    "Est-ce qu'elle est liée à un client ?",
+    "À qui appartient-elle ?",
+    "Ça concerne quel client ?",
+    "Pour qui est-ce ?",
+    "Pour quel client ?",
+    "C'est quel fournisseur ?",
+    "Elle est à qui ?",
+    "Il est pour quel client ?",
+    "And what is it linked to?",
+    "What's it attached to?",
+    "Who does it belong to?",
+    "Which customer is it for?",
+    "Womit ist sie verknüpft?",
+    "Und wem gehört er?",
+    "Für welchen Kunden ist das?",
+    "Ist das mit einem Kunden verknüpft?",
+    "E a cosa è collegata?",
+    "È collegata a un cliente?",
+    "A chi appartiene?",
+    "Per quale cliente è?",
+    "Di chi è?",
+    # A transaction as the object of the document's pronoun: still the document's question (review, 24.10).
+    "À quelle commande est-elle reliée ?",
+    "C'est pour quelle commande ?",
+    "Elle correspond à quelle facture ?",
+    "Which order is it linked to?",
+]
+# The company's own data, asked right after: a pole's, as before; and the thread of the document is closed.
+_COMPANY_AFTER = [
+    "Quel est le solde du client Exemple SA ?",
+    "Quelles factures sont liées à la commande SO-0012 ?",
+    "Et la commande SO-0012, elle est liée à quel client ?",
+    "Le solde de ce client ?",
+    "Quels devis sont rattachés à ce client ?",
+    "Quel client a le plus gros solde ?",
+    "Est-elle liée au client Dupont ?",
+    "What invoices are linked to the order SO-12?",
+    "Is it linked to the customer Acme?",
+    "Welche Rechnungen sind mit dem Auftrag A-12 verknüpft?",
+    "Quali fatture sono collegate all'ordine 12?",
+    "La fattura è collegata all'ordine 12?",
+    # A record asked by a question word, a possessive, a German article: still the company's (review, 24.10).
+    "Quelle facture est liée à la commande ?",
+    "Quelle facture est-elle liée à SO-12 ?",
+    "Which invoice is it? The one linked to SO-12?",
+    "Welche Rechnung ist damit verknüpft?",
+    "Et mon client Dupont, il est lié à quoi ?",
+    "Quale fattura è collegata a SO-12?",
+    "Ist das Ticket mit Müller AG verknüpft?",
+    "Für welchen Kunden ist das Ticket?",
+    "Wem gehört das Auto?",
+]
+
+
+@pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
+def test_a_follow_up_with_a_pronoun_right_after_the_question_refuses_a_pole_too(monkeypatch, follow_up):
+    monkeypatch.setattr(R, "classify", lambda *a, **k: pytest.fail("the classifier must not be asked"))
+    assert not R._is_document_link_question(follow_up), follow_up
+    assert R._is_document_link_follow_up(follow_up), follow_up
+    _route(monkeypatch, "À qui est cette lettre ?", key="k1")
+    decision = _route(monkeypatch, follow_up, key="k2")
+    assert decision["category"] == "DIRECT" and decision["task_id"] is None, follow_up
+    assert R.doc_link_turn_under_way("k1") and R.doc_link_turn_under_way("k2"), follow_up
+
+
+@pytest.mark.parametrize("follow_up", _FOLLOW_UPS)
+def test_the_same_words_without_a_question_about_the_document_before_are_not_marked(monkeypatch, follow_up):
+    _route(monkeypatch, follow_up, key="k2")
+    assert not R.doc_link_turn_under_way("k2"), follow_up
+    # Nor after another turn of the editor: the question about the document must be the turn right before.
+    _route(monkeypatch, "À qui est cette lettre ?", key="k1")
+    _route(monkeypatch, "Mets le titre en gras", key="k2")
+    _route(monkeypatch, follow_up, key="k3")
+    assert not R.doc_link_turn_under_way("k2") and not R.doc_link_turn_under_way("k3"), follow_up
+
+
+@pytest.mark.parametrize("message", _COMPANY_AFTER)
+def test_the_company_s_own_question_right_after_is_a_pole_s_and_closes_the_thread(monkeypatch, message):
+    assert not R._is_document_link_follow_up(message), message
+    _route(monkeypatch, "À qui est cette lettre ?", key="k1")
+    _route(monkeypatch, message, key="k2")
+    assert not R.doc_link_turn_under_way("k2"), message
+    # « et il est lié à quoi ? » may now be about the customer just asked about: not marked.
+    _route(monkeypatch, "Et il est lié à quoi ?", key="k3")
+    assert not R.doc_link_turn_under_way("k3"), message
+
+
+def test_follow_ups_chain_and_small_talk_answered_in_code_leaves_the_thread_open(monkeypatch):
+    _route(monkeypatch, "À qui est cette lettre ?", key="k1")
+    _route(monkeypatch, "Et à quoi est-elle reliée ?", key="k2")
+    _route(monkeypatch, "Merci", key="k3")
+    _route(monkeypatch, "C'est pour quel client ?", key="k4")
+    assert R.doc_link_turn_under_way("k2") and R.doc_link_turn_under_way("k4")
+    assert not R.doc_link_turn_under_way("k3")
+
+
+def test_a_note_in_between_closes_the_thread(monkeypatch):
+    http = _Http({"notes.route_note": {"message": {"ok": True, "ack": "C'est noté dans vos notes."}},
+                  "hermes_callback.deliver": {"message": "ok"}})
+    _route(monkeypatch, "À qui est cette lettre ?", key="k1")
+    _route(monkeypatch, "Crée une note : rappeler Dupont lundi", http=http, key="k2")
+    _route(monkeypatch, "C'est pour quel client ?", key="k3")
+    assert R.doc_link_turn_under_way("k1") and not R.doc_link_turn_under_way("k3")
+
+
+def test_a_follow_up_from_another_document_or_after_the_window_is_not_marked(monkeypatch):
+    _route(monkeypatch, "À qui est cette lettre ?", key="k1")
+    other = {"surface": "editor", "app": "word", "document": {"name": "Autre.docx", "pages": 1}}
+    _route(monkeypatch, "Et à quoi est-elle reliée ?", page=other, key="k2")
+    assert not R.doc_link_turn_under_way("k2")
+    _route(monkeypatch, "À qui est cette lettre ?", key="k3")
+    now = R._time_thread.time()
+    monkeypatch.setattr(R._time_thread, "time", lambda: now + R._DECK_TURN_TTL + 1)
+    _route(monkeypatch, "Et à quoi est-elle reliée ?", key="k4")
+    assert not R.doc_link_turn_under_way("k4")
+
+
+def test_a_follow_up_in_another_conversation_or_from_neomail_is_not_marked(monkeypatch):
+    _route(monkeypatch, "À qui est cette lettre ?", key="k1")
+    import urllib.request
+
+    monkeypatch.setattr(urllib.request, "urlopen", _Http({"hermes_callback.deliver": {"message": "ok"}}))
+    R.route_chat_message(
+        message="Et à quoi est-elle reliée ?", session_chat_id="webhook:nora_chat:test", conversation_id="conv-other",
+        thread_id=None, user_id="u", notifier_profile="default", idempotency_key="k2", call_llm_fn=_no_llm,
+        main_runtime=None, deliver_extra=dict(_EXTRA, conversation_id="conv-other"), chat_user="staff@example.test",
+        page_context=_PAGE)
+    assert not R.doc_link_turn_under_way("k2")
+    mail = {"surface": "editor", "app": "mail", "document": {"name": "Votre offre"}}
+    _route(monkeypatch, "À qui est ce courrier, et à quoi est-il relié dans l'ERP ?", page=mail, key="k3")
+    _route(monkeypatch, "Et c'est pour quel client ?", page=mail, key="k4")
+    assert not R.doc_link_turn_under_way("k3") and not R.doc_link_turn_under_way("k4")
+
+
+def test_the_thread_of_the_document_is_bounded_and_needs_a_conversation():
+    R._open_doc_link_thread(None, "Devis.docx")
+    R._open_doc_link_thread("", "Devis.docx")
+    assert not R._DOC_LINK_THREADS
+    for n in range(R._LAST_ROUTE_MAX + 2):
+        R._open_doc_link_thread(f"conv-{n}", "Devis.docx")
+    assert len(R._DOC_LINK_THREADS) <= R._LAST_ROUTE_MAX + 1
+    assert R._doc_link_thread_open(f"conv-{R._LAST_ROUTE_MAX + 1}", "Devis.docx")
+    assert not R._doc_link_thread_open(f"conv-{R._LAST_ROUTE_MAX + 1}", "Autre.docx")
 
 
 # //// Neoffice — NeoMail's Nora pane (« Nora partout », step 8): the person's mail, with its own instruction.
