@@ -292,8 +292,13 @@ def _neoffice_provider_delivery_id(route_name: str, payload: Any, delivery_id: s
 # //// session would mix the person's threads instead: the desk chat and every open document. So the
 # //// thread the payload names (`conversation_id`: the desk, the mobile app, Raven, the editor panels)
 # //// goes into the session chat id, and that session stays open for the thread's next message
-# //// (on_processing_complete): « Nouvelle conversation » sends a new id, hence a new session. A payload
-# //// that names no thread (WhatsApp) keeps the person's session, closed after each run as before.
+# //// (on_processing_complete): « Nouvelle conversation » sends a new id, hence a new session.
+# //// A route keyed on the sender's PHONE (WhatsApp, 24.10) sends no conversation_id: its chat with the number
+# //// is one conversation, so that chat is the thread (_NEOFFICE_CHAT_THREAD), keyed by the gateway on the
+# //// number in the central router's payload (the route's token authenticates the router), never by the model. The number is in the chat id, so two numbers never
+# //// share a thread; a payload that names a WhatsApp group (_neoffice_names_a_group; the central router drops
+# //// groups today) gets no thread, so a group is never taken for the person's chat. Any other payload that
+# //// names no thread keeps the person's session, closed after each run as before.
 # //// The thread goes BEFORE the person: two readers take the person from the end of the chat id
 # //// (_deliver_nora's `user`, tools/mcp_tool_handlers.py's last `:user:`). A thread id is the client's;
 # //// one outside a safe alphabet (a chat id is split on ':') is replaced by its digest.
@@ -322,18 +327,56 @@ def _neoffice_conversation_thread(payload: Any) -> Optional[str]:
     return "h" + hashlib.sha256(thread.encode("utf-8")).hexdigest()[:32]
 
 
-def _neoffice_thread_chat_id(route_name: str, session_key_mode: str, value: str, payload: Any) -> Optional[str]:
-    """The session chat id of the conversation thread *payload* names on a conversational route, else None."""
+# //// Neoffice — the thread of a chat keyed on the sender's number (24.10); no digit in it, so the number is
+# //// the only one in the chat id.
+_NEOFFICE_CHAT_THREAD = "chat"
+# //// Neoffice — where a WhatsApp group's JID would ride in a payload: a group JID ends with @g.us.
+_NEOFFICE_GROUP_KEYS = ("group_id", "group", "group_jid", "groupJid", "chat_jid", "remote_jid", "remoteJid", "jid",
+                        "chat_id", "chatId", "from")
+
+
+def _neoffice_names_a_group(payload: Any) -> bool:
+    """Whether the payload says its message was written in a WhatsApp group, not in the sender's own chat."""
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("is_group") or payload.get("isGroup") or payload.get("group_id") or payload.get("group") is True:
+        return True
+    message_key = payload.get("key")  # Baileys' own shape: {key: {remoteJid}}
+    if isinstance(message_key, dict) and str(message_key.get("remoteJid") or "").strip().lower().endswith("@g.us"):
+        return True
+    return any(
+        isinstance(payload.get(name), str) and payload[name].strip().lower().endswith("@g.us") for name in _NEOFFICE_GROUP_KEYS
+    )
+
+
+def _neoffice_thread_of(session_key_mode: str, payload: Any) -> Optional[str]:
+    """The thread of a conversational message: the one its payload names, else, on a route keyed on the
+    sender's phone, that sender's chat; None when it has none (see the note above _NEOFFICE_THREAD_ID_RE)."""
+    # //// Neoffice — the thread a payload names wins; else, on a phone-keyed route, the sender's chat (24.10).
     thread = _neoffice_conversation_thread(payload)
+    if thread or not isinstance(payload, dict) or payload.get("conversation_id"):
+        return thread  # a named thread, or a probe's, which gets none
+    if session_key_mode == "phone" and not _neoffice_names_a_group(payload):
+        return _NEOFFICE_CHAT_THREAD
+    return None
+
+
+def _neoffice_thread_chat_id(route_name: str, session_key_mode: str, value: str, payload: Any) -> Optional[str]:
+    """The session chat id of the thread of *payload* on a conversational route, else None."""
+    thread = _neoffice_thread_of(session_key_mode, payload)
     return f"webhook:{route_name}:thread:{thread}:{session_key_mode}:{value}" if thread else None
 
 
 def _neoffice_is_thread_session(event: MessageEvent) -> bool:
-    """Whether *event* ran in a conversation thread's session (see _neoffice_thread_chat_id). A
+    """Whether *event* ran in a thread's session (see _neoffice_thread_chat_id): its chat id is
+    ``webhook:<route>:thread:<thread>:<mode>:<value>`` and the thread is the one its payload gives. A
     per-delivery chat id (``webhook:v2:<base64url>``) never holds ``:thread:``."""
-    thread = _neoffice_conversation_thread(event.raw_message)
+    # //// Neoffice — read from the chat id, then checked against the payload: the chat's thread too (24.10).
     chat_id = str(getattr(event.source, "chat_id", "") or "")
-    return bool(thread) and not chat_id.startswith("webhook:v2:") and f":thread:{thread}:" in chat_id
+    parts = chat_id.split(":")
+    if len(parts) < 6 or parts[0] != "webhook" or parts[1] == "v2" or parts[2] != "thread":
+        return False
+    return parts[3] == _neoffice_thread_of(parts[4], event.raw_message)
 
 
 def _neoffice_end_idle_thread_sessions(db: Any, cutoff: float, limit: int, busy_keys=frozenset()) -> int:
@@ -550,7 +593,10 @@ class WebhookAdapter(BasePlatformAdapter):
                     # reply reaches the real number, not "{phone}".
                     if any(isinstance(v, str) and "{phone}" in v for v in _de.values()):
                         import re as _rephone
-                        _m = _rephone.search(r"\+?\d{6,}", chat_id)
+                        # //// Neoffice — the number is what follows the LAST `:phone:` (24.10): a thread
+                        # //// goes before it in the chat id (_neoffice_thread_chat_id), and a thread id with
+                        # //// six digits in a row would otherwise send the late reply to that "number".
+                        _m = _rephone.search(r"\+?\d{6,}", chat_id.rpartition(":phone:")[2] or chat_id)
                         if _m:
                             _ph = _m.group(0)
                             _de = {k: (v.replace("{phone}", _ph) if isinstance(v, str) else v) for k, v in _de.items()}

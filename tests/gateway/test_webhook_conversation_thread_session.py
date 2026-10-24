@@ -151,7 +151,7 @@ async def test_thread_chat_id_keeps_the_person_last(harness):
 
 @pytest.mark.asyncio
 async def test_payload_without_a_thread_is_still_closed_after_its_run(harness):
-    """A conversational payload that names no thread (WhatsApp) keeps upstream's close."""
+    """A payload that names no thread on a route keyed on the person (not on a phone) keeps upstream's close."""
     adapter, store, turns = harness
     await _send(adapter, "Bonjour", conversation_id=None, route_name="person_chat")
     row = store._db.get_session(turns[0]["session_id"])
@@ -291,6 +291,130 @@ async def test_the_close_rechecks_the_idle_time_under_the_write_lock(harness):
     closed = webhook_module._neoffice_end_idle_thread_sessions(_StaleSelect(store._db), time.time() - 86400, 50)
     assert closed == 0
     assert store._db.get_session(session_id)["ended_at"] is None
+
+
+PHONE_A = "+41790000001"
+PHONE_B = "+41790000002"
+
+
+WA_USER = "linked.account@example.com"  # the instance account the router links to the number (#880)
+
+
+def _whatsapp_route() -> dict:
+    """The whatsapp_inbox route as provision writes it: keyed on the phone, the reply sent to {phone}."""
+    return {**_route("phone"), "deliver_extra": {"phone": "{phone}", "router_url": "http://router.invalid"}}
+
+
+async def _send_whatsapp(adapter, message: str, phone: str, **extra):
+    """One WhatsApp message as the central router forwards it (forward-body.js): no conversation_id,
+    the route keyed on the sender's phone, the linked account as `user`."""
+    payload = {"phone": phone, "message": message, "timestamp": "2026-10-24T10:00:00Z", "user": WA_USER,
+               "source": "whatsapp-router-v2", "message_id": f"wamid-{time.monotonic_ns()}", "is_audio": False}
+    payload.update(extra)
+    adapter._spawn_agent_run(payload, message, f"wa:{time.monotonic_ns()}", time.time(),
+                             route_config=_whatsapp_route(), route_name="whatsapp_inbox", profile=None,
+                             event_type="whatsapp")
+    deadline = asyncio.get_event_loop().time() + 5.0
+    while adapter._background_tasks and asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.05)
+
+
+@pytest.mark.asyncio
+async def test_a_whatsapp_chat_keeps_its_history_from_one_message_to_the_next(harness):
+    """WhatsApp sends no conversation_id: the chat with the number is the thread (24.10)."""
+    adapter, store, turns = harness
+    await _send_whatsapp(adapter, "Quelles factures sont échues ?", PHONE_A)
+    await _send_whatsapp(adapter, "Et le mois dernier ?", PHONE_A)
+
+    first, second = turns
+    assert first["chat_id"] == f"webhook:whatsapp_inbox:thread:chat:phone:{PHONE_A}"
+    assert second["session_id"] == first["session_id"]
+    assert _asked(second["history"]) == ["Quelles factures sont échues ?"]
+    assert store._db.get_session(first["session_id"])["ended_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_two_whatsapp_numbers_never_share_a_thread(harness):
+    """Even two numbers linked to the same account: the number keys the thread, and each reply goes to
+    its own number."""
+    adapter, _store, turns = harness
+    await _send_whatsapp(adapter, "Mon code d'accès est 4711.", PHONE_A)
+    await _send_whatsapp(adapter, "Qu'a dit le message précédent ?", PHONE_B)
+
+    a, b = turns
+    assert b["session_id"] != a["session_id"]
+    assert b["history"] == []
+    assert b["chat_id"].endswith(f":phone:{PHONE_B}") and a["chat_id"].endswith(f":phone:{PHONE_A}")
+    assert adapter._delivery_info[a["chat_id"]]["deliver_extra"]["phone"] == PHONE_A
+    assert adapter._delivery_info[b["chat_id"]]["deliver_extra"]["phone"] == PHONE_B
+
+
+@pytest.mark.parametrize("group", [
+    {"is_group": True},
+    {"group": True},
+    {"remote_jid": "120363000000000000@g.us"},
+    {"group_id": "120363000000000000@g.us"},
+    {"from": "120363000000000000@G.US"},
+    {"key": {"remoteJid": "120363000000000000@g.us"}},
+])
+@pytest.mark.asyncio
+async def test_a_group_message_is_never_taken_for_the_persons_chat(harness, group):
+    """The central router drops group messages today; if one came, it would get no thread, never the
+    sender's own chat, and its session would close after its run."""
+    adapter, store, turns = harness
+    await _send_whatsapp(adapter, "Bonjour, ici la personne.", PHONE_A)
+    await _send_whatsapp(adapter, "Bonjour le groupe.", PHONE_A, **group)
+
+    chat, in_group = turns
+    assert ":thread:" not in in_group["chat_id"]
+    assert in_group["session_id"] != chat["session_id"]
+    assert in_group["history"] == []
+    assert store._db.get_session(in_group["session_id"])["end_reason"] == "webhook_complete"
+    assert store._db.get_session(chat["session_id"])["ended_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_whatsapp_chat_idle_for_a_day_is_closed_and_starts_anew(harness):
+    adapter, store, turns = harness
+    await _send_whatsapp(adapter, "Quelles factures sont échues ?", PHONE_A)
+    old = turns[0]["session_id"]
+    _age(store, old)
+    adapter._neoffice_last_thread_sweep = 0.0
+    await _send_whatsapp(adapter, "Bonjour", PHONE_B)  # any thread's turn runs the sweep
+    assert store._db.get_session(old)["end_reason"] == "webhook_thread_idle"
+
+    await _send_whatsapp(adapter, "Et aujourd'hui ?", PHONE_A)
+    assert turns[2]["session_id"] != old
+    assert turns[2]["history"] == []
+
+
+@pytest.mark.parametrize("extra", [
+    {},
+    {"conversation_id": "41790000002"},  # a thread id made of digits, a number's look-alike
+    {"conversation_id": "550e8400-e29b-41d4-a716-446655440000"},
+])
+@pytest.mark.asyncio
+async def test_a_late_whatsapp_reply_still_finds_its_number(harness, monkeypatch, extra):
+    """A pole's late answer comes back by the chat id alone once the delivery info expired: send() reads
+    the number after the last `:phone:` of the chat id, whatever thread goes before it."""
+    adapter, _store, turns = harness
+    await _send_whatsapp(adapter, "Quelles factures sont échues ?", PHONE_A, **extra)
+    chat_id = turns[0]["chat_id"]
+    adapter._delivery_info.pop(chat_id, None)
+    adapter._routes = {"whatsapp_inbox": {"deliver": "whatsapp_router",
+                                          "deliver_extra": {"phone": "{phone}", "router_url": "http://router.invalid"}}}
+    sent = {}
+
+    async def _capture(content, delivery):
+        sent.update(delivery)
+        from gateway.platforms.base import SendResult
+
+        return SendResult(success=True)
+
+    monkeypatch.setattr(adapter, "_deliver_whatsapp_router", _capture)
+    await adapter.send(chat_id, "Voici les factures.", metadata={"conversation_id": "late-1"})
+    assert sent["deliver_extra"]["phone"] == PHONE_A
 
 
 def test_a_thread_id_outside_the_safe_alphabet_becomes_a_digest():
