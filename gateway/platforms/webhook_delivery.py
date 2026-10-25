@@ -9,11 +9,11 @@ from hermes_state_runtime import RuntimeStoreError
 # //// WhatsApp router (``whatsapp_router``). Upstream persists only a platform's chat id or a GitHub PR with
 # //// each admission, and refuses any other ``deliver`` as invalid_params, so an admission on our routes was
 # //// refused outright. What is persisted here is only what differs per MESSAGE (the desk conversation, the
-# //// number, whether the answer is voice); the callback URL and token, the router URL and key are the
+# //// number, whether the answer is voice, a test's loopback router: see webhook._neoffice_bench_router); the callback URL and token, the router URL and key are the
 # //// ROUTE's, read at delivery time from the route config, never copied into the queue (the same reason
 # //// upstream drops extras: they can hold credentials). ``language`` rides with them for the failure
 # //// sentence. See WebhookAdapter._neoffice_complete_destination.
-_NEOFFICE_CHAT_FIELDS = {'nora': ('conversation_id',), 'whatsapp_router': ('phone', 'is_audio')}
+_NEOFFICE_CHAT_FIELDS = {'nora': ('conversation_id',), 'whatsapp_router': ('phone', 'is_audio', 'bench_router_url')}
 # //// END Neoffice ////
 
 

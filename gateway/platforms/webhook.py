@@ -26,6 +26,7 @@ from datetime import datetime, timezone, UTC
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from typing import Any, Deque, Dict, List, Optional
+from urllib.parse import urlsplit  # //// Neoffice — _neoffice_bench_router
 
 try:
     from aiohttp import web
@@ -291,6 +292,32 @@ def _neoffice_inject_datetime_tokens(payload: dict, now=None) -> dict:
 # //// gateway restart. Route-prefixed like upstream's derived ids (open PR #33384), so it
 # //// cannot collide with another route's ids. Absent or blank: unchanged behaviour.
 _NEOFFICE_PROVIDER_ID_ROUTES = frozenset({"whatsapp_inbox"})
+
+
+# //// Neoffice — a test's own WhatsApp router, on this machine only (25.10). The latency bench of hermes-poc
+# //// (tests/llm/22) posts real messages on the whatsapp_inbox route with made-up numbers, and their replies went to
+# //// the central router on the hub, which waited 15 s on WhatsApp for each one: twelve attempts per worker result,
+# //// 24 timeouts in the log at every run, on the router every client's WhatsApp goes through. The route declares
+# //// `bench_router_url: '{bench_router_url}'`: a payload that gives an http address of THIS machine has its replies
+# //// sent there, without the central router's key. Any other value changes nothing, and a payload of the real
+# //// router has no such field (the template stays literal), so its replies go where they always went.
+_NEOFFICE_BENCH_ROUTER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _neoffice_bench_router(extra: dict) -> dict:
+    """*extra* with its router address and key replaced by the payload's loopback bench router, if it gives one."""
+    url = extra.get("bench_router_url")
+    if not isinstance(url, str) or not url.startswith("http://"):
+        return extra
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname
+    except ValueError:
+        return extra
+    if host not in _NEOFFICE_BENCH_ROUTER_HOSTS or parsed.username or parsed.password:
+        return extra
+    return {**extra, "router_url": url.rstrip("/"), "router_api_key": "bench-router"}
+# //// END Neoffice ////
 
 
 def _neoffice_provider_delivery_id(route_name: str, payload: Any, delivery_id: str) -> str:
@@ -1906,8 +1933,9 @@ class WebhookAdapter(BasePlatformAdapter):
 
     def _render_delivery_extra(self, extra: dict, payload: dict) -> dict:
         """Render delivery_extra template values with payload data."""
-        return {key: self._render_prompt(value, payload, "", "") if isinstance(value, str) else value
-                for key, value in extra.items()}
+        return _neoffice_bench_router(  # //// Neoffice — a test's loopback router, see _neoffice_bench_router
+            {key: self._render_prompt(value, payload, "", "") if isinstance(value, str) else value
+             for key, value in extra.items()})
 
     # --- Response delivery ---
 
