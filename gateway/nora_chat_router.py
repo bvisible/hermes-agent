@@ -2455,7 +2455,12 @@ _MAIL_HINT = (
     "to click it. « Prends rendez-vous », « mets-le dans mon agenda »: nora_doc_observe again (the message read NOW: "
     "they may have opened another since), then ONE nora_mail_event(its `message` key, the day and the time read in "
     "it, the participants among its people): a card they click adds it to their calendar, "
-    "nothing is sent; never say it is in the calendar before. Their other mail: nora_mail_search, "
+    "nothing is sent; never say it is in the calendar before. Their other mail, or the whole mailbox (« mon résumé du "
+    "matin », « qu'est-ce qui attend ma réponse ? », the recipes of the pane): nora_mail_search (`since`, `before`, "
+    "`unread`, `folder` « sent » for what they sent; each message says whether they `answered` it), "
+    # //// Neoffice — what the person SENT that nobody answered is one tool (31.10.2026), not a search of the Sent folder
+    # //// and then one search of the Inbox for each recipient.
+    "nora_mail_unanswered (what they SENT that nobody answered, with the days it waited), "
     # //// Neoffice — finding a file writes nothing, and a file is its card (24.10.2026). Asked from an open message,
     # //// the agent searched the word « facture » alone and named another invoice as « the » one: the message's key
     # //// first, and a file found by its name only is said as such.
