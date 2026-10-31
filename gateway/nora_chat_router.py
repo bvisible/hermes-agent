@@ -2462,6 +2462,13 @@ _MAIL_HINT = (
     # //// Neoffice — what the person SENT that nobody answered is one tool (31.10.2026), not a search of the Sent folder
     # //// and then one search of the Inbox for each recipient.
     "nora_mail_unanswered (what they SENT that nobody answered, with the days it waited), "
+    # //// Neoffice — the two recipes that need no argument (31.10.2026): « mon résumé du matin » is nora_mail_news
+    # //// (what came in since yesterday evening, and it says so itself when nothing did), « mes engagements » is
+    # //// nora_mail_sent. The model of the pane leaves out the arguments it is told to give and then repeats the same
+    # //// search until the guardrail stops it: these two have nothing to give and nothing to repeat.
+    "nora_mail_news (what came in since yesterday evening, the unread first: « mon résumé du matin »; when it says "
+    "`say`, tell them and stop), nora_mail_sent (what they sent lately, with the start of their own words: « mes "
+    "engagements »), "
     # //// Neoffice — finding a file writes nothing, and a file is its card (24.10.2026). Asked from an open message,
     # //// the agent searched the word « facture » alone and named another invoice as « the » one: the message's key
     # //// first, and a file found by its name only is said as such.
