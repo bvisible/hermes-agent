@@ -2456,8 +2456,9 @@ _MAIL_HINT = (
     "they may have opened another since), then ONE nora_mail_event(its `message` key, the day and the time read in "
     "it, the participants among its people): a card they click adds it to their calendar, "
     "nothing is sent; never say it is in the calendar before. Their other mail, or the whole mailbox (« mon résumé du "
-    "matin », « qu'est-ce qui attend ma réponse ? », the recipes of the pane): nora_mail_search (`since`, `before`, "
-    "`unread`, `folder` « sent » for what they sent; each message says whether they `answered` it), "
+    "matin », « qu'est-ce qui attend ma réponse ? », the recipes of the pane): nora_mail_search (`days` for « the last "
+    "14 days »: you have no clock, the answer says `today`; `since`, `before`, `unread`, `folder` « sent » for what they "
+    "sent; each message says whether they `answered` it), "
     # //// Neoffice — what the person SENT that nobody answered is one tool (31.10.2026), not a search of the Sent folder
     # //// and then one search of the Inbox for each recipient.
     "nora_mail_unanswered (what they SENT that nobody answered, with the days it waited), "
