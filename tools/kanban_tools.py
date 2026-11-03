@@ -133,10 +133,6 @@ _UNDECLARED_ARGS: dict[str, frozenset[str]] = {
     "kanban_create": frozenset({"session_id", "project_id"}),
     # ``title`` is the pre-schema alias of ``filename`` that ``_handle_attach_url`` still honours.
     "kanban_attach_url": frozenset({"title"}),
-    # //// Neoffice — `result` is no longer offered to the model (tools/kanban_tools_schemas.py, the workers
-    # //// filled it instead of `summary` since the engine moved to vLLM 0.31, maintenance#2164) but the CLI's
-    # //// --result and the legacy callers still pass it, and the handler reads it.
-    "kanban_complete": frozenset({"result"}),
 }
 
 
