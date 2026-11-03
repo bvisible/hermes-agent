@@ -92,8 +92,9 @@ KANBAN_COMPLETE_SCHEMA = _schema(
         "Mark your current task done with a structured handoff for others. Prefer ``summary`` for a "
         "human-readable 1-3 sentence description of what you did; put "
         "machine-readable facts in ``metadata`` (changed_files, "
-        "tests_run, decisions, findings, etc). At least one of "
-        "``summary`` or ``result`` is required. If you created new "
+        # //// Neoffice — `summary` is required and `result` is no longer offered (maintenance#2164): see below.
+        "tests_run, decisions, findings, etc). ``summary`` is required: it is the answer the person "
+        "reads, with every figure, name and justification the task asked for. If you created new "
         "tasks via ``kanban_create`` during this run, list their ids "
         "in ``created_cards`` — the kernel verifies them so phantom "
         "references are caught before they leak into downstream "
@@ -117,12 +118,11 @@ KANBAN_COMPLETE_SCHEMA = _schema(
                 "\"findings\": [...]}. Surfaced to downstream "
                 "workers alongside ``summary``."
         )),
-        "result": _prop("string", (
-                "Short result log line (legacy field, maps to "
-                "task.result). Use ``summary`` instead when "
-                "possible; this exists for compatibility with "
-                "callers that still set --result on the CLI."
-        )),
+        # //// Neoffice — `result` (the one-line log field) is not offered to the model. Since the inference
+        # //// engine moved to vLLM 0.31 (30.10) the workers fill it INSTEAD of `summary`: the person gets one
+        # //// line without the justification the task asked for (accounting answers: 100% `summary` until
+        # //// 30.10, 5% on 02.11; the previous Hermes commit behaves the same). The handler still accepts
+        # //// `result` from the CLI. Restore the property once the engine is cleared (maintenance#2164).
         "created_cards": {
             "type": "array",
             "items": {"type": "string"},
@@ -161,7 +161,7 @@ KANBAN_COMPLETE_SCHEMA = _schema(
             ),
         },
     },
-    [],
+    ["summary"],  # //// Neoffice — was [] (see the `result` note above) ////
 )
 
 KANBAN_BLOCK_SCHEMA = _schema(
