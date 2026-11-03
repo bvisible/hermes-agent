@@ -491,6 +491,13 @@ _CLASSIFIER_SYSTEM = (
     "adresse), prix, réapprovisionnement — commandes FOURNISSEURS "
     # //// END Neoffice ////
     "incluses (« commander 15 unités », « passer commande au fournisseur »).\n"
+    # //// Neoffice — the restaurant owner's SHOPPING LIST is ventes' (03.11): « je fais ma liste de courses », « il me faut des
+    # //// carottes et deux caisses de bière ». The classifier answered 'direct' to both, so the orchestrator routed the first by
+    # //// itself, no pole was remembered (_LAST_ROUTE), and the owner's « oui » after Nora's read-back went 'direct' again: an
+    # //// empty promise, nothing written. Named here, the first turn is routed by the router and the yes stays on the pole.
+    "  Et la LISTE DE COURSES du restaurateur : ce qu'il lui faut acheter, dicté ou écrit (« je fais ma liste de courses », "
+    "« il me faut des carottes et deux caisses de bière », « ajoute du sel à la liste »).\n"
+    # //// END Neoffice ////
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     # //// Neoffice — the rh pole's real scope since 2026-09-23 (hr_* tools): what
@@ -1525,6 +1532,16 @@ def _take_sheet_offer(conversation_id: Optional[str]) -> bool:
 # //// END Neoffice ////
 
 
+# //// Neoffice — the restaurant owner's shopping list (03.11), in the chat's four languages. « liste d'achat » in the singular
+# //// only: « la liste des achats du mois » is a purchase report (compta), and so is « la liste d'achats de septembre ».
+_SHOPPING_LIST_RE = re.compile(
+    r"\bliste\s+de\s+courses\b|\bliste\s+d['\u2019]\s*achat\b|\bcourses\s+[àa]\s+faire\b"
+    r"|\bshopping\s+list\b|\beinkaufsliste\b|\blista\s+della\s+spesa\b",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -1539,6 +1556,10 @@ _FAST_PATH_RULES = (
     # //// Neoffice — a letter to post, see _LETTER_REQUEST_RE (21.10): before every rule a letter's words can meet (the
     # //// dunning rule's « relance », a job, a contact change, an e-mail), after recruitment (a cover letter is rh's).
     (_LETTER_REQUEST_RE, "support"),
+    # //// END Neoffice ////
+    # //// Neoffice — the owner's shopping list is ventes' (03.11): see _SHOPPING_LIST_RE. Only ventes holds the two tools
+    # //// that propose it and write it (frappe_shopping_list_propose / _add).
+    (_SHOPPING_LIST_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
