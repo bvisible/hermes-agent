@@ -498,6 +498,12 @@ _CLASSIFIER_SYSTEM = (
     "  Et la LISTE DE COURSES du restaurateur : ce qu'il lui faut acheter, dicté ou écrit (« je fais ma liste de courses », "
     "« il me faut des carottes et deux caisses de bière », « ajoute du sel à la liste »).\n"
     # //// END Neoffice ////
+    # //// Neoffice — the restaurant owner builds the CARD of his till by talking (03.11, « créer la carte avec Nora »): « j'aimerais
+    # //// des cafés », « je fais les boissons froides », « maintenant j'ajoute les vins ». The orchestrator read it as a recurring
+    # //// task (« une commande de café quotidienne ») and scheduled one: named here, it is ventes' (the pole that holds the card's tools).
+    "  Et la CARTE du restaurant (les boutons de sa caisse) : la composer en parlant, un morceau à la fois (« j'aimerais des cafés », "
+    "« je fais les boissons froides », « maintenant j'ajoute les vins », « on passe aux plats »). Jamais une tâche récurrente.\n"
+    # //// END Neoffice ////
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     # //// Neoffice — the rh pole's real scope since 2026-09-23 (hr_* tools): what
@@ -1542,6 +1548,23 @@ _SHOPPING_LIST_RE = re.compile(
 # //// END Neoffice ////
 
 
+# //// Neoffice — the card of the restaurant's till built by talking (03.11). Either the card and its buttons named, or a wish or a gesture
+# //// (« j'aimerais », « je fais », « ajoute ») followed by a family of the card (cafés, boissons, vins, plats…). Never a document's
+# //// words (facture, devis, commande, stock…), never a question (« quel est le prix du vin ? »): those are the classifier's.
+_RESTO_CARD_RE = re.compile(
+    r"\bboutons?\s+de\s+(?:la\s+)?caisse\b|\bcarte\s+du\s+restaurant\b|\bma\s+caisse\s+est\s+vide\b"
+    r"|\bcr[ée]e[rz]?\s+(?:ma|notre|la)\s+carte\b"
+    r"|^(?!.*\b(?:factur\w*|devis|commandes?|livraisons?|stock|inventaire|client\w*|fournisseurs?|rapports?|chiffre|statistiques?"
+    r"|savoir|combien|quels?|quelles?|prix)\b)"
+    r"(?=.*\b(?:j['\u2019]aimerais|je\s+voudrais|je\s+veux|on\s+(?:fait|passe)|passons|je\s+(?:vais\s+)?(?:fais|fait|cr[ée]e|ajoute)"
+    r"|ajoute[rz]?|cr[ée]e[rz]?|mets?)\b)"
+    r".*\b(?:caf[ée]s?|th[ée]s?|boissons?|vins?|bi[èe]res?|ap[ée]ritifs?|digestifs?|cocktails?|softs?|entr[ée]es?|plats?|desserts?"
+    r"|pizzas?|poissons?|viandes?|p[âa]tes|salades?|glaces?)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -1560,6 +1583,9 @@ _FAST_PATH_RULES = (
     # //// Neoffice — the owner's shopping list is ventes' (03.11): see _SHOPPING_LIST_RE. Only ventes holds the two tools
     # //// that propose it and write it (frappe_shopping_list_propose / _add).
     (_SHOPPING_LIST_RE, "ventes"),
+    # //// END Neoffice ////
+    # //// Neoffice — the card of the restaurant's till is ventes' too (03.11): see _RESTO_CARD_RE. Its three tools live in that pole.
+    (_RESTO_CARD_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
