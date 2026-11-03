@@ -502,7 +502,8 @@ _CLASSIFIER_SYSTEM = (
     # //// des cafés », « je fais les boissons froides », « maintenant j'ajoute les vins ». The orchestrator read it as a recurring
     # //// task (« une commande de café quotidienne ») and scheduled one: named here, it is ventes' (the pole that holds the card's tools).
     "  Et la CARTE du restaurant (les boutons de sa caisse) : la composer en parlant, un morceau à la fois (« j'aimerais des cafés », "
-    "« je fais les boissons froides », « maintenant j'ajoute les vins », « on passe aux plats »). Jamais une tâche récurrente.\n"
+    "« je fais les boissons froides », « maintenant j'ajoute les vins », « on passe aux plats », « pour le vin, c'est la cave X »). "
+    "Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
@@ -1554,6 +1555,11 @@ _SHOPPING_LIST_RE = re.compile(
 _RESTO_CARD_RE = re.compile(
     r"\bboutons?\s+de\s+(?:la\s+)?caisse\b|\bcarte\s+du\s+restaurant\b|\bma\s+caisse\s+est\s+vide\b"
     r"|\bcr[ée]e[rz]?\s+(?:ma|notre|la)\s+carte\b"
+    # the supplier of a family, as the owner says it (« pour le vin, c'est la cave X »); an opinion (« le vin, c'est cher ») is not one
+    r"|\b(?:vins?|bi[èe]res?|caf[ée]s?|boissons?|viandes?|poissons?|l[ée]gumes?|fromages?|pain)\s*[,:]?\s+c['\u2019]est\s+"
+    r"(?!(?:le\s+|la\s+)?(?:meilleur|pire|bon|mauvais|plus|moins|trop|cher|tr[èe]s)\b)(?:chez\b|la\b|le\b|l['\u2019]|les\b)"
+    r"|\bfournisseur\s+(?:de|du|des|d['\u2019])\s*(?:vins?|bi[èe]res?|caf[ée]s?|boissons?|viandes?|poissons?|l[ée]gumes?|fromages?|pain)\b"
+    r"[^.!?]{0,20}\bc['\u2019]est\b"
     r"|^(?!.*\b(?:factur\w*|devis|commandes?|livraisons?|stock|inventaire|client\w*|fournisseurs?|rapports?|chiffre|statistiques?"
     r"|savoir|combien|quels?|quelles?|prix)\b)"
     r"(?=.*\b(?:j['\u2019]aimerais|je\s+voudrais|je\s+veux|on\s+(?:fait|passe)|passons|je\s+(?:vais\s+)?(?:fais|fait|cr[ée]e|ajoute)"

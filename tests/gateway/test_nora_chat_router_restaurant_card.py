@@ -21,6 +21,10 @@ THE_CARD = [
     "Ma caisse est vide",
     "Ajoute des bières à la carte",
     "Je fais les boissons froides",
+    # the supplier of a family, said as the owner says it
+    "Pour le vin, c'est la Cave régionale.",
+    "Le vin, c'est chez Dupont",
+    "Mon fournisseur de bière, c'est la Brasserie du Lac",
 ]
 
 NOT_THE_CARD = [
@@ -35,6 +39,9 @@ NOT_THE_CARD = [
     # nothing of the card
     "J'aimerais un rendez-vous demain",
     "Crée un client",
+    # an opinion is not a supplier
+    "Le vin, c'est cher",
+    "Le café, c'est le meilleur du monde",
 ]
 
 
