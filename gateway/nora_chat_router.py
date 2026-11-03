@@ -3257,6 +3257,8 @@ _DOCTYPE_POLES = {
     "Staffing Plan": "rh",
     "Project": "projet", "Task": "projet", "Timesheet": "projet",
     "Issue": "support", "HD Ticket": "support",
+    # //// Neoffice — the restaurant's shopping list page declares its list (03.11), see _SHOPPING_PAGE_RE.
+    "Restaurant Shopping List": "ventes",
 }
 # //// END Neoffice ////
 
@@ -3286,10 +3288,32 @@ _POINTS_AT_THE_PAGE_RE = re.compile(
 )
 
 
+# //// Neoffice — the shopping list page (03.11). The page declares its list to Nora like a page that shows a document, and
+# //// the owner says « ajoute cinq kilos d'oignons » there: no demonstrative, no « liste de courses », so the classifier was left
+# //// to guess. A message that speaks of the list (add, remove, « il me faut ») is the page's; anything else said on the same
+# //// page (« mon chiffre d'affaires du mois ») stays with the classifier. The doctype exists only where the restaurant is on, so
+# //// this never reaches another instance.
+_SHOPPING_PAGE_DOCTYPE = "Restaurant Shopping List"
+_SHOPPING_PAGE_RE = re.compile(
+    r"\b(?:"
+    r"r?ajout(?:e|er|ez)?|mets|mettre|retire|retirer|enl[eè]ve|enlever|supprime|supprimer"
+    r"|il\s+(?:me|nous)\s+faut|j['\u2019]ai\s+besoin|on\s+a\s+besoin|besoin\s+de"
+    r"|add|put|remove|delete|i\s+need|we\s+need"
+    r"|f[üu]ge?n?|hinzu|entferne|l[öo]sche|ich\s+brauche|wir\s+brauchen"
+    r"|aggiung\w*|togli|rimuovi|elimina|mi\s+serve|ho\s+bisogno"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def _page_document_pole(message: str, page_doctype: Optional[str]) -> Optional[str]:
     """The pole of the document open on the page when the message points at it, else None."""
     pole = _DOCTYPE_POLES.get(page_doctype or "")
-    if pole in POLES and _POINTS_AT_THE_PAGE_RE.search(message or ""):
+    # //// Neoffice — the shopping list page speaks for its list too, see _SHOPPING_PAGE_RE.
+    if pole in POLES and (
+        _POINTS_AT_THE_PAGE_RE.search(message or "")
+        or (page_doctype == _SHOPPING_PAGE_DOCTYPE and _SHOPPING_PAGE_RE.search(message or ""))
+    ):
         return pole
     return None
 # //// END Neoffice ////
