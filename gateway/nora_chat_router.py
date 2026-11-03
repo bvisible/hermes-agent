@@ -495,8 +495,12 @@ _CLASSIFIER_SYSTEM = (
     # //// carottes et deux caisses de bière ». The classifier answered 'direct' to both, so the orchestrator routed the first by
     # //// itself, no pole was remembered (_LAST_ROUTE), and the owner's « oui » after Nora's read-back went 'direct' again: an
     # //// empty promise, nothing written. Named here, the first turn is routed by the router and the yes stays on the pole.
+    # //// The same pole reads the list back and mends it (take a line off, change a quantity, empty it): those words name no « courses »,
+    # //// so the classifier is told them too, or « enlève la bière de la liste » would be a 'direct' answer that changes nothing.
     "  Et la LISTE DE COURSES du restaurateur : ce qu'il lui faut acheter, dicté ou écrit (« je fais ma liste de courses », "
-    "« il me faut des carottes et deux caisses de bière », « ajoute du sel à la liste »).\n"
+    "« il me faut des carottes et deux caisses de bière », « ajoute du sel à la liste »), et ce qu'il en fait ensuite : la relire, "
+    "y retirer une ligne, en changer une quantité, la vider (« qu'est-ce qu'il y a sur ma liste ? », « enlève la bière de la liste », "
+    "« mets-en cinq au lieu de deux », « vide la liste »).\n"
     # //// END Neoffice ////
     # //// Neoffice — the restaurant owner builds the CARD of his till by talking (03.11, « créer la carte avec Nora »): « j'aimerais
     # //// des cafés », « je fais les boissons froides », « maintenant j'ajoute les vins ». The orchestrator read it as a recurring

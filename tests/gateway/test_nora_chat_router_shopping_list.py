@@ -46,3 +46,17 @@ def test_the_classifier_is_told_what_the_owner_says_without_the_word_list():
     # « il me faut des carottes et deux caisses de bière » names no list: the classifier has to know it is the list
     assert "LISTE DE COURSES" in _CLASSIFIER_SYSTEM
     assert "il me faut des carottes" in _CLASSIFIER_SYSTEM
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        "qu'est-ce qu'il y a sur ma liste",  # reading it back
+        "enlève la bière de la liste",  # taking a line off
+        "mets-en cinq au lieu de deux",  # a quantity
+        "vide la liste",  # emptying it
+    ],
+)
+def test_the_classifier_is_told_how_the_owner_mends_the_list(words):
+    # none of these names « courses »: without them the classifier answers 'direct' and nothing is changed (03.11)
+    assert words in _CLASSIFIER_SYSTEM
