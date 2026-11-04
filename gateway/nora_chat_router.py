@@ -3502,10 +3502,144 @@ def build_ack(pole: str, language: Optional[str] = None) -> str:
     # //// END Neoffice ////
 
 
+# //// Neoffice — added (04.11, #1568): stopping a request in flight. NORA Live hears « non, laisse tomber » or
+# //// « non, plutôt dix pièces » while a pole works, and nothing could stop the pole's task: the worker went on and
+# //// wrote its quotation, and a correction started a second worker beside the first (487 tasks created in a thread
+# //// whose previous task was not over, osiris' kanban since 03.06). nora names every message it sends by a request
+# //// id, the webhook delivery id « <conversation>:<ms> » that is also the router task's idempotency key; a stop
+# //// (event `chat_cancel`, signed like a message, webhook._neoffice_handle_chat_cancel) names the request ids to stop.
+# //// A task not over yet is archived: the kernel terminates its worker (kanban_db.archive_task), and the worker
+# //// refuses any tool once its task is archived (tools/mcp_tool_handlers._neoffice_task_stopped), so a stop that
+# //// lands between two calls never lets the next one leave. A request the router has not turned into a task yet is
+# //// remembered here and never becomes one. Every reply of a request carries its id (the ack and the router's own
+# //// answers through _post_ack_to_callback, the pole's result through _add_notify_sub): nora drops what a stopped
+# //// request still sends, and the page matches an answer to its request instead of to the next one waiting.
+import contextvars as _contextvars_req
+import time as _time_req
+
+_CURRENT_REQUEST = _contextvars_req.ContextVar("nora_chat_request", default="")
+_CANCELLED_REQUESTS: dict = {}       # request id -> (time of the stop, reason)
+_CANCELLED_KEEP_S = 3600.0
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,140}:\d{10,16}$")
+_OVER_STATUSES = ("done", "archived")
+
+
+def _request_id_of(conversation_id: Optional[str], idempotency_key: Optional[str]) -> str:
+    """The request id the replies of this message carry: the delivery id when it is the conversation's own request key
+    (« <conversation>:<ms> », as nora sends it), else ''. A delivery id that is no request key (a WhatsApp provider id,
+    a test's) tags nothing, as before."""
+    key, cid = str(idempotency_key or ""), str(conversation_id or "")
+    return key if cid and key.startswith(cid + ":") and _REQUEST_ID_RE.match(key) else ""
+
+
+def request_cancelled(request_id: Optional[str]) -> bool:
+    """Whether the person stopped this request (kept an hour: a reply later than that is no longer awaited by anyone)."""
+    if not request_id:
+        return False
+    now = _time_req.time()
+    for key, (at, _reason) in list(_CANCELLED_REQUESTS.items()):
+        if now - at > _CANCELLED_KEEP_S:
+            _CANCELLED_REQUESTS.pop(key, None)
+    return request_id in _CANCELLED_REQUESTS
+
+
+def cancel_chat_requests(*, conversation_id: str, request_ids, reason: str = "cancel",
+                         board: Optional[str] = None) -> dict:
+    """Stop the requests of *conversation_id* named in *request_ids* (see the block's header).
+
+    Returns ``{request_id: {"outcome": …, "task_id": …}}``, the outcome saying what is true for the person:
+      ``stopped``         its task was not over: archived, its worker terminated before it finished;
+      ``already_done``    its task had finished before the stop: what it did stays done;
+      ``already_stopped`` its task was archived already;
+      ``not_started``     no task yet (the router is deciding, or it answers in another way): none will be made;
+      ``refused``         not a request of this conversation.
+    The stop is remembered BEFORE the board is read: the router checks it after creating a task (route_chat_message),
+    so a stop and a creation that cross each other still end with the task archived."""
+    cid = str(conversation_id or "").strip()
+    reason = reason if reason in ("cancel", "correction") else "cancel"
+    out: dict = {}
+    wanted = []
+    for rid in list(request_ids or [])[:20]:
+        rid = str(rid or "").strip()
+        if not rid:
+            continue
+        if not _request_id_of(cid, rid):
+            out[rid] = {"outcome": "refused", "task_id": None}
+            continue
+        _CANCELLED_REQUESTS[rid] = (_time_req.time(), reason)
+        wanted.append(rid)
+    if not wanted:
+        return out
+    from hermes_cli import kanban_db, kanban_db_connect
+
+    conn = kanban_db_connect.connect(board=board)
+    try:
+        for rid in wanted:
+            rows = conn.execute("SELECT id, status, title FROM tasks WHERE idempotency_key = ?", (rid,)).fetchall()
+            if not rows:
+                out[rid] = {"outcome": "not_started", "task_id": None}
+                _note_stop_in_film(cid, "not_started", "")
+                continue
+            for row in rows:
+                task_id, status, title = row[0], row[1], row[2]
+                if status == "done":
+                    outcome = "already_done"
+                elif status == "archived":
+                    outcome = "already_stopped"
+                else:
+                    outcome = "stopped" if kanban_db.archive_task(conn, task_id) else "already_stopped"
+                out[rid] = {"outcome": outcome, "task_id": task_id, "status": status}
+                _note_stop_in_film(cid, outcome, title)
+                logger.info("nora_chat_router: %s of cid=%s request=%s task=%s (was %s) → %s",
+                            reason, cid, rid, task_id, status, outcome)
+    finally:
+        conn.close()
+    return out
+
+
+def _note_stop_in_film(conversation_id: str, outcome: str, title: Optional[str]) -> None:
+    """The stop, in the conversation's film: the worker of the next turn reads the stopped request among the person's
+    turns and would take it as done (« entities created in earlier turns ALREADY EXIST »): « non, plutôt dix pièces »
+    would look for the quotation of five that was never made, or make a second one beside it."""
+    what = f"« {' '.join(str(title or '').split())[:200]} »" if title else "their previous request"
+    if outcome == "already_done":
+        line = f"[The person stopped {what} after it was done: what it did stays done.]"
+    elif outcome == "stopped":
+        line = (f"[The person stopped {what} before it was finished: do not carry it out. "
+                "Before writing anything for the next request, check what it may already have written.]")
+    elif outcome == "not_started":
+        line = f"[The person stopped {what} before any work began: nothing of it was done; do not carry it out.]"
+    else:
+        return
+    note_nora_reply(conversation_id, line)
+
+
+def _retire_unanswered_questions(kanban_db, conn, conversation_id: Optional[str], keep: str) -> list:
+    """Archive the earlier tasks of the conversation still blocked on a question to the person (#1568). The answer to
+    such a question is a new message, so a new task with the conversation's film; the blocked one was never resumed and
+    stayed blocked for good (476 of the 487 cases, 57 of them still blocked on 14.10). Only a question (`needs_input`);
+    a task blocked on anything else waits for that."""
+    cid = str(conversation_id or "")
+    if not cid:
+        return []
+    prefix = cid + ":"
+    rows = conn.execute(
+        "SELECT id FROM tasks WHERE substr(idempotency_key, 1, ?) = ? AND status = 'blocked' "
+        "AND block_kind = 'needs_input' AND id != ?",
+        (len(prefix), prefix, keep),
+    ).fetchall()
+    retired = [row[0] for row in rows if kanban_db.archive_task(conn, row[0])]
+    if retired:
+        logger.info("nora_chat_router: cid=%s answered by task %s, questions retired: %s", cid, keep, retired)
+    return retired
+# //// END Neoffice ////
+
+
 # //// Neoffice — page_context added: the voice source of the request rides in the notify subscription's
 # //// delivery_metadata, so the ERP worker that answers it keeps the voice priority (-10) instead of 0.
+# //// request_id added (#1568): the pole's result names the request it answers, see cancel_chat_requests.
 def _add_notify_sub(notify_db, conn, *, conversation_id: Optional[str] = None,
-                    page_context: Optional[dict] = None, **kw) -> None:
+                    page_context: Optional[dict] = None, request_id: str = "", **kw) -> None:
     """Subscribe the notifier so the worker's terminal result comes back to THIS chat.
 
     The desk conversation id rides in upstream's ``delivery_metadata`` (a JSON blob the
@@ -3523,6 +3657,8 @@ def _add_notify_sub(notify_db, conn, *, conversation_id: Optional[str] = None,
     pc = page_context if isinstance(page_context, dict) else {}
     source = str(pc.get("source") or "").strip()
     metadata["neoffice_request_source"] = source if source in VOICE_SOURCES else ""
+    if request_id:
+        metadata["neoffice_request_id"] = request_id  # //// Neoffice — #1568, read back by webhook.send ////
     kw["delivery_metadata"] = metadata
     notify_db.add_notify_sub(conn, **kw)
 
@@ -3549,7 +3685,12 @@ def _post_ack_to_callback(ack: str, deliver_extra: Optional[dict]) -> bool:
     import json as _json
     import urllib.request
 
-    body = _json.dumps({"conversation_id": cid, "text": ack}).encode()
+    body = {"conversation_id": cid, "text": ack}
+    # //// Neoffice — the request this reply answers, when the message named one (#1568, see cancel_chat_requests)
+    if _CURRENT_REQUEST.get():
+        body["request_id"] = _CURRENT_REQUEST.get()
+    body = _json.dumps(body).encode()
+    # //// END Neoffice ////
     req = urllib.request.Request(
         url,
         data=body,
@@ -4214,6 +4355,15 @@ def route_chat_message(
     # //// Neoffice — a WhatsApp chat sends no conversation_id: its thread is the number, see chat_thread.
     if not conversation_id:
         conversation_id = chat_thread(session_chat_id)
+    # //// END Neoffice ////
+    # //// Neoffice — the request every reply of this message names, and a request the person already stopped is
+    # //// never routed: nothing is said, no task is made (#1568, see cancel_chat_requests). Set on every call: the
+    # //// webhook runs each one in a copy of its context, so the value never outlives the message.
+    _request_id = _request_id_of(conversation_id, idempotency_key)
+    _CURRENT_REQUEST.set(_request_id)
+    if request_cancelled(_request_id):
+        logger.info("nora_chat_router: cid=%s request %s stopped before it was routed", conversation_id, _request_id)
+        return {"routed": True, "category": "CANCELLED", "ack": None, "task_id": None}
     # //// END Neoffice ////
     prior = _LAST_ROUTE.get(conversation_id) if conversation_id else None
 
@@ -4951,6 +5101,12 @@ def route_chat_message(
                 if _nora_work else {}
             )
             # //// END Neoffice ////
+            # //// Neoffice — stopped while the router classified it (up to 8 s): no task (#1568)
+            if request_cancelled(_request_id):
+                logger.info("nora_chat_router: cid=%s request %s stopped while it was routed", conversation_id,
+                            _request_id)
+                return {"routed": True, "category": "CANCELLED", "ack": None, "task_id": None}
+            # //// END Neoffice ////
             task_id = kanban_db.create_task(
                 conn,
                 title=_task_title(message, prior),  # //// Neoffice — a bare yes, by what it confirms ////
@@ -4973,8 +5129,21 @@ def route_chat_message(
                 notifier_profile=notifier_profile,
                 conversation_id=_unified_cid,
                 page_context=page_context,  # //// Neoffice — carries the voice source (see _add_notify_sub)
+                request_id=_request_id,  # //// Neoffice — #1568 ////
             )
             _steps["subscribed"] = _time_thread.monotonic()  # //// Neoffice — see _steps ////
+            # //// Neoffice — #1568: a stop that crossed the creation (it read the board before the task existed)
+            # //// archives it here; and the conversation's questions left unanswered are retired.
+            if request_cancelled(_request_id):
+                kanban_db.archive_task(conn, task_id)
+                logger.info("nora_chat_router: cid=%s request %s stopped as task %s was made: archived",
+                            conversation_id, _request_id, task_id)
+                return {"routed": True, "category": "CANCELLED", "ack": None, "task_id": None}
+            try:
+                _retire_unanswered_questions(kanban_db, conn, conversation_id, task_id)
+            except Exception as _exc:  # noqa: BLE001 — a cleanup never costs the request
+                logger.info("nora_chat_router: questions of cid=%s not retired: %s", conversation_id, _exc)
+            # //// END Neoffice ////
             # //// Neoffice — wake the dispatcher NOW: without the poke the new
             # task waited for the next periodic tick (0..interval s of dead
             # time; 3 s measured). Best-effort — the tick still guarantees it.

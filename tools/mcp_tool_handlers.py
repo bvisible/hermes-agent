@@ -884,6 +884,41 @@ def _neoffice_turn_refusal(server_name: str, tool_name: str) -> Optional[str]:
         return None
 # //// END Neoffice ////
 
+
+# //// Neoffice — added (04.11, #1568): a worker whose task was stopped calls no tool. The person said « laisse tomber »
+# //// while the pole worked; the gateway archived the task (gateway.nora_chat_router.cancel_chat_requests) and the
+# //// kernel terminates the worker, but a call that left in between would still write: a quotation made after the stop.
+# //// Read before every call of a kanban worker, from the board, read-only; a board that cannot be read lets the call
+# //// through, as before.
+_NEOFFICE_STOPPED_TEXT = (
+    "The person stopped this request: its task is archived. Call no other tool, write nothing, "
+    "and end your turn now without an answer."
+)
+
+
+def _neoffice_task_stopped() -> Optional[str]:
+    task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    if not task_id:
+        return None
+    try:
+        import sqlite3
+
+        from hermes_cli import kanban_db
+
+        conn = sqlite3.connect(f"file:{kanban_db.kanban_db_path()}?mode=ro", uri=True, timeout=1)
+        try:
+            row = conn.execute("SELECT status FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:  # the guard must never fail a call
+        logger.debug("stop guard skipped for task %s: %r", task_id, exc)
+        return None
+    if row and row[0] == "archived":
+        logger.info("MCP call refused: task %s was stopped", task_id)
+        return _NEOFFICE_STOPPED_TEXT
+    return None
+# //// END Neoffice ////
+
 def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *, native_images: bool = False):
     """Sync handler (``handler(args_dict, **kwargs)``) calling an MCP tool via the background loop. Always a JSON
     string, except with ``native_images`` (the registry handler the agent loop dispatches): a result carrying
@@ -903,6 +938,11 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
         _turn_refusal = _neoffice_turn_refusal(server_name, tool_name)
         if _turn_refusal:
             return tool_error(_turn_refusal)
+        # //// END Neoffice ////
+        # //// Neoffice — the person stopped this worker's request, see _neoffice_task_stopped (#1568)
+        _stopped = _neoffice_task_stopped()
+        if _stopped:
+            return tool_error(_stopped)
         # //// END Neoffice ////
         # Security boundary: untrusted-server write tools need approval before ANY transport work (incl. lazy spawn).
         booked: list = []  # a costed call's charge; refunded when the call never reaches the server

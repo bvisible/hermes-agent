@@ -947,6 +947,15 @@ class _KanbanNotification:
         metadata: dict[str, Any] = dict(delivery_metadata) if isinstance(delivery_metadata, dict) else {}
         if sub.get("thread_id") and not metadata.get("thread_id"):
             metadata["thread_id"] = sub["thread_id"]
+        # //// Neoffice — the result of a request the person stopped (#1568) is not delivered, nor kept in the
+        # //// conversation's film: a worker that finished just as the stop came must not speak for it.
+        if metadata.get("neoffice_request_id"):
+            from gateway.nora_chat_router import request_cancelled
+            if request_cancelled(metadata["neoffice_request_id"]):
+                logger.info("kanban notifier: %s event of %s not delivered, its request was stopped",
+                            ev.kind, self.task_id)
+                return False
+        # //// END Neoffice ////
         _send_res = None
         async def send_ping():
             nonlocal _send_res

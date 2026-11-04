@@ -736,6 +736,12 @@ class WebhookAdapter(BasePlatformAdapter):
                 logger.debug("[webhook] no retained destination for %s", chat_id, exc_info=True)
         if _md_cid and isinstance(delivery.get("deliver_extra"), dict):
             delivery = {**delivery, "deliver_extra": {**delivery["deliver_extra"], "conversation_id": _md_cid}}
+        # //// Neoffice — the request a pole's result answers (#1568): from the notifier's metadata only, never from the
+        # //// conversation's in-memory info, which the conversation's next message overwrites.
+        _md_rid = str((metadata or {}).get("neoffice_request_id") or "") if metadata else ""
+        if _md_rid and isinstance(delivery.get("deliver_extra"), dict):
+            delivery = {**delivery, "deliver_extra": {**delivery["deliver_extra"], "request_id": _md_rid}}
+        # //// END Neoffice ////
         return delivery or {"deliver": "log", "deliver_extra": {}}
 
     def _neoffice_complete_destination(self, chat_id: str, retained: dict[str, Any]) -> dict[str, Any]:
@@ -867,7 +873,32 @@ class WebhookAdapter(BasePlatformAdapter):
 
     async def _handle_health(self, request: web.Request) -> web.Response:
         """GET /health — simple health check."""
-        return web.json_response({"status": "ok", "platform": "webhook"})
+        # //// Neoffice — what this gateway can do for nora (#1568): nora sends a stop (`chat_cancel`) only to a gateway
+        # //// that says so. An older one has no such event and would run an agent turn on its empty message.
+        return web.json_response({"status": "ok", "platform": "webhook", "neoffice_features": ["chat_cancel"]})
+        # //// END Neoffice ////
+
+    # //// Neoffice — added (#1568): stop the person's requests in flight, see nora_chat_router.cancel_chat_requests.
+    # //// Signed like a message (the route's HMAC, checked by _handle_webhook); nora checked that the person owns the
+    # //// conversation, and the router stops only request ids of that conversation.
+    async def _neoffice_handle_chat_cancel(self, payload: Any) -> web.Response:
+        if not isinstance(payload, dict):
+            return _json_error("Cannot parse body", 400)
+        cid = str(payload.get("conversation_id") or "").strip()
+        request_ids = payload.get("request_ids")
+        if not cid or not isinstance(request_ids, list) or not request_ids:
+            return _json_error("conversation_id and request_ids are required", 400)
+        try:
+            from gateway.nora_chat_router import cancel_chat_requests
+
+            requests = await asyncio.to_thread(
+                cancel_chat_requests, conversation_id=cid, request_ids=request_ids,
+                reason=str(payload.get("reason") or "cancel"))
+        except Exception as exc:  # noqa: BLE001 — answered, so nora can say the stop did not reach the work
+            logger.exception("[webhook] chat_cancel of %s failed", cid)
+            return _json_error(f"cancel failed: {exc.__class__.__name__}", 500)
+        return web.json_response({"status": "ok", "requests": requests})
+    # //// END Neoffice ////
 
     def _dynamic_route_allowed(self, name: str, route: dict) -> bool:
         """Reject dynamic routes whose effective secret is missing, blank, or not a string
@@ -1355,6 +1386,9 @@ class WebhookAdapter(BasePlatformAdapter):
         if isinstance(payload, dict) and payload.get("event_type") in (
                 "memory_retain", "memory_read", "memory_forget"):
             _rate_bucket = f"{route_name}::memory"
+        # //// Neoffice — a stop said by the person (#1568) is never refused because people's messages filled the minute
+        if isinstance(payload, dict) and payload.get("event_type") == "chat_cancel":
+            _rate_bucket = f"{route_name}::control"
         # //// END Neoffice ////
         # Rate limiting (after auth)
         if not self._record_rate_limit_hit(  # //// Neoffice — the memory bucket has its own limit
@@ -1388,6 +1422,10 @@ class WebhookAdapter(BasePlatformAdapter):
             return await self._handle_memory_read(payload)
         if event_type == "memory_forget":
             return await self._handle_memory_forget(payload)
+        # //// Neoffice — the person stopped requests in flight (#1568): handled before the prompt path, which would
+        # //// otherwise run an agent turn on a message that carries no text.
+        if event_type == "chat_cancel" and route_name == "nora_chat":
+            return await self._neoffice_handle_chat_cancel(payload)
         # //// END Neoffice ////
         allowed_events = route_config.get("events", [])
         if allowed_events and event_type not in allowed_events:
@@ -2230,8 +2268,21 @@ class WebhookAdapter(BasePlatformAdapter):
         try:
             import aiohttp
 
+            # //// Neoffice — the request this reply answers (#1568): the reply of a request the person stopped is not
+            # //// sent, and the one of a live request names it, so the page matches it to its own request.
+            request_id = str(extra.get("request_id") or "").strip()
+            if request_id:
+                from gateway.nora_chat_router import request_cancelled
+
+                if request_cancelled(request_id):
+                    logger.info("[webhook] nora deliver skipped: request %s was stopped (cid=%s)", request_id,
+                                conversation_id)
+                    return SendResult(success=True)
+            # //// END Neoffice ////
             # //// Neoffice — the work still open for this conversation, when it can be read (see _neoffice_open_tasks)
             body = {"conversation_id": conversation_id, "text": content, "user": (chat_id.rsplit(":", 1)[-1] if chat_id else "")}
+            if request_id:
+                body["request_id"] = request_id  # //// Neoffice — #1568 ////
             open_work = await asyncio.to_thread(self._neoffice_open_tasks, chat_id) if chat_id else None
             if open_work is not None:
                 body["open_tasks"], newest = open_work
@@ -2254,6 +2305,17 @@ class WebhookAdapter(BasePlatformAdapter):
                             conversation_id,
                             len(content),
                         )
+                        # //// Neoffice — nora dropped the reply of a stopped request (#1568, a gateway restarted
+                        # //// since the stop forgot it): it never reached the person, so it stays out of the film.
+                        try:
+                            _answer = await resp.json(content_type=None)
+                        except Exception:  # noqa: BLE001 — an older nora answers without it
+                            _answer = None
+                        if isinstance(_answer, dict) and isinstance(_answer.get("message"), dict) \
+                                and _answer["message"].get("dropped"):
+                            logger.info("[webhook] nora dropped the reply of stopped request %s", request_id)
+                            return SendResult(success=True)
+                        # //// END Neoffice ////
                         # //// Neoffice — EVERY reply the desk shows enters the conversation
                         # //// film, questions included: only completed worker results did,
                         # //// so « Oui, vas-y » reached the next worker without the question
