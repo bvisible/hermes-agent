@@ -9,6 +9,8 @@ import pytest
 
 from gateway.nora_chat_router import (
     _CLASSIFIER_SYSTEM,
+    _RESTO_BUY_RE,
+    _RESTO_COST_RE,
     _RESTO_PORTIONS_RE,
     _RESTO_RECIPE_RE,
     _RESTO_SEASON_RE,
@@ -95,3 +97,56 @@ def test_a_season_that_is_not_a_kitchen_one_is_not_routed_by_this_rule(message):
 
 def test_the_classifier_is_told_the_season_is_ventes():
     assert "SAISON des produits" in _CLASSIFIER_SYSTEM
+
+
+BUY = [
+    "Mardi, quarante couverts : la soupe de courge et le gratin, il faut acheter quoi ?",
+    "Qu'est-ce qu'il faut acheter pour la soupe du jour ?",
+    "Fais-moi les courses pour 40 portions de risotto",
+    "Je dois commander quoi pour la tarte aux pommes de samedi ?",
+]
+
+NOT_BUYING_DISHES = [
+    "Je dois acheter un ordinateur",
+    "Commande-moi un taxi pour demain",
+    "Réserve une table pour 4 personnes",
+]
+
+COST = [
+    "Combien me coûte une portion de la soupe de courge ?",
+    "Le coût du risotto par portion",
+    "C'est quoi le prix de revient de ce plat ?",
+    "À combien me revient une assiette de gratin ?",
+]
+
+NOT_A_DISH_COST = [
+    "Le coût des marchandises vendues ce mois",
+    "Quel est le coût de cette facture ?",
+    "Ça coûte combien d'imprimer le rapport ?",
+]
+
+
+@pytest.mark.parametrize("message", BUY)
+def test_what_to_buy_for_dishes_planned_goes_to_ventes(message):
+    assert _RESTO_BUY_RE.search(message)
+    assert _keyword_pole(message) == "ventes"
+
+
+@pytest.mark.parametrize("message", NOT_BUYING_DISHES)
+def test_a_purchase_that_is_no_dish_is_not_routed_by_this_rule(message):
+    assert not _RESTO_BUY_RE.search(message)
+
+
+@pytest.mark.parametrize("message", COST)
+def test_the_cost_of_a_portion_goes_to_ventes(message):
+    assert _RESTO_COST_RE.search(message)
+    assert _keyword_pole(message) == "ventes"
+
+
+@pytest.mark.parametrize("message", NOT_A_DISH_COST)
+def test_a_cost_that_is_not_a_dish_stays_where_it_was(message):
+    assert not _RESTO_COST_RE.search(message)
+
+
+def test_the_classifier_is_told_what_to_buy_and_what_a_portion_costs_are_ventes():
+    assert "ACHETER pour des plats prévus" in _CLASSIFIER_SYSTEM and "COÛTE une portion" in _CLASSIFIER_SYSTEM

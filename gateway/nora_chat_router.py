@@ -526,6 +526,11 @@ _CLASSIFIER_SYSTEM = (
     "  Et la SAISON des produits et des plats du restaurant (« qu'est-ce qui est de saison en novembre ? », « les asperges, c'est de saison ? », "
     "« des recettes de saison »). Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
+    # //// Neoffice — what to BUY for the dishes planned, and what a portion COSTS, are ventes' too (04.11, lot R6): the tools that work out the list from
+    # //// the recipes and read the cost of a portion live there, with the shopping list the person's yes writes.
+    "  Et ce qu'il faut ACHETER pour des plats prévus (« mardi, quarante couverts : la soupe de courge et le gratin, il faut acheter quoi ? ») et "
+    "ce que COÛTE une portion (« combien me coûte une portion de la soupe ? », « le coût du risotto »). Jamais une tâche récurrente.\n"
+    # //// END Neoffice ////
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     # //// Neoffice — the rh pole's real scope since 2026-09-23 (hr_* tools): what
@@ -1634,6 +1639,26 @@ _RESTO_PORTIONS_RE = re.compile(r"\bpour\s+\d+\s+(?:couverts?|portions?)\b", re.
 # //// END Neoffice ////
 
 
+# //// Neoffice — what to BUY for the dishes planned and what a PORTION COSTS (04.11, NeoResto lot R6): « mardi, quarante couverts : la soupe de courge,
+# //// il faut acheter quoi ? », « combien me coûte une portion du risotto ? ». Ventes holds the tool that works the list out from the recipes (and the
+# //// shopping list its yes writes) and the one that reads the cost. « acheter » alone is any purchase: it must come with a number of covers or a dish.
+_NUMBER = (
+    r"\d+|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|quinze|vingt|trente|quarante|cinquante|soixante|cent"
+)
+_RESTO_BUY_RE = re.compile(
+    r"(?=.*\b(?:acheter|commander|courses)\b)"
+    rf"(?=.*(?:\b(?:{_NUMBER})\s*(?:couverts?|portions?)\b|\b(?:recettes?|plats?|soupes?|risottos?|gratins?|tartes?|gigots?)\b)).*",
+    re.IGNORECASE | re.DOTALL,
+)
+_RESTO_COST_RE = re.compile(
+    r"(?=.*\b(?:co[uû]te?s?|co[uû]tent|prix\s+de\s+revient|revient)\b)"
+    r"(?=.*\b(?:portions?|recettes?|assiettes?|plats?|soupes?|risottos?|gratins?|tartes?)\b)"
+    r"(?!.*\b(?:marchandises?|chiffre\s+d['\u2019]affaires|factur\w*|comptab\w*)\b).*",
+    re.IGNORECASE | re.DOTALL,
+)
+# //// END Neoffice ////
+
+
 # //// Neoffice — the SEASON of the products and the dishes of the restaurant (04.11, NeoResto lot R4): « qu'est-ce qui est de saison ? », « des recettes de
 # //// saison », « les asperges, c'est de saison ? ». Ventes holds the tool that reads the calendar and the recipes it ranks. « de saison » alone is too common
 # //// (a collection, a sale): it must come with something of a kitchen (a vegetable, a fruit, a dish, the card, the menu).
@@ -1678,6 +1703,10 @@ _FAST_PATH_RULES = (
     (_RESTO_RECIPE_RE, "ventes"),
     (_RESTO_PORTIONS_RE, "ventes"),
     (_RESTO_SEASON_RE, "ventes"),
+    # //// END Neoffice ////
+    # //// Neoffice — what to buy for the dishes planned, and what a portion costs, see _RESTO_BUY_RE and _RESTO_COST_RE (04.11): the same pole.
+    (_RESTO_BUY_RE, "ventes"),
+    (_RESTO_COST_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
