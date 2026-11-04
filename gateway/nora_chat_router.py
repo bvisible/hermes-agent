@@ -515,6 +515,13 @@ _CLASSIFIER_SYSTEM = (
     "menu du soir à 38 francs », « ajoute une soupe au menu du midi », « mets le menu enfant à 14 », « désactive le menu du jour »), "
     "et les CUISSONS et ACCOMPAGNEMENTS des plats (« il faut une cuisson sur les viandes et un accompagnement »). Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
+    # //// Neoffice — the restaurant owner's RECIPES (cooking) are ventes' too (04.11), said here for the same reason: 'direct' leaves the first turn to
+    # //// the orchestrator, no pole is remembered and the owner's « oui » reaches nobody. « recettes » is also the takings of a till: those stay compta's.
+    "  Et les RECETTES de cuisine du restaurant : les noter (« note la recette du risotto : pour quatre, 320 g de riz, un litre de bouillon »), "
+    "les compléter, les chercher (« quelles soupes j'ai ? »), les mettre à l'échelle (« la soupe de courge pour 40 couverts »), les lier à "
+    "un plat de la carte. Jamais les « recettes » au sens des encaissements ou du chiffre d'affaires d'une caisse (c'est compta). Jamais "
+    "une tâche récurrente.\n"
+    # //// END Neoffice ////
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     # //// Neoffice — the rh pole's real scope since 2026-09-23 (hr_* tools): what
@@ -1605,6 +1612,24 @@ _RESTO_OPTIONS_RE = re.compile(
 # //// END Neoffice ////
 
 
+# //// Neoffice — the restaurant owner's RECIPES (cooking) are ventes' (04.11, NeoResto lot R3): the pole that holds the tools that propose a recipe, find
+# //// it, scale it and write it, so that the yes stays on the pole (see _RESTO_MENU_RE). « Recettes » is also what a till took in: a word of
+# //// the takings (the month, the day, the till, the turnover) keeps the sentence out. The word must come with something of a kitchen
+# //// (an ingredient list, portions, a weight or a volume, a dish), or the sentence is about a number of covers.
+_RESTO_RECIPE_RE = re.compile(
+    r"^(?!.*\b(?:chiffre\s+d['\u2019]affaires|caisses?|encaiss\w*|comptab\w*|factur\w*|bilans?|d[ée]penses?|charges?|b[ée]n[ée]fices?"
+    r"|recettes?\s+(?:du|de\s+la|de\s+l['\u2019]|des)\s+(?:mois|jour(?:n[ée]e)?|semaine|ann[ée]e|trimestre|boutique|magasin))\b)"
+    r"(?=.*\brecettes?\b)"
+    r"(?=.*(?:\b(?:ingr[ée]dients?|portions?|couverts|personnes|[ée]tapes?|cuillères?|cuill[eè]res?|grammes?|kilos?|litres?|pr[ée]paration"
+    r"|soupes?|risottos?|tartes?|gratins?|salades?|sauces?|g[âa]teaux?|p[âa]tes|plats?|desserts?|entr[ée]es?|poulet|b[œo]e?uf|poissons?)\b"
+    r"|\b\d+(?:[.,]\d+)?\s*(?:g|kg|dl|cl|ml|l)\b)).*",
+    re.IGNORECASE | re.DOTALL,
+)
+# a number of covers asked of a dish (« la soupe de courge pour 40 couverts », « combien de courge pour 40 portions ? »)
+_RESTO_PORTIONS_RE = re.compile(r"\bpour\s+\d+\s+(?:couverts?|portions?)\b", re.IGNORECASE)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -1630,6 +1655,10 @@ _FAST_PATH_RULES = (
     # //// Neoffice — the menus and the cooking / side of the dishes, see _RESTO_MENU_RE and _RESTO_OPTIONS_RE (04.11): the same pole, the same reason.
     (_RESTO_MENU_RE, "ventes"),
     (_RESTO_OPTIONS_RE, "ventes"),
+    # //// END Neoffice ////
+    # //// Neoffice — the recipes of the restaurant, see _RESTO_RECIPE_RE and _RESTO_PORTIONS_RE (04.11): the same pole, the same reason.
+    (_RESTO_RECIPE_RE, "ventes"),
+    (_RESTO_PORTIONS_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
