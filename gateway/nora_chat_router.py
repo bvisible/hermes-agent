@@ -3578,7 +3578,7 @@ def cancel_chat_requests(*, conversation_id: str, request_ids, reason: str = "ca
             rows = conn.execute("SELECT id, status, title FROM tasks WHERE idempotency_key = ?", (rid,)).fetchall()
             if not rows:
                 out[rid] = {"outcome": "not_started", "task_id": None}
-                _note_stop_in_film(cid, "not_started", "")
+                _note_stop_in_film(cid, "not_started", "", reason)  # //// Neoffice — #1568 ////
                 continue
             for row in rows:
                 task_id, status, title = row[0], row[1], row[2]
@@ -3589,7 +3589,7 @@ def cancel_chat_requests(*, conversation_id: str, request_ids, reason: str = "ca
                 else:
                     outcome = "stopped" if kanban_db.archive_task(conn, task_id) else "already_stopped"
                 out[rid] = {"outcome": outcome, "task_id": task_id, "status": status}
-                _note_stop_in_film(cid, outcome, title)
+                _note_stop_in_film(cid, outcome, title, reason)  # //// Neoffice — #1568 ////
                 logger.info("nora_chat_router: %s of cid=%s request=%s task=%s (was %s) → %s",
                             reason, cid, rid, task_id, status, outcome)
     finally:
@@ -3597,11 +3597,27 @@ def cancel_chat_requests(*, conversation_id: str, request_ids, reason: str = "ca
     return out
 
 
-def _note_stop_in_film(conversation_id: str, outcome: str, title: Optional[str]) -> None:
+# //// Neoffice — #1568: the reason of the stop, a correction is said as the request changed (see the docstring)
+def _note_stop_in_film(conversation_id: str, outcome: str, title: Optional[str], reason: str = "cancel") -> None:
     """The stop, in the conversation's film: the worker of the next turn reads the stopped request among the person's
     turns and would take it as done (« entities created in earlier turns ALREADY EXIST »): « non, plutôt dix pièces »
-    would look for the quotation of five that was never made, or make a second one beside it."""
+    would look for the quotation of five that was never made, or make a second one beside it. A correction is the
+    request changed, not dropped: told only « do not carry it out », the worker of « non, plutôt dix pièces » found no
+    quotation and asked « Dois-je le créer maintenant avec 10 pièces ? » (osiris, 04.11)."""
     what = f"« {' '.join(str(title or '').split())[:200]} »" if title else "their previous request"
+    # //// Neoffice — a correction: the request changed, not dropped (04.11)
+    if reason == "correction":
+        if outcome == "already_done":
+            line = (f"[The person changed {what} after it was done: the message below changes it. Change what it "
+                    "made as the message asks; never make it a second time.]")
+        elif outcome in ("stopped", "not_started"):
+            line = (f"[The person changed {what} before it was done: the message below replaces it. Carry out "
+                    f"{what} as the message below changes it, now, without asking again; check first what the "
+                    "stopped request may already have written, and never make anything twice.]")
+        else:
+            return
+        note_nora_reply(conversation_id, line)
+        return
     if outcome == "already_done":
         line = f"[The person stopped {what} after it was done: what it did stays done.]"
     elif outcome == "stopped":

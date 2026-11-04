@@ -156,6 +156,18 @@ def test_the_stop_is_said_in_the_conversations_film(board, status, words):
     assert words in R._CONV_HISTORY[CID][-1] and R._CONV_HISTORY[CID][-1].startswith("NORA: [The person stopped")
 
 
+@pytest.mark.parametrize("status, words", [
+    ("running", "Carry out « t » as the message below changes it, now, without asking again"),
+    ("done", "Change what it made as the message asks; never make it a second time"),
+])
+def test_a_correction_is_said_as_the_request_changed_not_dropped(board, status, words):
+    # Told only « do not carry it out », the worker of « non, plutôt dix pièces » asked again (osiris, 04.11).
+    kb, conn = board
+    _task(kb, conn, RID, status=status)
+    R.cancel_chat_requests(conversation_id=CID, request_ids=[RID], reason="correction")
+    assert words in R._CONV_HISTORY[CID][-1]
+
+
 def test_a_request_stopped_before_its_task_is_said_never_done(board):
     R.cancel_chat_requests(conversation_id=CID, request_ids=[RID])
     assert "nothing of it was done" in R._CONV_HISTORY[CID][-1]
