@@ -62,9 +62,9 @@ def _task(kb, conn, key, status="running", block_kind=None):
     return tid
 
 
-def _blocked(kb, conn, key, kind):
+def _blocked(kb, conn, key, kind, assignee="ventes"):
     """Blocked as a worker blocks it (claim, then kanban_block): the board keeps it blocked."""
-    tid = kb.create_task(conn, title="t", assignee="ventes", idempotency_key=key)
+    tid = kb.create_task(conn, title="t", assignee=assignee, idempotency_key=key)
     with kb.write_txn(conn):
         conn.execute("UPDATE tasks SET status = 'ready' WHERE id = ?", (tid,))
     assert kb.claim_task(conn, tid, claimer="worker") is not None
@@ -288,9 +288,12 @@ def test_the_conversations_questions_are_retired_when_a_new_task_is_made(board):
     asked = _blocked(kb, conn, f"{CID}:1793791400000", "needs_input")
     waiting = _blocked(kb, conn, f"{CID}:1793791400001", "capability")
     elsewhere = _blocked(kb, conn, "nora-ffffffffffffffff:1793791400002", "needs_input")
+    other_pole = _blocked(kb, conn, f"{CID}:1793791400003", "needs_input", assignee="compta")
+    by_orchestrator = _blocked(kb, conn, None, "needs_input")
     new = _task(kb, conn, RID)
-    assert R._retire_unanswered_questions(kb, conn, CID, new) == [asked]
-    assert [_status(conn, t) for t in (asked, waiting, elsewhere, new)] == ["archived", "blocked", "blocked", "running"]
+    assert R._retire_unanswered_questions(kb, conn, CID, new, "ventes") == [asked]
+    assert [_status(conn, t) for t in (asked, waiting, elsewhere, other_pole, by_orchestrator, new)] == [
+        "archived", "blocked", "blocked", "blocked", "blocked", "running"]
 
 
 # ── the worker's safe point ──────────────────────────────────────────────────────────────────────────────────────

@@ -3630,19 +3630,22 @@ def _note_stop_in_film(conversation_id: str, outcome: str, title: Optional[str],
     note_nora_reply(conversation_id, line)
 
 
-def _retire_unanswered_questions(kanban_db, conn, conversation_id: Optional[str], keep: str) -> list:
-    """Archive the earlier tasks of the conversation still blocked on a question to the person (#1568). The answer to
-    such a question is a new message, so a new task with the conversation's film; the blocked one was never resumed and
-    stayed blocked for good (476 of the 487 cases, 57 of them still blocked on 14.10). Only a question (`needs_input`);
-    a task blocked on anything else waits for that."""
+# //// Neoffice — #1568: the questions of the same pole only (a request to another pole does not answer them)
+def _retire_unanswered_questions(kanban_db, conn, conversation_id: Optional[str], keep: str, pole: str = "") -> list:
+    """Archive the earlier router tasks of the conversation, on the same pole, still blocked on a question to the
+    person (#1568). The answer to such a question is a new message, so a new task with the conversation's film; the
+    blocked one was never resumed and stayed blocked for good (476 of the 487 cases, 57 of them still blocked on 14.10).
+    Only a question (`needs_input`) of the router's own tasks (keyed « <conversation>:<ms> »), and of the pole of the
+    new task: a request to another pole does not answer it, and the orchestrator's tasks, which it may unblock itself
+    (kanban_unblock), are never touched."""
     cid = str(conversation_id or "")
     if not cid:
         return []
     prefix = cid + ":"
     rows = conn.execute(
         "SELECT id FROM tasks WHERE substr(idempotency_key, 1, ?) = ? AND status = 'blocked' "
-        "AND block_kind = 'needs_input' AND id != ?",
-        (len(prefix), prefix, keep),
+        "AND block_kind = 'needs_input' AND id != ? AND assignee = ?",  # //// Neoffice — the same pole ////
+        (len(prefix), prefix, keep, pole),
     ).fetchall()
     retired = [row[0] for row in rows if kanban_db.archive_task(conn, row[0])]
     if retired:
@@ -5156,7 +5159,7 @@ def route_chat_message(
                             conversation_id, _request_id, task_id)
                 return {"routed": True, "category": "CANCELLED", "ack": None, "task_id": None}
             try:
-                _retire_unanswered_questions(kanban_db, conn, conversation_id, task_id)
+                _retire_unanswered_questions(kanban_db, conn, conversation_id, task_id, category)  # //// Neoffice — same pole ////
             except Exception as _exc:  # noqa: BLE001 — a cleanup never costs the request
                 logger.info("nora_chat_router: questions of cid=%s not retired: %s", conversation_id, _exc)
             # //// END Neoffice ////
