@@ -509,6 +509,12 @@ _CLASSIFIER_SYSTEM = (
     "« je fais les boissons froides », « maintenant j'ajoute les vins », « on passe aux plats », « pour le vin, c'est la cave X »). "
     "Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
+    # //// Neoffice — the restaurant owner's MENUS and the options of his dishes are ventes' too (04.11), said here for the same reason as the list and the
+    # //// card: 'direct' leaves the first turn to the orchestrator, no pole is remembered, and the owner's « oui » reaches nobody.
+    "  Et les MENUS / FORMULES à prix fixe du restaurant : les composer, les compléter, les corriger, les désactiver (« compose-moi un "
+    "menu du soir à 38 francs », « ajoute une soupe au menu du midi », « mets le menu enfant à 14 », « désactive le menu du jour »), "
+    "et les CUISSONS et ACCOMPAGNEMENTS des plats (« il faut une cuisson sur les viandes et un accompagnement »). Jamais une tâche récurrente.\n"
+    # //// END Neoffice ////
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     # //// Neoffice — the rh pole's real scope since 2026-09-23 (hr_* tools): what
@@ -1575,6 +1581,30 @@ _RESTO_CARD_RE = re.compile(
 # //// END Neoffice ////
 
 
+# //// Neoffice — the restaurant owner's MENUS (formulas at a fixed price) and the cooking / side of his dishes are ventes' (04.11). Measured on a
+# //// development instance: « compose-moi un menu du soir à 38 francs… » came back 'direct', the orchestrator routed it by itself, no pole was
+# //// remembered (_LAST_ROUTE) and the owner's « oui, écris-le » went 'direct' too: an empty promise, nothing written. A menu / formula word
+# //// WITH something of a restaurant (a course, a price, a moment of the day) is routed here, so the yes stays on the pole. Never the menu of a
+# //// screen (workspace, sidebar, shortcut, page…) nor a spreadsheet formula.
+_RESTO_MENU_RE = re.compile(
+    r"^(?!.*\b(?:workspaces?|espaces?\s+de\s+travail|sidebar|barre\s+lat[ée]rale|raccourcis?|navigation|onglets?|desk|bureau|site\s+web"
+    r"|page\s+d['\u2019]accueil|excel|tableur|cellules?|abonnements?|forfaits?|politesse)\b)"
+    r"(?=.*\b(?:menus?|formules?|men[uü]s?)\b)"
+    r"(?=.*(?:\b(?:entr[ée]es?|plats?|desserts?|boissons?|caf[ée]s?|soupes?|starters?|vorspeise|hauptgericht|nachtisch|primo|secondo|dolce)\b"
+    r"|\b\d+(?:[.,]\d+)?\s*(?:francs?|chf|fr\b|\.-)|\b(?:du|de)\s+(?:soir|midi|jour|saison)\b|\bmenus?\s+(?:enfants?|d[ée]gustation)\b)).*",
+    re.IGNORECASE | re.DOTALL,
+)
+# the cooking of a steak and the side of a dish (« il faut une cuisson sur les viandes et un accompagnement »)
+_RESTO_OPTIONS_RE = re.compile(
+    r"\bcuissons?\b[^.!?]{0,60}\b(?:viandes?|steaks?|entrec[ôo]tes?|b[œo]e?uf|plats?|burgers?)\b"
+    r"|\b(?:viandes?|steaks?|entrec[ôo]tes?|plats?|burgers?)\b[^.!?]{0,60}\bcuissons?\b"
+    r"|\baccompagnements?\b[^.!?]{0,60}\b(?:plats?|viandes?|poissons?)\b"
+    r"|\b(?:plats?|viandes?|poissons?)\b[^.!?]{0,60}\baccompagnements?\b",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -1596,6 +1626,10 @@ _FAST_PATH_RULES = (
     # //// END Neoffice ////
     # //// Neoffice — the card of the restaurant's till is ventes' too (03.11): see _RESTO_CARD_RE. Its three tools live in that pole.
     (_RESTO_CARD_RE, "ventes"),
+    # //// END Neoffice ////
+    # //// Neoffice — the menus and the cooking / side of the dishes, see _RESTO_MENU_RE and _RESTO_OPTIONS_RE (04.11): the same pole, the same reason.
+    (_RESTO_MENU_RE, "ventes"),
+    (_RESTO_OPTIONS_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
