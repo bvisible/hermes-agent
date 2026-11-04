@@ -7,7 +7,13 @@ also what a till took in: the takings of the month, of the day, of the till stay
 
 import pytest
 
-from gateway.nora_chat_router import _CLASSIFIER_SYSTEM, _RESTO_PORTIONS_RE, _RESTO_RECIPE_RE, _keyword_pole
+from gateway.nora_chat_router import (
+    _CLASSIFIER_SYSTEM,
+    _RESTO_PORTIONS_RE,
+    _RESTO_RECIPE_RE,
+    _RESTO_SEASON_RE,
+    _keyword_pole,
+)
 
 RECIPES = [
     "Note la recette du risotto aux champignons : pour quatre, 320 g de riz, un litre de bouillon",
@@ -55,3 +61,37 @@ def test_the_classifier_is_told_what_the_owner_says_of_his_recipes_and_that_taki
     assert "RECETTES de cuisine" in _CLASSIFIER_SYSTEM
     assert "note la recette du risotto" in _CLASSIFIER_SYSTEM
     assert "encaissements" in _CLASSIFIER_SYSTEM and "compta" in _CLASSIFIER_SYSTEM
+
+
+SEASON = [
+    "Qu'est-ce qui est de saison en novembre ?",
+    "Les asperges, c'est de saison ?",
+    "Propose-moi des recettes de saison",
+    "Quels légumes sont de saison en ce moment ?",
+    "Une soupe de saison pour le menu du midi",
+    "What vegetables are in season in March?",
+    "Des fraises hors saison, on en met à la carte ?",
+    "Dis-moi quoi de saison",
+]
+
+NOT_A_KITCHEN = [
+    "Les articles de saison de la boutique",
+    "Le chiffre d'affaires de la saison",
+    "Une promotion de fin de saison",
+    "Les soldes de fin de saison",
+]
+
+
+@pytest.mark.parametrize("message", SEASON)
+def test_the_season_of_a_product_or_a_dish_goes_to_ventes(message):
+    assert _RESTO_SEASON_RE.search(message)
+    assert _keyword_pole(message) == "ventes"
+
+
+@pytest.mark.parametrize("message", NOT_A_KITCHEN)
+def test_a_season_that_is_not_a_kitchen_one_is_not_routed_by_this_rule(message):
+    assert not _RESTO_SEASON_RE.search(message)
+
+
+def test_the_classifier_is_told_the_season_is_ventes():
+    assert "SAISON des produits" in _CLASSIFIER_SYSTEM

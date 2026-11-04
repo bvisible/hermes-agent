@@ -522,6 +522,10 @@ _CLASSIFIER_SYSTEM = (
     "un plat de la carte. Jamais les « recettes » au sens des encaissements ou du chiffre d'affaires d'une caisse (c'est compta). Jamais "
     "une tâche récurrente.\n"
     # //// END Neoffice ////
+    # //// Neoffice — the SEASON of the products and the dishes of the restaurant is ventes' too (04.11, lot R4): the tool that reads the calendar lives there.
+    "  Et la SAISON des produits et des plats du restaurant (« qu'est-ce qui est de saison en novembre ? », « les asperges, c'est de saison ? », "
+    "« des recettes de saison »). Jamais une tâche récurrente.\n"
+    # //// END Neoffice ////
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
     "aide à l'utilisation.\n"
     # //// Neoffice — the rh pole's real scope since 2026-09-23 (hr_* tools): what
@@ -1630,6 +1634,20 @@ _RESTO_PORTIONS_RE = re.compile(r"\bpour\s+\d+\s+(?:couverts?|portions?)\b", re.
 # //// END Neoffice ////
 
 
+# //// Neoffice — the SEASON of the products and the dishes of the restaurant (04.11, NeoResto lot R4): « qu'est-ce qui est de saison ? », « des recettes de
+# //// saison », « les asperges, c'est de saison ? ». Ventes holds the tool that reads the calendar and the recipes it ranks. « de saison » alone is too common
+# //// (a collection, a sale): it must come with something of a kitchen (a vegetable, a fruit, a dish, the card, the menu).
+_RESTO_SEASON_RE = re.compile(
+    r"(?:(?=.*\b(?:(?:de|en|hors|in)\s+saison|in\s+season|saisonni[eè]r\w*)\b)"
+    r"(?=.*\b(?:l[ée]gumes?|fruits?|produits?|recettes?|plats?|soupes?|salades?|menus?|carte|cuisine|aromates?|herbes?|asperges?|courges?"
+    r"|tomates?|fraises?|champignons?|poireaux?|pommes?|carottes?|vegetables?|dishes|recipes?)\b).*)"
+    # the question itself, which needs no noun: « qu'est-ce qui est de saison en novembre ? »
+    r"|(?:.*\b(?:qu['\u2019]est[- ]ce\s+qui|ce\s+qui|quoi)\s+(?:est\s+)?(?:de|en)\s+saison\b.*)",
+    re.IGNORECASE | re.DOTALL,
+)
+# //// END Neoffice ////
+
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -1659,6 +1677,7 @@ _FAST_PATH_RULES = (
     # //// Neoffice — the recipes of the restaurant, see _RESTO_RECIPE_RE and _RESTO_PORTIONS_RE (04.11): the same pole, the same reason.
     (_RESTO_RECIPE_RE, "ventes"),
     (_RESTO_PORTIONS_RE, "ventes"),
+    (_RESTO_SEASON_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
