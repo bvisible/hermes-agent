@@ -1,5 +1,5 @@
 # //// Neoffice — added file (no upstream equivalent): routing of the restaurant owner's shopping list.
-"""« Je fais ma liste de courses » routes to ventes, the pole that holds the tools that propose the list and write it.
+"""« Je fais ma liste de courses » routes to resto (the restaurant pole since 05.11), the pole that holds the tools that propose the list and write it.
 
 Measured on a development instance, 2026-11-03: the classifier answered 'direct' to « Je fais ma liste de courses : il me
 faut cinq kilos d'oignons… ». The orchestrator routed it by itself, so the router remembered no pole, and the owner's
@@ -33,8 +33,8 @@ NOT_A_SHOPPING_LIST = [
 
 
 @pytest.mark.parametrize("message", SHOPPING_LISTS)
-def test_a_shopping_list_goes_to_ventes(message):
-    assert _keyword_pole(message) == "ventes"
+def test_a_shopping_list_goes_to_resto(message):
+    assert _keyword_pole(message) == "resto"
 
 
 @pytest.mark.parametrize("message", NOT_A_SHOPPING_LIST)

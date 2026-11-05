@@ -1,5 +1,5 @@
 # //// Neoffice — added file (no upstream equivalent): the restaurant's shopping list page tells Nora which list is on screen.
-"""On the shopping list page, what the owner says about the list goes to ventes, with or without the words « liste de courses ».
+"""On the shopping list page, what the owner says about the list goes to resto (the restaurant pole since 05.11), with or without the words « liste de courses ».
 
 The page declares its list to Nora (doctype « Restaurant Shopping List » and its name, as a page that shows a document does).
 « Ajoute cinq kilos d'oignons » said there has no demonstrative (« ce document ») and no keyword, so the classifier was left to
@@ -40,13 +40,13 @@ NOT_ABOUT_THE_LIST = [
 ]
 
 
-def test_the_shopping_list_belongs_to_ventes_when_the_classifier_fails():
-    assert _DOCTYPE_POLES[PAGE] == "ventes"
+def test_the_shopping_list_belongs_to_resto_when_the_classifier_fails():
+    assert _DOCTYPE_POLES[PAGE] == "resto"
 
 
 @pytest.mark.parametrize("message", ON_THE_LIST)
-def test_what_is_said_about_the_list_on_its_page_goes_to_ventes(message):
-    assert _page_document_pole(message, PAGE) == "ventes"
+def test_what_is_said_about_the_list_on_its_page_goes_to_resto(message):
+    assert _page_document_pole(message, PAGE) == "resto"
 
 
 @pytest.mark.parametrize("message", NOT_ABOUT_THE_LIST)

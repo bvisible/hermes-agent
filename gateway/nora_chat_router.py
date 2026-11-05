@@ -41,7 +41,10 @@ logger = logging.getLogger(__name__)
 # Business poles NORA routes to. Mirrors the orchestrator SOUL roster (the "Pôle"
 # column) — keep in sync with configs/SOUL.md so deterministic routing matches what
 # the orchestrator would have chosen on its good days.
-POLES = ("compta", "ventes", "support", "rh", "analyse", "projet")
+# //// Neoffice — `resto` (05.11): the restaurant split out of `ventes`, as `projet` was on 16.09. Its tools, its skills
+# //// and its rules weighed ~7 300 tokens on every sales task (the first call of a sales worker went from 31 500 to
+# //// 41 400 tokens in three days) and the sales SOUL had no character left. grep "//// Neoffice".
+POLES = ("compta", "ventes", "support", "rh", "analyse", "projet", "resto")
 
 
 # //// Neoffice — added function (no upstream equivalent), extracted 20.09. It was
@@ -92,10 +95,10 @@ def job_page_anchor(pole: str, source: str, project: str, job: dict | None = Non
 # and the default; the other languages mirror it for the multilingual chat path.
 # //// Neoffice — multilingual desk labels + ack templates (was French-only) ////
 POLE_LABELS = {
-    "fr": {"compta": "Comptabilité", "ventes": "Ventes", "support": "Support", "rh": "Ressources Humaines", "analyse": "Analyse", "projet": "Projets"},
-    "de": {"compta": "Buchhaltung", "ventes": "Verkauf", "support": "Support", "rh": "Personalwesen", "analyse": "Analyse", "projet": "Projekte"},
-    "it": {"compta": "Contabilità", "ventes": "Vendite", "support": "Supporto", "rh": "Risorse Umane", "analyse": "Analisi", "projet": "Progetti"},
-    "en": {"compta": "Accounting", "ventes": "Sales", "support": "Support", "rh": "Human Resources", "analyse": "Analytics", "projet": "Projects"},
+    "fr": {"compta": "Comptabilité", "ventes": "Ventes", "support": "Support", "rh": "Ressources Humaines", "analyse": "Analyse", "projet": "Projets", "resto": "Restaurant"},
+    "de": {"compta": "Buchhaltung", "ventes": "Verkauf", "support": "Support", "rh": "Personalwesen", "analyse": "Analyse", "projet": "Projekte", "resto": "Restaurant"},
+    "it": {"compta": "Contabilità", "ventes": "Vendite", "support": "Supporto", "rh": "Risorse Umane", "analyse": "Analisi", "projet": "Progetti", "resto": "Ristorante"},
+    "en": {"compta": "Accounting", "ventes": "Sales", "support": "Support", "rh": "Human Resources", "analyse": "Analytics", "projet": "Projects", "resto": "Restaurant"},
 }
 # Backwards-compat alias (the French label map, still referenced by name elsewhere).
 POLE_LABELS_FR = POLE_LABELS["fr"]
@@ -447,7 +450,7 @@ _CLASSIFIER_SYSTEM = (
     # //// pole and could not answer this one. Everything the deterministic rules did
     # //// not catch went somewhere else — to a pole that no longer holds a single job
     # //// tool. A pole that cannot be named is a pole that cannot be chosen.
-    "Tu réponds par UN SEUL mot parmi : recurrent, compta, projet, ventes, support, rh, analyse, direct. "
+    "Tu réponds par UN SEUL mot parmi : recurrent, compta, projet, ventes, resto, support, rh, analyse, direct. "
     "Aucune ponctuation, aucune explication, juste le mot.\n\n"
     "PRIORITÉ ABSOLUE — 'recurrent' : si la demande doit se RÉPÉTER dans le temps "
     "(« tous les matins / chaque jour / toutes les heures / chaque lundi / chaque semaine / "
@@ -482,6 +485,12 @@ _CLASSIFIER_SYSTEM = (
     "chantier », « facture l'intervention de mardi ») vont à projet et non à ventes : "
     "lui seul tient les outils du chantier. Un devis pour un client SANS chantier reste "
     "à ventes.\n"
+    # //// Neoffice — « À traiter » is the jobs pole's list (frappe_to_handle) and a person telling what they did on site is
+    # //// its own (frappe_job_report_work): « Qu'est-ce qui attend dans À traiter ? » went to rh, frappe_to_handle was never
+    # //// called in 30 days (état des lieux du 05.11, #2257).
+    "  Et « À traiter » (ce que les clients ont demandé, les appels notés : « qu'est-ce qui attend dans À traiter ? ») "
+    "et le travail qu'une personne raconte avoir fait chez un client (« je sors de chez Dupont, 1h30 »).\n"
+    # //// END Neoffice ////
     # //// END Neoffice ////
     # //// Neoffice — changing a client's or supplier's contact details is ventes' own tool
     # //// (frappe_party_contact_update, 25.09); support has none. Said here so the classifier
@@ -491,44 +500,53 @@ _CLASSIFIER_SYSTEM = (
     "adresse), prix, réapprovisionnement — commandes FOURNISSEURS "
     # //// END Neoffice ////
     "incluses (« commander 15 unités », « passer commande au fournisseur »).\n"
+    # //// Neoffice — what the sales pole holds that this prompt did not name (05.11, #2289): an item import was sent to support
+    # //// and to compta, a serial number to support; a customer's figures went to compta one day and to ventes the next.
+    "  Et l'IMPORT d'articles depuis un fichier ou un catalogue de fournisseur (« importe mes articles », « où en est l'import ISI-… ? »), les numéros de série et les lots, les bons de livraison (à livrer, à facturer), les traductions des articles et du contenu. Pour un client : ses devis, commandes, livraisons et articles achetés sont à ventes ; ce qu'il doit et ses factures sont à compta.\n"
+    # //// END Neoffice ////
+    # //// Neoffice — the restaurant is its own pole since 05.11: everything below was ventes' (03-04.11) and now belongs to
+    # //// `resto`, which holds the list, card, menus, options, recipes, season, buying and cost tools. ventes no longer does.
+    "- resto : le RESTAURANT du client, jamais à ventes ni à une tâche récurrente :\n"
+    # //// END Neoffice ////
     # //// Neoffice — the restaurant owner's SHOPPING LIST is ventes' (03.11): « je fais ma liste de courses », « il me faut des
     # //// carottes et deux caisses de bière ». The classifier answered 'direct' to both, so the orchestrator routed the first by
     # //// itself, no pole was remembered (_LAST_ROUTE), and the owner's « oui » after Nora's read-back went 'direct' again: an
     # //// empty promise, nothing written. Named here, the first turn is routed by the router and the yes stays on the pole.
     # //// The same pole reads the list back and mends it (take a line off, change a quantity, empty it): those words name no « courses »,
     # //// so the classifier is told them too, or « enlève la bière de la liste » would be a 'direct' answer that changes nothing.
-    "  Et la LISTE DE COURSES du restaurateur : ce qu'il lui faut acheter, dicté ou écrit (« je fais ma liste de courses », "
+    "  La LISTE DE COURSES du restaurateur : ce qu'il lui faut acheter, dicté ou écrit (« je fais ma liste de courses », "
     "« il me faut des carottes et deux caisses de bière », « ajoute du sel à la liste »), et ce qu'il en fait ensuite : la relire, "
     "y retirer une ligne, en changer une quantité, la vider (« qu'est-ce qu'il y a sur ma liste ? », « enlève la bière de la liste », "
-    "« mets-en cinq au lieu de deux », « vide la liste »).\n"
+    # //// Neoffice — « j'ai pris la bière » ticks a line of his list, it is no work done on a job (05.11, #2288). ////
+    "« mets-en cinq au lieu de deux », « vide la liste », « j'ai pris la bière », « marque le pain comme acheté »).\n"
     # //// END Neoffice ////
     # //// Neoffice — the restaurant owner builds the CARD of his till by talking (03.11, « créer la carte avec Nora »): « j'aimerais
     # //// des cafés », « je fais les boissons froides », « maintenant j'ajoute les vins ». The orchestrator read it as a recurring
     # //// task (« une commande de café quotidienne ») and scheduled one: named here, it is ventes' (the pole that holds the card's tools).
-    "  Et la CARTE du restaurant (les boutons de sa caisse) : la composer en parlant, un morceau à la fois (« j'aimerais des cafés », "
+    "  La CARTE du restaurant (les boutons de sa caisse) : la composer en parlant, un morceau à la fois (« j'aimerais des cafés », "
     "« je fais les boissons froides », « maintenant j'ajoute les vins », « on passe aux plats », « pour le vin, c'est la cave X »). "
     "Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
     # //// Neoffice — the restaurant owner's MENUS and the options of his dishes are ventes' too (04.11), said here for the same reason as the list and the
     # //// card: 'direct' leaves the first turn to the orchestrator, no pole is remembered, and the owner's « oui » reaches nobody.
-    "  Et les MENUS / FORMULES à prix fixe du restaurant : les composer, les compléter, les corriger, les désactiver (« compose-moi un "
+    "  Les MENUS / FORMULES à prix fixe du restaurant : les composer, les compléter, les corriger, les désactiver (« compose-moi un "
     "menu du soir à 38 francs », « ajoute une soupe au menu du midi », « mets le menu enfant à 14 », « désactive le menu du jour »), "
     "et les CUISSONS et ACCOMPAGNEMENTS des plats (« il faut une cuisson sur les viandes et un accompagnement »). Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
     # //// Neoffice — the restaurant owner's RECIPES (cooking) are ventes' too (04.11), said here for the same reason: 'direct' leaves the first turn to
     # //// the orchestrator, no pole is remembered and the owner's « oui » reaches nobody. « recettes » is also the takings of a till: those stay compta's.
-    "  Et les RECETTES de cuisine du restaurant : les noter (« note la recette du risotto : pour quatre, 320 g de riz, un litre de bouillon »), "
+    "  Les RECETTES de cuisine du restaurant : les noter (« note la recette du risotto : pour quatre, 320 g de riz, un litre de bouillon »), "
     "les compléter, les chercher (« quelles soupes j'ai ? »), les mettre à l'échelle (« la soupe de courge pour 40 couverts »), les lier à "
     "un plat de la carte. Jamais les « recettes » au sens des encaissements ou du chiffre d'affaires d'une caisse (c'est compta). Jamais "
     "une tâche récurrente.\n"
     # //// END Neoffice ////
     # //// Neoffice — the SEASON of the products and the dishes of the restaurant is ventes' too (04.11, lot R4): the tool that reads the calendar lives there.
-    "  Et la SAISON des produits et des plats du restaurant (« qu'est-ce qui est de saison en novembre ? », « les asperges, c'est de saison ? », "
+    "  La SAISON des produits et des plats du restaurant (« qu'est-ce qui est de saison en novembre ? », « les asperges, c'est de saison ? », "
     "« des recettes de saison »). Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
     # //// Neoffice — what to BUY for the dishes planned, and what a portion COSTS, are ventes' too (04.11, lot R6): the tools that work out the list from
     # //// the recipes and read the cost of a portion live there, with the shopping list the person's yes writes.
-    "  Et ce qu'il faut ACHETER pour des plats prévus (« mardi, quarante couverts : la soupe de courge et le gratin, il faut acheter quoi ? ») et "
+    "  Ce qu'il faut ACHETER pour des plats prévus (« mardi, quarante couverts : la soupe de courge et le gratin, il faut acheter quoi ? ») et "
     "ce que COÛTE une portion (« combien me coûte une portion de la soupe ? », « le coût du risotto »). Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
     "- support : emails (lecture/rédaction), pièces jointes & OCR, tickets, "
@@ -561,6 +579,11 @@ _CLASSIFIER_SYSTEM = (
     "bavardage, une question sur Nora elle-même, ou une demande à laquelle on répond en "
     "une phrase SANS consulter les données métier. En cas de doute entre un pôle et "
     "'direct' pour une vraie demande métier, choisis le pôle.\n"
+    # //// Neoffice — the memory of the conversation is Nora's own (mem0): no pole holds it. « Tu te souviens du code de mon
+    # //// projet … ? » went to projet, « retiens le numéro … » to compta (05.11, #2289).
+    "Réponds aussi 'direct' pour la MÉMOIRE : « retiens ce numéro », « garde-le en mémoire », « tu te souviens de … que je "
+    "t'ai donné ? » : seule Nora retient, aucun pôle n'a de mémoire.\n"
+    # //// END Neoffice ////
     # //// Neoffice — an English business question came back 'direct' (capability bench, 07.10:
     # //// « How many open quotes does <a client> have … ? »): the rules above are written in French.
     "La langue du message ne change rien : une demande en anglais, en allemand ou en italien "
@@ -582,6 +605,11 @@ _CLASSIFIER_SYSTEM = (
     "contexte ventes/devis ou compta/factures est un CLIENT, PAS un sujet RH (rh = congés, paie, "
     # //// Neoffice — and the candidates of a recruitment (07.10).
     "employés internes et candidats à un poste uniquement)."
+    # //// Neoffice — a pole the person names wins over the thread (05.11, #2289): « Fais-la créer par le poste Ventes » stayed
+    # //// on projet, the pole of the previous message.
+    " Si la personne NOMME un pôle (« fais-le faire par les Ventes », « demande à la compta »), réponds ce pôle, même contre le "
+    "pôle du message précédent."
+    # //// END Neoffice ////
     # //// END Neoffice ////
 )
 
@@ -658,7 +686,10 @@ _DID_WORK_RE = re.compile(
     # //// was written to undo. The repo test for it has been red since it was written.
     r"|\b" + _J_AI + r"\s+(?:[ée]t[ée]|fait un tour|fini)\s+(?:\w+\s+){0,2}?(?:chez|sur\s+place|sur\s+le\s+chantier)\b"
     r"|\bje\s+(?:sors|reviens|rentre)\s+de\s+chez\b"
-    r"|\b" + _J_AI + r"\s+pris\s+(?:un|une|des|le|la|deux|trois)\b",
+    # //// Neoffice — « pris » only with the job in the sentence (05.11, #2288): « J'ai pris la bière. » is the restaurant
+    # //// owner ticking his shopping list; this branch sent it to projet four times, and the worker could only block.
+    r"|\b" + _J_AI + r"\s+pris\s+(?:un|une|des|le|la|deux|trois)\b[^.!?]{0,80}?(?:\bchez\b|\bsur\s+place\b|\bsur\s+le\s+chantier\b|\bpour\s+(?:le|ce)\s+chantier\b|\bPROJ-\d+)",
+    # //// END Neoffice ////
     re.IGNORECASE,
 )
 # //// Neoffice — the same job matter given as an ORDER, not as a story. The two
@@ -710,10 +741,54 @@ _DIMENSION = (
 _MEASURE_NOUN = r"(?:surface|superficie|quantit[ée]|volume|p[ée]rim[èe]tre)"
 _MEASUREMENT_RE = re.compile(
     r"\b(?:m[ée]tr[ée]s?|m[ée]trer|m[ée]trage|cubage)\b"
-    r"|\bm[²2³3]\b"
+    # //// Neoffice — not when the unit sits in parentheses after an item's name (05.11, #2288): « Crée une facture … 1 Plateau
+    # //// chêne massif (m²) » is a sales invoice; the person had to say « Fais-la créer par le poste Ventes ».
+    r"|(?<!\()\bm[²2³3]\b(?!\s*\))"
+    # //// END Neoffice ////
     r"|\bm[èe]tres?\s+(?:carr[ée]s?|cubes?|lin[ée]aires?)\b"
     r"|\b" + _MEASURE_NOUN + r"\w*\b[\s\S]{0,200}?" + _DIMENSION +
     r"|" + _DIMENSION + r"[\s\S]{0,200}?\b" + _MEASURE_NOUN + r"\w*\b",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+# //// Neoffice — an import of articles from a file or a supplier's catalogue (05.11): « importe mes articles du fichier … »,
+# //// « où en est mon import d'articles ISI-2026-17625 ? », « …, oui, relance l'import ». ventes holds the import tools.
+_ITEM_IMPORT_RE = re.compile(
+    r"\bISI-\d{4}-\d+"
+    r"|\bimport(?:e[rsz]?|ons|ent|ation|s)?\b[^.!?]{0,40}?\b(?:articles?|fichiers?|catalogues?|produits?|liste\s+d.articles)\b"
+    r"|\b(?:articles?|fichiers?|catalogues?)\b[^.!?]{0,40}?\bimport\w*"
+    r"|\brelanc\w*\s+(?:l['’]\s*|cet\s+|mon\s+|notre\s+)import\b",
+    re.IGNORECASE,
+)
+# //// Neoffice — the jobs pole's « À traiter » list named as a place (05.11, #2257): « qu'est-ce qui attend dans À traiter ? ».
+# //// Not « les factures à traiter » (no place word before it), which stays to the other rules.
+_TO_HANDLE_RE = re.compile(
+    r"(?:\b(?:dans|sur|en|de|onglet|liste|page|espace)\s+(?:l['’]\s*onglet\s+|la\s+liste\s+|la\s+page\s+)?)[«\"']?\s*[àÀaA]\s+traiter\b"
+    r"|^\s*[«\"']?\s*[àÀaA]\s+traiter\s*[»\"']?\s*\??\s*$",
+    re.IGNORECASE,
+)
+# //// Neoffice — a pole the person names wins over the thread (05.11, #2289): « Fais-la créer par le poste Ventes ».
+_NAMED_POLE_RE = re.compile(
+    r"\b(?:par|au|aux|[àa]|pour|vers|avec)\s+(?:le\s+|la\s+|les\s+|l['’]\s*)?(?:poste|p[ôo]le|service|d[ée]partement|bureau|[ée]quipe)\s+"
+    r"(?:des\s+|du\s+|de\s+la\s+|de\s+l['’]\s*)?"
+    r"(ventes?|compta(?:bilit[ée])?|rh|ressources\s+humaines|support|projets?|chantiers?|analyse|restaurant|resto)\b",
+    re.IGNORECASE,
+)
+_NAMED_POLES = {
+    "vente": "ventes", "ventes": "ventes", "compta": "compta", "comptabilite": "compta", "comptabilité": "compta",
+    "rh": "rh", "ressources humaines": "rh", "support": "support", "projet": "projet", "projets": "projet",
+    "chantier": "projet", "chantiers": "projet", "analyse": "analyse", "restaurant": "resto", "resto": "resto",
+}
+# //// Neoffice — the memory of the conversation is Nora's own (05.11, #2289): no pole holds mem0. « Tu te souviens du code de
+# //// mon projet … ? » went to projet, « retiens le numéro 5218 … » and « quel numéro t'ai-je demandé de retenir ? » to compta.
+# //// Not a deduction (« retiens 10 % sur la facture »).
+_MEMORY_RE = re.compile(
+    r"^(?!.*(?:%|\bfactur\w*|\bsalaire\w*|\bdevis\b))"
+    r".*(?:\bretiens\b|\bretenez\b|\bm[ée]morise\w*|\bgarde[sz]?(?:-le|-la|-les)?\s+(?:bien\s+)?en\s+m[ée]moire\b"
+    r"|\bsouviens-toi\b|\btu\s+te\s+souviens\b|\bvous\s+vous\s+souvenez\b|\bte\s+rappelles-tu\b"
+    r"|\bt['’]\s*ai-je\s+(?:dit|demand[ée]|donn[ée])\b|\bje\s+t['’]\s*ai\s+(?:dit|donn[ée]|demand[ée])\s+de\s+retenir\b"
+    r"|\bremember\b|\bmerk\s+dir\b|\bricorda(?:ti)?\b)",
     re.IGNORECASE,
 )
 # //// END Neoffice ////
@@ -1690,28 +1765,34 @@ _FAST_PATH_RULES = (
     # //// END Neoffice ////
     # //// Neoffice — the owner's shopping list is ventes' (03.11): see _SHOPPING_LIST_RE. Only ventes holds the two tools
     # //// that propose it and write it (frappe_shopping_list_propose / _add).
-    (_SHOPPING_LIST_RE, "ventes"),
+    (_SHOPPING_LIST_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
     # //// END Neoffice ////
     # //// Neoffice — the card of the restaurant's till is ventes' too (03.11): see _RESTO_CARD_RE. Its three tools live in that pole.
-    (_RESTO_CARD_RE, "ventes"),
+    (_RESTO_CARD_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
     # //// END Neoffice ////
     # //// Neoffice — the menus and the cooking / side of the dishes, see _RESTO_MENU_RE and _RESTO_OPTIONS_RE (04.11): the same pole, the same reason.
-    (_RESTO_MENU_RE, "ventes"),
-    (_RESTO_OPTIONS_RE, "ventes"),
+    (_RESTO_MENU_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
+    (_RESTO_OPTIONS_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
     # //// END Neoffice ////
     # //// Neoffice — the recipes of the restaurant, see _RESTO_RECIPE_RE and _RESTO_PORTIONS_RE (04.11): the same pole, the same reason.
-    (_RESTO_RECIPE_RE, "ventes"),
-    (_RESTO_PORTIONS_RE, "ventes"),
-    (_RESTO_SEASON_RE, "ventes"),
+    (_RESTO_RECIPE_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
+    (_RESTO_PORTIONS_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
+    (_RESTO_SEASON_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
     # //// END Neoffice ////
     # //// Neoffice — what to buy for the dishes planned, and what a portion costs, see _RESTO_BUY_RE and _RESTO_COST_RE (04.11): the same pole.
-    (_RESTO_BUY_RE, "ventes"),
-    (_RESTO_COST_RE, "ventes"),
+    (_RESTO_BUY_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
+    (_RESTO_COST_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
     # //// reached support, which has no such tool: tool_search five times (bench, 24.09).
     # //// Not for an employee (rh keeps personnel records).
+    # //// Neoffice — an item import is ventes' (05.11, #2288/#2289): « …, oui, relance l'import » matched the dunning rule
+    # //// (« relance ») and went to compta; « où en est mon import d'articles ISI-… ? » went to support.
+    (_ITEM_IMPORT_RE, "ventes"),
+    # //// Neoffice — « À traiter » is the jobs pole's list (05.11, #2257).
+    (_TO_HANDLE_RE, "projet"),
+    # //// END Neoffice ////
     (_CONTACT_CHANGE_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — the same change told as a FACT, with no « change » verb (25.09):
@@ -3079,6 +3160,17 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     # keyword rule matches (an explicit "oui mais plutôt un graphique" must still
     # reach analyse). The SOUL still decides confirm vs re-draft; routing only
     # guarantees the right pole sees the confirmation. grep "//// Neoffice".
+    # //// Neoffice — a pole the person names, and the memory of the conversation, before the thread (05.11, #2289).
+    _named = _NAMED_POLE_RE.search(msg)
+    if _named:
+        _pole = _NAMED_POLES.get(re.sub(r"\s+", " ", _named.group(1).lower()))
+        if _pole in POLES:
+            logger.info("nora_chat_router: the person names a pole → %s (thread and rules skipped)", _pole)
+            return _pole
+    if _MEMORY_RE.search(msg) and not _RECUR_RE.search(msg):
+        logger.info("nora_chat_router: the memory of the conversation → DIRECT (only Nora holds mem0)")
+        return "DIRECT"
+    # //// END Neoffice ////
     if (
         prior
         and prior.get("pole") in POLES
@@ -3369,7 +3461,10 @@ _DOCTYPE_POLES = {
     "Project": "projet", "Task": "projet", "Timesheet": "projet",
     "Issue": "support", "HD Ticket": "support",
     # //// Neoffice — the restaurant's shopping list page declares its list (03.11), see _SHOPPING_PAGE_RE.
-    "Restaurant Shopping List": "ventes",
+    "Restaurant Shopping List": "resto",  # //// Neoffice — resto since 05.11 ////
+    # //// Neoffice — the restaurant's other records open on a page (05.11): a recipe, a menu, the card of the till.
+    "Restaurant Recipe": "resto", "Restaurant Menu": "resto", "Restaurant Card": "resto",
+    # //// END Neoffice ////
 }
 # //// END Neoffice ////
 

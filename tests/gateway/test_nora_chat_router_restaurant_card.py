@@ -1,5 +1,5 @@
 # //// Neoffice — added file (no upstream equivalent): routing of the card of the restaurant's till built by talking.
-"""« J'aimerais des cafés » routes to ventes, the pole that holds the tools that put a step of the card on a card of the chat.
+"""« J'aimerais des cafés » routes to resto (the restaurant pole since 05.11), the pole that holds the tools that put a step of the card on a card of the chat.
 
 Measured on a development instance, 2026-11-03: the owner's « J'aimerais des cafés » was read as a recurring request and the
 orchestrator scheduled « une commande de café quotidienne ». The owner builds the card one piece at a time (« je fais les boissons
@@ -46,8 +46,8 @@ NOT_THE_CARD = [
 
 
 @pytest.mark.parametrize("message", THE_CARD)
-def test_the_owners_card_goes_to_ventes(message):
-    assert _keyword_pole(message) == "ventes"
+def test_the_owners_card_goes_to_resto(message):
+    assert _keyword_pole(message) == "resto"
 
 
 @pytest.mark.parametrize("message", NOT_THE_CARD)

@@ -278,6 +278,23 @@ def _neoffice_fact_key(text: Optional[str]) -> str:
     return re.sub(r"\W+", " ", str(text or "").casefold()).strip()
 
 
+# //// Neoffice — a recall floor for the prefetch (05.11, #2291). The prefetch injects the ten nearest memories whatever their
+# //// score: for a question nothing in memory answers (« la couleur de mon vélo ? ») ten unrelated lines reached the prompt of
+# //// the turn. mem0_search, which the model calls on purpose, keeps every result. `recall_min_score` in mem0.json overrides it.
+_NEOFFICE_RECALL_MIN_SCORE = 0.55
+
+
+def _neoffice_above_recall_floor(items: list, floor: float) -> list:
+    """The results worth injecting: a score at the floor or above; a result without a score stays (the platform's may have none)."""
+    kept = []
+    for item in items or []:
+        score = item.get("score")
+        if score is None or float(score) >= floor:
+            kept.append(item)
+    return kept
+# //// END Neoffice ////
+
+
 def _neoffice_distinct_facts(items: list) -> list:
     """Keep the first (best-ranked) item of each fact; items without text pass through."""
     seen, out = set(), []
@@ -471,6 +488,7 @@ class Mem0MemoryProvider(MemoryProvider):
         self._config = self._backend = self._sync_thread = self._prefetch_thread = None
         self._mode, self._api_key, self._host, self._user_id, self._agent_id = "platform", "", "", _DEFAULT_USER_ID, "hermes"
         self._rerank_default, self._channel = False, "cli"  # channel = gateway name (cli/telegram/discord/...)
+        self._neoffice_recall_floor = _NEOFFICE_RECALL_MIN_SCORE  # //// Neoffice — see _neoffice_above_recall_floor ////
         self._sync_max_chars = _SYNC_MSG_MAX_CHARS
         self._prefetch_query = self._prefetch_result = ""
         self._prefetch_done = self._atexit_registered = False
@@ -593,6 +611,12 @@ class Mem0MemoryProvider(MemoryProvider):
         # Persisted rerank preference: default for mem0_search when the model omits ``rerank``. Platform-only.
         _rr = cfg.get("rerank", False)
         self._rerank_default = _rr.lower() in ("true", "1", "yes") if isinstance(_rr, str) else bool(_rr)
+        # //// Neoffice — see _neoffice_above_recall_floor (05.11).
+        try:
+            self._neoffice_recall_floor = float(cfg.get("recall_min_score", _NEOFFICE_RECALL_MIN_SCORE))
+        except (TypeError, ValueError):
+            self._neoffice_recall_floor = _NEOFFICE_RECALL_MIN_SCORE
+        # //// END Neoffice ////
         # //// Neoffice — shared company-scope memory. A scope="company" fact
         # lands in ONE shared bucket (user_id=company_id) so EVERY user of the
         # instance sees it; personal facts stay per-user and reads merge both.
@@ -738,6 +762,7 @@ class Mem0MemoryProvider(MemoryProvider):
             # //// mem0_search and mem0_list keep every copy, so a correction reaches them all.
             # //// What was recalled is kept for sync_turn, which then does not store NORA's
             # //// restatement of it a second time.
+            results = _neoffice_above_recall_floor(results, self._neoffice_recall_floor)  # //// Neoffice — see the function ////
             results = _neoffice_distinct_facts(results)
             self._neoffice_recalled = frozenset(
                 _neoffice_fact_key(r.get("memory")) for r in results if r.get("memory"))

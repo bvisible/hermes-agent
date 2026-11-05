@@ -1,5 +1,5 @@
 # //// Neoffice — added file (no upstream equivalent): routing of the restaurant owner's menus and of the cooking / side of his dishes.
-"""« Compose-moi un menu du soir à 38 francs » routes to ventes, the pole that holds the tools that propose the menu and write it.
+"""« Compose-moi un menu du soir à 38 francs » routes to resto (the restaurant pole since 05.11), the pole that holds the tools that propose the menu and write it.
 
 Measured on a development instance, 2026-11-04: the classifier answered 'direct' to the menu sentence. The orchestrator routed it by
 itself, so the router remembered no pole, and the owner's « oui, écris-le » went to nobody (an empty promise, nothing written).
@@ -38,9 +38,9 @@ OPTIONS = [
 
 
 @pytest.mark.parametrize("message", MENUS)
-def test_a_menu_goes_to_ventes(message):
+def test_a_menu_goes_to_resto(message):
     assert _RESTO_MENU_RE.search(message)
-    assert _keyword_pole(message) == "ventes"
+    assert _keyword_pole(message) == "resto"
 
 
 @pytest.mark.parametrize("message", NOT_A_MENU)
@@ -49,9 +49,9 @@ def test_the_menu_of_a_screen_or_a_formula_is_not_a_restaurant_menu(message):
 
 
 @pytest.mark.parametrize("message", OPTIONS)
-def test_the_cooking_and_the_side_of_the_dishes_go_to_ventes(message):
+def test_the_cooking_and_the_side_of_the_dishes_go_to_resto(message):
     assert _RESTO_OPTIONS_RE.search(message)
-    assert _keyword_pole(message) == "ventes"
+    assert _keyword_pole(message) == "resto"
 
 
 def test_the_classifier_is_told_what_the_owner_says_of_his_menus():

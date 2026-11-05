@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re  # //// Neoffice — see _repairs_into_a_terminal_tool ////
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -89,6 +90,25 @@ class ToolValidationVerdict:
     mixed_invalid_batch: bool
 
 
+# //// Neoffice — a repaired name never lands on a TERMINAL kanban tool (05.11). The pole workers drop the kanban tools they
+# //// never call (agent.disabled_tools: kanban_comment, kanban_create, kanban_link… 0 calls in 30 days, ~3 700 tokens a call),
+# //// but KANBAN_GUIDANCE still names them, and the fuzzy repair (cutoff 0.7) would turn « kanban_comment » (0.83) and
+# //// « kanban_create » (0.79) into kanban_complete, « kanban_link » (0.78) into kanban_block: one stray call would END the
+# //// task. A repair that only fixes case, separators or a « tool » suffix still reaches them.
+_NEOFFICE_TERMINAL_TOOLS = frozenset({"kanban_complete", "kanban_block"})
+
+
+def _repairs_into_a_terminal_tool(asked: str, repaired: str) -> bool:
+    """True when the fuzzy repair would turn another name into kanban_complete or kanban_block."""
+    if repaired not in _NEOFFICE_TERMINAL_TOOLS:
+        return False
+    letters = re.sub(r"[^a-z]", "", (asked or "").lower())
+    if letters.endswith("tool"):
+        letters = letters[: -len("tool")]
+    return letters != re.sub(r"[^a-z]", "", repaired)
+# //// END Neoffice ////
+
+
 def _preview_name(name: str) -> str:
     return name[:80] + "..." if len(name) > 80 else name
 
@@ -164,6 +184,10 @@ def validate_tool_calls(
             repaired = agent._repair_tool_call(tc.function.name)
             # //// Neoffice — see _other_mcp_tool (10.10): never another tool of the same server.
             if repaired and _other_mcp_tool(tc.function.name, repaired):
+                repaired = None
+            # //// END Neoffice ////
+            # //// Neoffice — see _repairs_into_a_terminal_tool (05.11): never kanban_complete / kanban_block by similarity.
+            if repaired and _repairs_into_a_terminal_tool(tc.function.name, repaired):
                 repaired = None
             # //// END Neoffice ////
             if not repaired:

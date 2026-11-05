@@ -1,5 +1,5 @@
 # //// Neoffice — added file (no upstream equivalent): routing of the restaurant owner's recipes.
-"""« Note la recette du risotto : pour quatre, 320 g de riz... » routes to ventes, the pole that holds the tools that propose the recipe and write it.
+"""« Note la recette du risotto : pour quatre, 320 g de riz... » routes to resto (the restaurant pole since 05.11), the pole that holds the tools that propose the recipe and write it.
 
 Same reason as the menus: left to the orchestrator the first turn remembers no pole and the owner's « oui » reaches nobody. But « recettes » is
 also what a till took in: the takings of the month, of the day, of the till stay with compta.
@@ -42,21 +42,21 @@ TAKINGS = [
 
 
 @pytest.mark.parametrize("message", RECIPES)
-def test_a_recipe_goes_to_ventes(message):
+def test_a_recipe_goes_to_resto(message):
     assert _RESTO_RECIPE_RE.search(message)
-    assert _keyword_pole(message) == "ventes"
+    assert _keyword_pole(message) == "resto"
 
 
 @pytest.mark.parametrize("message", PORTIONS)
-def test_a_number_of_covers_asked_of_a_dish_goes_to_ventes(message):
+def test_a_number_of_covers_asked_of_a_dish_goes_to_resto(message):
     assert _RESTO_PORTIONS_RE.search(message)
-    assert _keyword_pole(message) == "ventes"
+    assert _keyword_pole(message) == "resto"
 
 
 @pytest.mark.parametrize("message", TAKINGS)
 def test_the_takings_of_a_till_are_not_a_recipe(message):
     assert not _RESTO_RECIPE_RE.search(message)
-    assert _keyword_pole(message) != "ventes" or "recette" not in message.lower()
+    assert _keyword_pole(message) != "resto" or "recette" not in message.lower()
 
 
 def test_the_classifier_is_told_what_the_owner_says_of_his_recipes_and_that_takings_are_compta():
@@ -85,9 +85,9 @@ NOT_A_KITCHEN = [
 
 
 @pytest.mark.parametrize("message", SEASON)
-def test_the_season_of_a_product_or_a_dish_goes_to_ventes(message):
+def test_the_season_of_a_product_or_a_dish_goes_to_resto(message):
     assert _RESTO_SEASON_RE.search(message)
-    assert _keyword_pole(message) == "ventes"
+    assert _keyword_pole(message) == "resto"
 
 
 @pytest.mark.parametrize("message", NOT_A_KITCHEN)
@@ -127,9 +127,9 @@ NOT_A_DISH_COST = [
 
 
 @pytest.mark.parametrize("message", BUY)
-def test_what_to_buy_for_dishes_planned_goes_to_ventes(message):
+def test_what_to_buy_for_dishes_planned_goes_to_resto(message):
     assert _RESTO_BUY_RE.search(message)
-    assert _keyword_pole(message) == "ventes"
+    assert _keyword_pole(message) == "resto"
 
 
 @pytest.mark.parametrize("message", NOT_BUYING_DISHES)
@@ -138,9 +138,9 @@ def test_a_purchase_that_is_no_dish_is_not_routed_by_this_rule(message):
 
 
 @pytest.mark.parametrize("message", COST)
-def test_the_cost_of_a_portion_goes_to_ventes(message):
+def test_the_cost_of_a_portion_goes_to_resto(message):
     assert _RESTO_COST_RE.search(message)
-    assert _keyword_pole(message) == "ventes"
+    assert _keyword_pole(message) == "resto"
 
 
 @pytest.mark.parametrize("message", NOT_A_DISH_COST)

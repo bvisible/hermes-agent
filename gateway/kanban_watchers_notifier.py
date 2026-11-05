@@ -568,6 +568,7 @@ _NEOFFICE_DOMAINS = {
     "rh": "Ressources Humaines",
     "analyse": "Analyse",
     "projet": "Projets",
+    "resto": "Restaurant",  # //// Neoffice — the restaurant pole (05.11) ////
 }
 
 
