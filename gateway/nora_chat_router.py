@@ -1431,7 +1431,9 @@ _REPORT_HINT = (
     "comma; sources sales_by_month, purchases_by_month, sales_by_customer, purchases_by_supplier, sales_by_item, "
     "receivables_ageing, payables_ageing, stock_value; periods 2026, 2026-Q1, 2026-03, this_year, last_year, "
     "last_12_months), and the code reads them with their rights and writes for each its part, with what it says, its "
-    "chart or table: write no part nor sentence about them, and a report on our figures alone needs no outline. A report "
+    # //// Neoffice — with figures named, the model still wrote a part of its own for each, which the figures then repeated
+    "chart or table: write no part nor sentence about them. A report on our figures takes NO outline unless they said "
+    "something more than the subject. A report "
     "on our sales: figures=\"sales_by_month:2026,sales_by_customer:2026,sales_by_item:2026\". What you do not know "
     "otherwise goes in square brackets for them to fill in, in their language (« [à compléter : nos horaires] »), never a "
     "value you made up. No subject at all: ask what it is about, in one sentence. Then answer with its `reply` as it is: "
