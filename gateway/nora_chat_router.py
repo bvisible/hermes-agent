@@ -3858,7 +3858,7 @@ def _retire_unanswered_questions(kanban_db, conn, conversation_id: Optional[str]
     prefix = cid + ":"
     rows = conn.execute(
         "SELECT id FROM tasks WHERE substr(idempotency_key, 1, ?) = ? AND status = 'blocked' "
-        "AND block_kind = 'needs_input' AND id != ? AND assignee = ?",  # //// Neoffice — the same pole ////
+        "AND IFNULL(block_kind, 'needs_input') = 'needs_input' AND id != ? AND assignee = ?",  # //// Neoffice — the same pole; no kind = a question (05.11) ////
         (len(prefix), prefix, keep, pole),
     ).fetchall()
     retired = [row[0] for row in rows if kanban_db.archive_task(conn, row[0])]
@@ -3870,6 +3870,8 @@ def _retire_unanswered_questions(kanban_db, conn, conversation_id: Optional[str]
 
 # //// Neoffice — the desk waiting for this person's answer (05.11, #2285): the newest router task of the conversation still blocked on a
 # //// question to the person (`needs_input`), asked within the window. A question left for hours is no longer a conversation.
+# //// A worker that blocks without saying the kind asks a question too: seen on the first essay, « Je les ajoute ? » had no kind, and the
+# //// answer went by the word « devis » to the sales pole. Only a kind that says otherwise is not a question.
 _QUESTION_WINDOW_SECONDS = 2 * 3600
 
 
@@ -3886,7 +3888,8 @@ def _question_waiting(conversation_id: Optional[str], board: Optional[str] = Non
             prefix = cid + ":"
             row = conn.execute(
                 "SELECT assignee FROM tasks WHERE substr(idempotency_key, 1, ?) = ? AND status = 'blocked' "
-                "AND block_kind = 'needs_input' AND created_at >= ? ORDER BY created_at DESC LIMIT 1",
+                # //// Neoffice — no kind = a question, see above. ////
+                "AND IFNULL(block_kind, 'needs_input') = 'needs_input' AND created_at >= ? ORDER BY created_at DESC LIMIT 1",
                 (len(prefix), prefix, int(_time_thread.time()) - _QUESTION_WINDOW_SECONDS),
             ).fetchone()
         finally:

@@ -186,5 +186,10 @@ def test_the_board_says_which_desk_waits(monkeypatch, tmp_path):
     assert r._question_waiting("c1") == "projet"
     assert r._question_waiting("c2") is None
     assert r._question_waiting(None) is None
+    conn.execute("INSERT INTO tasks VALUES ('resto', 'blocked', NULL, 'c3:1', ?)", (now,))  # a worker that said no kind asks too
+    conn.execute("INSERT INTO tasks VALUES ('resto', 'blocked', 'technical', 'c4:1', ?)", (now,))
+    conn.commit()
+    assert r._question_waiting("c3") == "resto"
+    assert r._question_waiting("c4") is None
     monkeypatch.setattr(kanban_db_connect, "connect", lambda **kw: 1 / 0)
     assert r._question_waiting("c1") is None
