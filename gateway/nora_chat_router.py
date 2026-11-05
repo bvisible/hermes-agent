@@ -821,6 +821,17 @@ _NEW_REQUEST_RE = re.compile(
 )
 # //// END Neoffice ////
 
+# //// Neoffice — three real misses left after the replay of 05.11 (481 requests). The orchestrator has neither what the desk wrote nor the
+# //// doctrine: « c'est toujours pas juste, tu as écrit Daniel Moret » must reach the desk that wrote it, and « dans quel texte de l'AFC… »
+# //// the accounting pole, which holds the wiki and must source it. A Neoffice Note is named VN-<year>-<number>, and notes are support's.
+_CORRECTION_RE = re.compile(
+    r"\b(?:pas\s+juste|pas\s+correct|mal\s+[ée]crit|c[’']est\s+faux|tu\s+as\s+[ée]crit|t[’']as\s+[ée]crit|tu\s+t[’']es\s+tromp)",
+    re.IGNORECASE,
+)
+_TAX_LAW_RE = re.compile(r"\b(?:AFC|LTVA|OTVA)\b", re.IGNORECASE)
+_NOTE_NUMBER_RE = re.compile(r"\bVN-\d{4}-\d+", re.IGNORECASE)
+# //// END Neoffice ////
+
 # //// Neoffice — a client's or supplier's contact change, as a request (« change l'adresse de … »)
 # //// and as a fact (« … a déménagé »): named, so the employee check of route_chat_message (#843)
 # //// reads the same words as the rules below. See the rules for what each half excludes.
@@ -1828,6 +1839,9 @@ _FAST_PATH_RULES = (
     (_SALES_INVOICE_WRITE_RE, "ventes"),
     # //// Neoffice — « À traiter » is the jobs pole's list (05.11, #2257).
     (_TO_HANDLE_RE, "projet"),
+    # //// Neoffice — see _TAX_LAW_RE and _NOTE_NUMBER_RE (05.11).
+    (_TAX_LAW_RE, "compta"),
+    (_NOTE_NUMBER_RE, "support"),
     # //// END Neoffice ////
     (_CONTACT_CHANGE_RE, "ventes"),
     # //// END Neoffice ////
@@ -3221,6 +3235,17 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         and not _is_letter_request(msg)
     ):
         logger.info("nora_chat_router: the answer to a question of %s stays there (rules and classifier skipped)", prior["pole"])
+        return prior["pole"]
+    # //// Neoffice — see _CORRECTION_RE (05.11).
+    if (
+        prior
+        and prior.get("pole") in POLES
+        and len(msg) <= 200
+        and _CORRECTION_RE.search(msg)
+        and "?" not in msg
+        and not _NEW_REQUEST_RE.search(msg)
+    ):
+        logger.info("nora_chat_router: a correction of what %s wrote stays there", prior["pole"])
         return prior["pole"]
     # //// END Neoffice ////
     if (

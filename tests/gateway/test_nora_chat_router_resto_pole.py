@@ -143,6 +143,41 @@ def test_a_supplier_invoice_and_reading_invoices_stay_with_accounting(message, p
     assert r._keyword_pole(message) == pole
 
 
+@pytest.mark.parametrize(
+    "message",
+    ["Alors attends, c'est toujours pas juste, tu as écrit Daniel Moret, c'est M-O-R-E-T, Daniel Moret.", "Non, tu as écrit Dupond avec un d",
+     "C'est faux, tu t'es trompé de client", "Ce n'est pas correct", "t’as écrit Moret, pas Morey"],
+)
+def test_a_correction_of_what_the_desk_wrote_stays_with_it(message):
+    assert r._fast_path(message, {"msg": "x", "pole": "compta"}) == "compta"
+
+
+def test_a_correction_with_no_desk_before_it_is_left_to_the_rest():
+    assert r._fast_path("Tu as écrit Dupond avec un d", None) is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Tu as écrit Dupond, et fais une facture à Martin pour le mitigeur ? Il y a trois autres choses à te demander sur ce client et sur sa commande de la semaine dernière et aussi sur son devis du mois passé qui attend.",
+     "Combien de congés me reste-t-il ?"],
+)
+def test_a_long_message_or_a_new_question_is_not_a_correction(message):
+    assert r._fast_path(message, {"msg": "x", "pole": "compta"}) != "compta"
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Dans quel texte de l'AFC la RPLP est-elle citée pour un envoi à l'étranger, et est-ce encore valable ?", "Que dit l'AFC sur les repas d'affaires ?",
+     "Que dit la LTVA sur les acomptes ?"],
+)
+def test_the_law_of_the_tax_is_accounting_and_its_wiki(message):
+    assert r._keyword_pole(message) == "compta"
+
+
+def test_a_note_named_by_its_number_is_support():
+    assert r._keyword_pole("Que dit la note VN-2026-17468 ?") == "support"
+
+
 ASKED = {"msg": "Chiffre le chantier", "pole": "projet", "asked": True}
 
 
