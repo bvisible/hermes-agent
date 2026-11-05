@@ -25,6 +25,20 @@ def test_the_restaurant_is_a_pole_with_a_name_in_every_language():
     assert _NEOFFICE_DOMAINS["resto"] == r.POLE_LABELS["fr"]["resto"]
 
 
+@pytest.mark.parametrize(
+    "message",
+    ["Quels plats me rapportent le plus ?", "Quels sont mes plats les plus rentables ?", "Qu'est-ce que je devrais revoir sur ma carte ?",
+     "La rentabilité de ma carte", "Fais-moi une analyse de ma carte", "La marge de mes plats"],
+)
+def test_what_the_card_earns_is_the_restaurant_pole(message):
+    assert r._keyword_pole(message) == "resto"
+
+
+@pytest.mark.parametrize("message", ["Quelle est ma marge sur cette facture ?", "Quels sont mes articles les plus vendus ?", "Analyse de mes ventes"])
+def test_the_margin_of_a_shop_is_not_the_card(message):
+    assert r._keyword_pole(message) != "resto"
+
+
 def test_the_shopping_list_page_belongs_to_the_restaurant_pole():
     assert r._DOCTYPE_POLES["Restaurant Shopping List"] == "resto"
 

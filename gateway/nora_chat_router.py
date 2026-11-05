@@ -554,7 +554,7 @@ _CLASSIFIER_SYSTEM = (
     "  La SAISON des produits et des plats du restaurant (« qu'est-ce qui est de saison en novembre ? », « les asperges, c'est de saison ? », "
     "« des recettes de saison »). Jamais une tâche récurrente.\n"
     # //// END Neoffice ////
-    # //// Neoffice — what to BUY for the dishes planned, and what a portion COSTS, are ventes' too (04.11, lot R6): the tools that work out the list from
+    # //// Neoffice — what to BUY for the dishes planned, and what a portion COSTS, are the restaurant's too (04.11, lot R6): the tools that work out the list from
     # //// the recipes and read the cost of a portion live there, with the shopping list the person's yes writes.
     "  Ce qu'il faut ACHETER pour des plats prévus (« mardi, quarante couverts : la soupe de courge et le gratin, il faut acheter quoi ? ») et "
     "ce que COÛTE une portion (« combien me coûte une portion de la soupe ? », « le coût du risotto »). Jamais une tâche récurrente.\n"
@@ -1760,7 +1760,7 @@ _RESTO_PORTIONS_RE = re.compile(r"\bpour\s+\d+\s+(?:couverts?|portions?)\b", re.
 
 
 # //// Neoffice — what to BUY for the dishes planned and what a PORTION COSTS (04.11, NeoResto lot R6): « mardi, quarante couverts : la soupe de courge,
-# //// il faut acheter quoi ? », « combien me coûte une portion du risotto ? ». Ventes holds the tool that works the list out from the recipes (and the
+# //// il faut acheter quoi ? », « combien me coûte une portion du risotto ? ». The restaurant pole holds the tool that works the list out from the recipes (and the
 # //// shopping list its yes writes) and the one that reads the cost. « acheter » alone is any purchase: it must come with a number of covers or a dish.
 _NUMBER = (
     r"\d+|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|quinze|vingt|trente|quarante|cinquante|soixante|cent"
@@ -1769,6 +1769,14 @@ _RESTO_BUY_RE = re.compile(
     r"(?=.*\b(?:acheter|commander|courses)\b)"
     rf"(?=.*(?:\b(?:{_NUMBER})\s*(?:couverts?|portions?)\b|\b(?:recettes?|plats?|soupes?|risottos?|gratins?|tartes?|gigots?)\b)).*",
     re.IGNORECASE | re.DOTALL,
+)
+# //// Neoffice — which dishes sell and which earn (05.11): a read of the restaurant pole, worked out by the app.
+_RESTO_CARD_EARNS_RE = re.compile(
+    r"\bquels?\s+(?:sont\s+)?(?:mes\s+|nos\s+)?plats?\b[^?.!]{0,40}\b(?:rapportent|rentables?|marges?|se\s+vendent)\b"
+    r"|\bplats?\s+(?:qui\s+(?:me\s+|nous\s+)?rapportent|les\s+plus\s+(?:rentables?|vendus?))\b"
+    r"|\b(?:rentabilit[ée]|analyse\w*|marges?)\s+(?:de\s+)?(?:ma|la|notre|mes|nos)\s+(?:carte|plats?)\b"
+    r"|\brevoir\s+sur\s+(?:ma|la|notre)\s+carte\b",
+    re.IGNORECASE,
 )
 _RESTO_COST_RE = re.compile(
     r"(?=.*\b(?:co[uû]te?s?|co[uû]tent|prix\s+de\s+revient|revient)\b)"
@@ -1780,7 +1788,7 @@ _RESTO_COST_RE = re.compile(
 
 
 # //// Neoffice — the SEASON of the products and the dishes of the restaurant (04.11, NeoResto lot R4): « qu'est-ce qui est de saison ? », « des recettes de
-# //// saison », « les asperges, c'est de saison ? ». Ventes holds the tool that reads the calendar and the recipes it ranks. « de saison » alone is too common
+# //// saison », « les asperges, c'est de saison ? ». The restaurant pole holds the tool that reads the calendar and the recipes it ranks. « de saison » alone is too common
 # //// (a collection, a sale): it must come with something of a kitchen (a vegetable, a fruit, a dish, the card, the menu).
 _RESTO_SEASON_RE = re.compile(
     r"(?:(?=.*\b(?:(?:de|en|hors|in)\s+saison|in\s+season|saisonni[eè]r\w*)\b)"
@@ -1827,6 +1835,7 @@ _FAST_PATH_RULES = (
     # //// Neoffice — what to buy for the dishes planned, and what a portion costs, see _RESTO_BUY_RE and _RESTO_COST_RE (04.11): the same pole.
     (_RESTO_BUY_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
     (_RESTO_COST_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
+    (_RESTO_CARD_EARNS_RE, "resto"),  # //// Neoffice — see _RESTO_CARD_EARNS_RE ////
     # //// END Neoffice ////
     # //// Neoffice — CHANGING a customer's or supplier's e-mail, phone or address is ventes'
     # //// (frappe_party_contact_update). « Change l'adresse e-mail de <un client> »
