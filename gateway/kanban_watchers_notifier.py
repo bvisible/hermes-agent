@@ -623,13 +623,24 @@ def _neoffice_fmt_completed(ev, n) -> tuple:
             full = str(payload_summary)
     # //// Neoffice — a worker that read this header in the conversation film wrote it back at the
     # //// top of its handoff, and the person read it twice (osiris, 10.10): the repeat is dropped.
-    head = f"✅ {_neoffice_head(n)} — {n.title}"
+    # //// Neoffice — the head says which desk answers, no more (05.11, #2285): « ✅ Ventes — <the person's own message> » put a check
+    # //// mark on turns that changed nothing and repeated what the person had just written. The line stays on its own: the voice
+    # //// console drops it before reading aloud and reads the desk in it (nora_console _spokenAnswer, _answerPole). The old
+    # //// head is only the fallback of a worker that left no summary, where it is all there is to say.
+    label = _neoffice_head(n)
+    head = f"{label} —"
+    old_head = f"✅ {label} — {n.title}"
     if full:
         body = full.strip()
-        while body.startswith(head):
-            body = body[len(head):].lstrip()
+        # //// Neoffice — the head a worker copied from the film, in its old form or this one. ////
+        while body.startswith(old_head) or body.startswith(head + "\n") or body.startswith(head + " "):
+            body = body[len(old_head if body.startswith(old_head) else head):].lstrip()
         full = body
+    # //// Neoffice — no summary: the old head is all there is to say. ////
+    if not full:
+        head = old_head
     handoff = f"\n{full.strip()[:3500]}" if full else ""
+    # //// END Neoffice ////
     # Upstream #70752: the wake turn carries the first line only (their cap), so a woken
     # creator does not re-decompose work that already exists. The customer message above
     # stays full length; the wake prompt is internal.
@@ -703,7 +714,8 @@ def _neoffice_fmt_block_loop(ev, n) -> tuple:
     recurrences = _neoffice_payload_text(ev, "recurrences", 200)
     times = f" (bloquée {recurrences} fois pour la même raison)" if recurrences else ""
     if _payload(ev, "kind") == "needs_input":
-        reason = _neoffice_payload_text(ev, "reason", 160)
+        # //// Neoffice — the reason IS the question to the person (05.11): at 160 characters it ended mid-word (« … omble cheval »).
+        reason = _neoffice_payload_text(ev, "reason", 3500)
         return (f"🛑 {head} — j'ai besoin de votre décision pour continuer{times}"
                 + (f" : {reason}" if reason else "")), None, None
     return f"🛑 {head} — je bute sur cette demande{times} ; je la signale pour qu'elle soit reprise.", None, None

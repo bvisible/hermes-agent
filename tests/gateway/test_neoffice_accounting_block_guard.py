@@ -86,3 +86,9 @@ def test_does_not_filter_other_domains_or_non_allocation_accounting_tasks():
         title="Incident",
         body="Quel traitement appliquer ?",
     ) == "Ticket 1520 : quel choix ?"
+
+
+def test_a_long_question_reaches_the_person_whole():
+    # 05.11: a read-back delivered as a question ended mid-word at 600 characters, for every pole.
+    question = "Voici ce que j'ai compris : " + "une ligne, " * 80 + "je l'ajoute ?"
+    assert _safe_accounting_block_reason(question, assignee="ventes", title="Liste", body="") == question

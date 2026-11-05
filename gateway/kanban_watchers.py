@@ -245,7 +245,9 @@ def _safe_accounting_block_reason(
     if assignee != "compta" or not any(
         marker in context for marker in _ACCOUNT_ALLOCATION_MARKERS
     ):
-        return cleaned[:600]
+        # //// Neoffice — a blocked reason is what the person reads, and a read-back (a list, a menu, an import) is one: at 600
+        # //// characters it ended mid-word, for every pole (05.11, 917 seen). The same limit as a finished answer.
+        return cleaned[:3500]
 
     questions = []
     for match in _QUESTION_FRAGMENT_RE.finditer(cleaned):

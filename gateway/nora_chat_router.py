@@ -802,6 +802,15 @@ _MEMORY_RE = re.compile(
 )
 # //// END Neoffice ////
 
+# //// Neoffice — what opens a new request rather than an answer (05.11, #2285): an order or a question without the « le / la / les » of
+# //// what was just said (« crée-le sans e-mail » answers, « crée un client » asks).
+_NEW_REQUEST_RE = re.compile(
+    r"^\s*(?:et\s+|non\s*,?\s+|oui\s*,?\s+)?(?:montre|affiche|donne|liste|combien|quels?|quelles?|qui\b|o[uù]\b|cr[ée]e|fais|pr[ée]pare|envoie|ouvre|"
+    r"cherche|trouve|imprime|sors)\b(?!-(?:le|la|les|moi-le|moi-la)\b)(?!\s+(?:le|la|les)\s+(?:sans|avec|comme|quand|tout)\b)",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
 # //// Neoffice — a client's or supplier's contact change, as a request (« change l'adresse de … »)
 # //// and as a fact (« … a déménagé »): named, so the employee check of route_chat_message (#843)
 # //// reads the same words as the rules below. See the rules for what each half excludes.
@@ -3181,6 +3190,22 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     if _MEMORY_RE.search(msg) and not _RECUR_RE.search(msg):
         logger.info("nora_chat_router: the memory of the conversation → DIRECT (only Nora holds mem0)")
         return "DIRECT"
+    # //// Neoffice — a person answering the question their desk asked stays with that desk (05.11, #2285): « on facture à l'heure »,
+    # //// said to the jobs pole that asked it, went to ventes by the classifier, and « le devis » would have by a rule. The board says
+    # //// a question waits (_question_waiting). Not a question of their own, not a new request (« Fais une facture à Dupont »).
+    if (
+        prior
+        and prior.get("asked")
+        and prior.get("pole") in POLES
+        and len(msg) <= 140
+        and "?" not in msg
+        and not _NEW_REQUEST_RE.search(msg)
+        and not _RECUR_RE.search(msg)
+        and not _is_one_off_reminder(msg)
+        and not _is_letter_request(msg)
+    ):
+        logger.info("nora_chat_router: the answer to a question of %s stays there (rules and classifier skipped)", prior["pole"])
+        return prior["pole"]
     # //// END Neoffice ////
     if (
         prior
@@ -3834,6 +3859,37 @@ def _retire_unanswered_questions(kanban_db, conn, conversation_id: Optional[str]
     if retired:
         logger.info("nora_chat_router: cid=%s answered by task %s, questions retired: %s", cid, keep, retired)
     return retired
+# //// END Neoffice ////
+
+
+# //// Neoffice — the desk waiting for this person's answer (05.11, #2285): the newest router task of the conversation still blocked on a
+# //// question to the person (`needs_input`), asked within the window. A question left for hours is no longer a conversation.
+_QUESTION_WINDOW_SECONDS = 2 * 3600
+
+
+def _question_waiting(conversation_id: Optional[str], board: Optional[str] = None) -> Optional[str]:
+    """The pole that asked this conversation a question and waits for the answer, or None; never raises."""
+    cid = str(conversation_id or "")
+    if not cid:
+        return None
+    try:
+        from hermes_cli import kanban_db_connect
+
+        conn = kanban_db_connect.connect(board=board)
+        try:
+            prefix = cid + ":"
+            row = conn.execute(
+                "SELECT assignee FROM tasks WHERE substr(idempotency_key, 1, ?) = ? AND status = 'blocked' "
+                "AND block_kind = 'needs_input' AND created_at >= ? ORDER BY created_at DESC LIMIT 1",
+                (len(prefix), prefix, int(_time_thread.time()) - _QUESTION_WINDOW_SECONDS),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001 — the board's word is a help, never a condition of routing
+        logger.info("nora_chat_router: the question of cid=%s not read: %s", cid, exc)
+        return None
+    pole = row[0] if row else None
+    return pole if pole in POLES else None
 # //// END Neoffice ////
 
 
@@ -4568,6 +4624,11 @@ def route_chat_message(
         return {"routed": True, "category": "CANCELLED", "ack": None, "task_id": None}
     # //// END Neoffice ////
     prior = _LAST_ROUTE.get(conversation_id) if conversation_id else None
+    # //// Neoffice — a desk waits for this person's answer: see _fast_path (05.11, #2285). Unless the thread has moved to another desk.
+    _asked = _question_waiting(conversation_id, board)
+    if _asked and (not prior or prior.get("pole") == _asked):
+        prior = {**(prior or {"msg": ""}), "pole": _asked, "asked": True}
+    # //// END Neoffice ////
 
     # //// Neoffice — briefing CTA continuity. On the FIRST inbound after an out-of-band
     # briefing (no in-memory prior yet), an AFFIRMATIVE reply to NORA's recorded offer is

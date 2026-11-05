@@ -141,3 +141,50 @@ def test_writing_a_sales_invoice_is_the_sales_pole(message):
 )
 def test_a_supplier_invoice_and_reading_invoices_stay_with_accounting(message, pole):
     assert r._keyword_pole(message) == pole
+
+
+ASKED = {"msg": "Chiffre le chantier", "pole": "projet", "asked": True}
+
+
+@pytest.mark.parametrize(
+    "message", ["on facture à l'heure", "à l'heure", "au forfait", "le devis, pas la facture", "crée-le sans e-mail", "celui de Nyon", "Fais-le sans adresse"]
+)
+def test_the_answer_to_a_question_stays_with_the_desk_that_asked(message):
+    assert r._fast_path(message, ASKED) == "projet"
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Fais une facture à Dupont", "Combien de congés me reste-t-il ?", "Quel est mon chiffre d'affaires", "Rappelle-moi demain à 9h de rappeler Dupont",
+     "Tous les lundis, envoie-moi les factures impayées", "Fais-la créer par le poste Ventes."],
+)
+def test_a_new_request_leaves_the_desk_that_asked(message):
+    assert r._fast_path(message, ASKED) != "projet"
+
+
+def test_without_a_question_waiting_the_rules_decide_as_before():
+    assert r._fast_path("le devis, pas la facture", {"msg": "x", "pole": "projet"}) == "ventes"
+
+
+def test_the_board_says_which_desk_waits(monkeypatch, tmp_path):
+    import sqlite3
+    import time
+
+    from hermes_cli import kanban_db_connect
+
+    path = tmp_path / "kanban.db"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE tasks (assignee TEXT, status TEXT, block_kind TEXT, idempotency_key TEXT, created_at INTEGER)")
+    now = int(time.time())
+    conn.executemany(
+        "INSERT INTO tasks VALUES (?,?,?,?,?)",
+        [("rh", "blocked", "needs_input", "c1:1", now - 9000), ("projet", "blocked", "needs_input", "c1:2", now - 60),
+         ("ventes", "blocked", "technical", "c1:3", now - 10), ("compta", "done", None, "c1:4", now), ("rh", "blocked", "needs_input", "c9:1", now)],
+    )
+    conn.commit()
+    monkeypatch.setattr(kanban_db_connect, "connect", lambda **kw: sqlite3.connect(path))
+    assert r._question_waiting("c1") == "projet"
+    assert r._question_waiting("c2") is None
+    assert r._question_waiting(None) is None
+    monkeypatch.setattr(kanban_db_connect, "connect", lambda **kw: 1 / 0)
+    assert r._question_waiting("c1") is None
