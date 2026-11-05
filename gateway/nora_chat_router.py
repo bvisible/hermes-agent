@@ -110,6 +110,16 @@ ACK_TEMPLATES = {
     "it": "Inoltro la sua richiesta al reparto {label}, torno subito da lei.",
     "en": "I'm passing this to your {label} desk — I'll be right back with you.",
 }
+# //// Neoffice — the ack of a message that answers a desk (05.11, #2285): « Je transmets votre demande à votre pôle Restaurant » is false on
+# //// a « oui » the Restaurant desk asked for, nothing is passed on. Each line keeps an anchor of nora/utils/routing_ack.py: every client skips
+# //// the ack to reach the answer, and one it does not recognise is shown as the answer while the real one is never shown.
+ANSWER_ACK_TEMPLATES = {
+    "fr": "C'est noté, je reviens vers vous très vite.",
+    "de": "Verstanden — ich melde mich gleich.",
+    "it": "Ricevuto, torno subito da lei.",
+    "en": "Got it — I'll be right back with you.",
+}
+# //// END Neoffice ////
 
 
 def _norm_lang(language: Optional[str]) -> str:
@@ -3706,10 +3716,13 @@ def classify(
     return "DIRECT"
 
 
-def build_ack(pole: str, language: Optional[str] = None) -> str:
+# //// Neoffice — `answering`: see ANSWER_ACK_TEMPLATES (#2285)
+def build_ack(pole: str, language: Optional[str] = None, answering: bool = False) -> str:
     """Acknowledgment naming the business pole, in the user's language (default French)."""
-    # //// Neoffice — language-aware ack (was French-only) ////
+    # //// Neoffice — language-aware ack (was French-only); `answering`: see ANSWER_ACK_TEMPLATES ////
     lang = _norm_lang(language)
+    if answering:
+        return ANSWER_ACK_TEMPLATES[lang]
     labels = POLE_LABELS.get(lang, POLE_LABELS["fr"])
     label = labels.get(pole) or POLE_LABELS["fr"].get(pole, "support")
     return ACK_TEMPLATES.get(lang, ACK_TEMPLATES["fr"]).format(label=label)
@@ -5434,7 +5447,7 @@ def route_chat_message(
         logger.exception("nora_chat_router: task creation failed (%s) → DIRECT fallback", exc)
         return {"routed": False, "category": category, "ack": None, "task_id": None}
 
-    ack = build_ack(category, language)
+    ack = build_ack(category, language, answering=category == _asked)  # //// Neoffice — see ANSWER_ACK_TEMPLATES ////
     _steps["closed"] = _time_thread.monotonic()  # //// Neoffice — see _steps ////
     # Deliver the immediate ack NOW so the user sees "I'm handing this to <pole>" right
     # away — it also makes the ~10s worker wait feel responsive. Failure to deliver the
