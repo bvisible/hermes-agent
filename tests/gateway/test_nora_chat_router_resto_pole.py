@@ -196,7 +196,9 @@ ASKED = {"msg": "Chiffre le chantier", "pole": "projet", "asked": True}
 
 
 @pytest.mark.parametrize(
-    "message", ["on facture à l'heure", "à l'heure", "au forfait", "le devis, pas la facture", "crée-le sans e-mail", "celui de Nyon", "Fais-le sans adresse"]
+    "message",
+    ["on facture à l'heure", "à l'heure", "au forfait", "le devis, pas la facture", "crée-le sans e-mail", "celui de Nyon", "Fais-le sans adresse",
+     "ajoute-le", "envoie-la", "supprime-les", "valide-le sans e-mail", "oui, envoie-le", "mets-en deux"],
 )
 def test_the_answer_to_a_question_stays_with_the_desk_that_asked(message):
     assert r._fast_path(message, ASKED) == "projet"
@@ -209,6 +211,15 @@ def test_the_answer_to_a_question_stays_with_the_desk_that_asked(message):
 )
 def test_a_new_request_leaves_the_desk_that_asked(message):
     assert r._fast_path(message, ASKED) != "projet"
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Chiffre le remplacement d'un chauffe-eau chez Dupont.", "Ajoute un rendez-vous demain chez Martin", "Envoie le devis à Dupont", "Calcule la TVA du trimestre",
+     "Enregistre un paiement de 200 francs", "Planifie une visite lundi", "Modifie la facture FA-2026-00012", "Supprime le brouillon de Dupont"],
+)
+def test_an_instruction_is_not_taken_for_an_answer(message):
+    assert r._NEW_REQUEST_RE.search(message), message
 
 
 def test_without_a_question_waiting_the_rules_decide_as_before():

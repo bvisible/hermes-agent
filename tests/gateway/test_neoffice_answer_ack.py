@@ -76,6 +76,13 @@ def test_an_answer_to_a_desk_is_not_passed_on_to_that_desk(monkeypatch, message,
     assert decision["ack"] == ack
 
 
+def test_a_new_question_to_the_desk_that_asked_is_passed_on(monkeypatch):
+    # The desk waits for an answer and the person asks something else of it: nothing was answered.
+    decision, created = _route(monkeypatch, "Dans quel texte de l'AFC la RPLP est-elle citée ?", "compta")
+    assert created[0]["assignee"] == "compta"
+    assert decision["ack"].startswith("Je transmets votre demande à votre pôle Comptabilité")
+
+
 def test_a_request_with_no_question_waiting_is_passed_on(monkeypatch):
     decision, created = _route(monkeypatch, "Fais une facture à Dupont", None)
     assert created[0]["assignee"] == "ventes"

@@ -814,9 +814,15 @@ _MEMORY_RE = re.compile(
 
 # //// Neoffice — what opens a new request rather than an answer (05.11, #2285): an order or a question without the « le / la / les » of
 # //// what was just said (« crée-le sans e-mail » answers, « crée un client » asks).
+# //// The second list needs an object: « chiffre le remplacement d'un chauffe-eau », said while compta waited, stayed there (seen on the screen, 05.11),
+# //// and « note », « valide » or « ajoute-le » alone are answers.
 _NEW_REQUEST_RE = re.compile(
-    r"^\s*(?:et\s+|non\s*,?\s+|oui\s*,?\s+)?(?:montre|affiche|donne|liste|combien|quels?|quelles?|qui\b|o[uù]\b|cr[ée]e|fais|pr[ée]pare|envoie|ouvre|"
-    r"cherche|trouve|imprime|sors)\b(?!-(?:le|la|les|moi-le|moi-la)\b)(?!\s+(?:le|la|les)\s+(?:sans|avec|comme|quand|tout)\b)",
+    r"^\s*(?:et\s+|non\s*,?\s+|oui\s*,?\s+)?(?:"
+    r"(?:montre|affiche|donne|liste|combien|quels?|quelles?|qui\b|o[uù]\b|cr[ée]e|fais|pr[ée]pare|envoie|ouvre|"
+    r"cherche|trouve|imprime|sors)\b(?!-(?:le|la|les|en|moi-le|moi-la)\b)(?!\s+(?:le|la|les)\s+(?:sans|avec|comme|quand|tout)\b)"
+    r"|(?:chiffre|calcule|ajoute|enregistre|planifie|modifie|supprime|annule|valide|retire|enl[eè]ve|remplace|corrige|mets|note)\s+"
+    r"(?!(?:le|la|les)\s+(?:sans|avec|comme|quand|tout)\b)(?:l[ea]s?\b|l['\u2019]|une?\b|des\b|du\b|de\b|mon\b|ma\b|mes\b|ce\b|cet\b|cette\b|ces\b)"
+    r")",
     re.IGNORECASE,
 )
 # //// END Neoffice ////
@@ -5481,7 +5487,10 @@ def route_chat_message(
         logger.exception("nora_chat_router: task creation failed (%s) → DIRECT fallback", exc)
         return {"routed": False, "category": category, "ack": None, "task_id": None}
 
-    ack = build_ack(category, language, answering=category == _asked)  # //// Neoffice — see ANSWER_ACK_TEMPLATES ////
+    # //// Neoffice — see ANSWER_ACK_TEMPLATES: a new question to the desk that asked answers nothing, and is passed on.
+    _answers = category == _asked and "?" not in (message or "") and not _NEW_REQUEST_RE.search(message or "")
+    ack = build_ack(category, language, answering=_answers)
+    # //// END Neoffice ////
     _steps["closed"] = _time_thread.monotonic()  # //// Neoffice — see _steps ////
     # Deliver the immediate ack NOW so the user sees "I'm handing this to <pole>" right
     # away — it also makes the ~10s worker wait feel responsive. Failure to deliver the
