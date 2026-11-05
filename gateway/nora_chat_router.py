@@ -5432,6 +5432,12 @@ def route_chat_message(
                             _request_id)
                 return {"routed": True, "category": "CANCELLED", "ack": None, "task_id": None}
             # //// END Neoffice ////
+            # //// Neoffice — the worker starts with the skill of its task already read: see gateway/nora_skill_preload.py (05.11).
+            from gateway import nora_skill_preload
+
+            _said_before = [line[6:] for line in reversed(_CONV_HISTORY.get(conversation_id) or []) if line.startswith("User: ")]
+            _preloaded = nora_skill_preload.choose(category, message, [line for line in _said_before if line != (message or "")[:240]])
+            # //// END Neoffice ////
             task_id = kanban_db.create_task(
                 conn,
                 title=_task_title(message, prior),  # //// Neoffice — a bare yes, by what it confirms ////
@@ -5440,6 +5446,7 @@ def route_chat_message(
                 created_by="nora-chat-router",
                 initial_status="running",
                 idempotency_key=idempotency_key,
+                skills=_preloaded or None,  # //// Neoffice — see above ////
                 **_ws_kwargs,  # //// Neoffice — stable worker cwd ////
             )
             _steps["created"] = _time_thread.monotonic()  # //// Neoffice — see _steps ////
