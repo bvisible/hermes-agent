@@ -1463,6 +1463,10 @@ def _neoffice_deck_turn_rejection() -> Optional[str]:
         message_id = get_session_env("HERMES_SESSION_MESSAGE_ID", "")
         if deck_turn_under_way(message_id):
             return DECK_TURN_REFUSAL
+        # //// Neoffice — no pole makes reports either (05.11): a report turn of the pre-router, the same way.
+        from gateway.nora_chat_router import REPORT_TURN_REFUSAL, report_turn_under_way
+        if report_turn_under_way(message_id):
+            return REPORT_TURN_REFUSAL
         # //// Neoffice — no pole makes workbooks either (23.10): a workbook turn of the pre-router, the same way;
         # //// nor answers whether one can be made: NORA does, and offers it.
         from gateway.nora_chat_router import (

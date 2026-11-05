@@ -1344,6 +1344,116 @@ def _mark_deck_turn(message_id: Optional[str]) -> None:
 # //// END Neoffice ////
 
 
+# //// Neoffice — a REPORT to make is NORA's own (05.11). « Fais-moi un rapport sur nos ventes 2026 » reached compta, which
+# //// tells a figure in the chat or runs an ERP report, and made no document. The orchestrator holds the tool
+# //// (nora_report_create, NORA_TASKS) and no pole does: the turn is hers, with _REPORT_HINT, decided like a presentation,
+# //// before every other rule, the classifier and the fast answer. « Rapport » is a hard word, so the shapes are narrow:
+# ////   · a making verb, then the noun with an indefinite article or a number (« fais-moi un rapport », « rédige un
+# ////     rapport d'activité »), a wish (« je voudrais un rapport sur … »), the noun opening the message with its subject
+# ////     (« Rapport sur nos ventes 2026 »), in the four languages.
+# //// Never: a definite article (« sors le rapport des ventes », « lance le rapport Balance » run an ERP report, as
+# //// before), a report the ERP names (« un rapport TVA », « un rapport de caisse »), which report answers a need (« quel
+# //// rapport … ? »), « par rapport à », how to make one, what NORA can do, a recurring job (the scheduled tasks), an
+# //// e-mail, a task, a bug, a report in Excel (the workbook's) or with slides (the presentation's). From an open NeoDoc
+# //// the turn is the editor's: the document is there.
+_REPORT_NOUN_FR = r"rapports?"
+_REPORT_NOUN_EN = r"reports?"
+_REPORT_NOUN_DE = r"bericht(?:e|s)?"
+_REPORT_NOUN_IT = r"(?:rapport[oi]|relazion[ei])"
+_REPORT_MAKE_FR = (
+    r"(?:" + _DECK_MAKE_FR + r"|[ée]cri[st]|[ée]crire|[ée]crivez|sors|sortir|sortez|produi[st]|produire|produisez"
+    r"|[ée]tabli[st]|[ée]tablir|[ée]tablissez|dresse[rz]?)"
+)
+_REPORT_REQUEST_RE = re.compile(
+    r"\b" + _REPORT_MAKE_FR + _DECK_PRONOUNS_FR + r"\s+" + _DECK_COUNT + r"\s+" + _DECK_ADJECTIVES + _REPORT_NOUN_FR + r"\b"
+    r"|\b(?:(?:voudrais|voudrions|aimerais|aimerions|veux|voulons|souhaite\w*|faut)\s+(?:d['’]\s*)?|besoin\s+d['’]\s*)"
+    r"(?:une?|des|\d{1,2})\s+" + _DECK_ADJECTIVES + _REPORT_NOUN_FR + r"\b"
+    # the noun opening the message with its subject
+    r"|^\s*(?:une?\s+|an?\s+|eine?n?\s+|una?\s+)?(?:" + _REPORT_NOUN_FR + "|" + _REPORT_NOUN_EN + "|" + _REPORT_NOUN_DE
+    + "|" + _REPORT_NOUN_IT + r")\s+(?:sur|about|on|über|ueber|zu|su|sulle|sui|sulla|sullo)\b"
+    # English
+    r"|\b(?:make|create|prepare|build|draft|write|put\s+together|generate|produce)" + _DECK_PRONOUNS_EN + r"\s+"
+    + _DECK_COUNT + r"\s+" + _DECK_ADJECTIVES + _REPORT_NOUN_EN + r"\b"
+    r"|\b(?:need|want|like)\s+(?:a|an|some|\d{1,2})\s+" + _DECK_ADJECTIVES + _REPORT_NOUN_EN + r"\b"
+    # German: always with its article or number
+    r"|\b(?:erstell\w*|mach\w*|bereite\w*|verfass\w*|schreib\w*|generier\w*)" + _DECK_PRONOUNS_DE + r"\s+" + _DECK_COUNT
+    + r"\s+" + _DECK_ADJECTIVES + _REPORT_NOUN_DE + r"\b"
+    r"|\b(?:brauche|br(?:ä|ae)uchte|h(?:ä|ae)tte\s+gern|m(?:ö|oe)chte)" + _DECK_PRONOUNS_DE + r"\s+" + _DECK_COUNT
+    + r"\s+" + _DECK_ADJECTIVES + _REPORT_NOUN_DE + r"\b"
+    # Italian
+    r"|\b(?:fammi|fai|fate|prepara\w*|crea\w*|genera\w*|redigi\w*|scrivi\w*)" + _DECK_PRONOUNS_IT + r"\s+" + _DECK_COUNT
+    + r"\s+" + _DECK_ADJECTIVES + _REPORT_NOUN_IT + r"\b"
+    r"|\b(?:vorrei|voglio|mi\s+serve)\s+" + _DECK_COUNT + r"\s+" + _DECK_ADJECTIVES + _REPORT_NOUN_IT + r"\b",
+    re.IGNORECASE,
+)
+_REPORT_NOT_RE = re.compile(
+    # how to make one, which one
+    r"\b(?:comment\s+(?:on\s+|je\s+|puis[-\s]je\s+|faire|cr[ée]er|faut[-\s]il)|how\s+(?:do|can|to|should)"
+    r"|wie\s+(?:kann|mache|erstelle|geht)|come\s+(?:si|posso|faccio|fare|creare))\b"
+    r"|\b(?:quel(?:le)?s?|which|welche[nrs]?|quale)\s+(?:" + _REPORT_NOUN_FR + "|" + _REPORT_NOUN_EN + "|" + _REPORT_NOUN_DE
+    + "|" + _REPORT_NOUN_IT + r")\b"
+    # an e-mail, a task, a bug to file; a report in Excel is a workbook
+    r"|\b(?:e-?mails?|mails?|courriels?|t[âa]ches?|to-?dos?|todos?|bugs?|excel|xlsx|classeurs?|tableurs?)\b"
+    # what NORA herself does
+    r"|\b(?:de\s+toi|tes\s+(?:capacit[ée]s|fonctions|fonctionnalit[ée]s|comp[ée]tences|outils)|ce\s+que\s+tu\s+(?:sais|peux|fais)"
+    r"|yourself|your\s+(?:skills|capabilities|features))\b"
+    # a report the ERP names: it is run, not written
+    r"|\b(?:" + _REPORT_NOUN_FR + "|" + _REPORT_NOUN_EN + "|" + _REPORT_NOUN_DE + "|" + _REPORT_NOUN_IT + r")\s+"
+    r"(?:(?:de|du|d['’]|des|of|der|des|di|del)\s*)?(?:tva|mwst|vat|iva|caisse|z|x|cl[ôo]ture\s+de\s+caisse|erreurs?|errors?"
+    r"|fehler|errore|incidents?|pannes?)\b",
+    re.IGNORECASE,
+)
+_REPORT_WITH_SUBJECT_RE = re.compile(
+    r"(?:" + _REPORT_NOUN_FR + "|" + _REPORT_NOUN_EN + "|" + _REPORT_NOUN_DE + "|" + _REPORT_NOUN_IT + r")[^.!?\n]{0,25}?"
+    + _DECK_SUBJECT,
+    re.IGNORECASE,
+)
+
+
+def _is_report_request(msg: Optional[str]) -> bool:
+    """A report to make (NORA's nora_report_create): see _REPORT_REQUEST_RE. Not a workbook (« en Excel »), not how to make
+    one or which one, not a report the ERP names, not a recurring job, not the question about what NORA can do."""
+    msg = msg or ""
+    if not _REPORT_REQUEST_RE.search(msg) or _REPORT_NOT_RE.search(msg) or _SHEET_FILE_RE.search(msg):
+        return False
+    if _RECUR_RE.search(_deck_request_part(msg)):
+        return False
+    return not (_CAPABILITY_RE.match(msg) and not _REPORT_WITH_SUBJECT_RE.search(msg))
+
+
+_REPORT_HINT = (
+    "[Route: a REPORT is asked (a document to read, with its PDF). It is yours, in ONE call: nora_report_create(title=…, "
+    "outline=…, figures=…). `outline` in plain text: first, before any title, what to remember in two or three sentences; "
+    "then « # Title » for each part, whose title says its message, a paragraph on each line, « - » for points, « # Annexe : "
+    "title » at the end; no Markdown bold, no date, no signature. Write what they said and what a tool returned (the "
+    "company's own facts: nora_company_details). OUR FIGURES (sales, revenue, purchases, what customers owe, what we owe, "
+    "the stock) are never written by you and you do not see them: pass figures=\"source:period\" (at most 4, separated by a "
+    "comma; sources sales_by_month, purchases_by_month, sales_by_customer, purchases_by_supplier, sales_by_item, "
+    "receivables_ageing, payables_ageing, stock_value; periods 2026, 2026-Q1, 2026-03, this_year, last_year, "
+    "last_12_months), and the code reads them with their rights and writes for each its part, with what it says, its "
+    "chart or table: write no part nor sentence about them, and a report on our figures alone needs no outline. A report "
+    "on our sales: figures=\"sales_by_month:2026,sales_by_customer:2026,sales_by_item:2026\". What you do not know "
+    "otherwise goes in square brackets for them to fill in, in their language (« [à compléter : nos horaires] »), never a "
+    "value you made up. No subject at all: ask what it is about, in one sentence. Then answer with its `reply` as it is: "
+    "it carries the links that open it in NeoDoc and its PDF and says what is left to complete. Never kanban_create: no "
+    "pole makes reports. Remember at most that the report exists, never its content.]"
+)
+# //// Neoffice — a report turn stays the orchestrator's to its end, as a presentation's (_DECK_TURNS).
+_REPORT_TURNS: dict = {}  # the routed message's id -> when its report turn was decided
+REPORT_TURN_REFUSAL = (
+    "No pole makes reports, and this turn is one: call nora_report_create now, with what the person said and, for our "
+    "figures, `figures`: the code reads them. What you do not know goes in square brackets for the person to complete. Do "
+    "not call kanban_create again in this turn."
+)
+
+
+def report_turn_under_way(message_id: Optional[str]) -> bool:
+    """Whether the turn of the routed message `message_id` is a report to make (see _REPORT_TURNS)."""
+    started = _REPORT_TURNS.get(message_id or "")
+    return started is not None and _time_thread.time() - started <= _DECK_TURN_TTL
+# //// END Neoffice ////
+
+
 # //// Neoffice — a WORKBOOK of the company's figures to make is NORA's own (23.10, step 5 of « Nora partout »). « Fais-moi
 # //// un classeur des ventes par mois de 2026 » matched the revenue rule and reached compta, which tells a figure in the
 # //// chat and makes no file. The orchestrator holds the tool (nora_sheet_create, NORA_TASKS): the code reads the figures
@@ -4835,6 +4945,19 @@ def route_chat_message(
     if _deck_turn:  # //// Neoffice — kanban_create refused in this turn, see _DECK_TURNS (23.10)
         _mark_deck_turn(idempotency_key)
     # //// END Neoffice ////
+    # //// Neoffice — a report to make (05.11), see _is_report_request: NORA's own, decided like a presentation (which it
+    # //// gives way to); every rule that lets a presentation pass lets a report pass, so it takes the same flag and only
+    # //// its hint differs. From an open NeoDoc it is the editor's turn: the document is there.
+    _report_turn = (
+        _offer is None and not _note_request and not _space_turn and not _owned_turn and not _canned_text
+        and not _one_off_reminder and not _deck_turn and not (_editor and _editor.get("app") == "word")
+        and _is_report_request(message)
+    )
+    if _report_turn:  # //// Neoffice — kanban_create refused in this turn, see _REPORT_TURNS
+        _remember(_REPORT_TURNS, idempotency_key)
+    _deck_hint = _REPORT_HINT if _report_turn else _DECK_HINT if _deck_turn else None
+    _deck_turn = _deck_turn or _report_turn
+    # //// END Neoffice ////
     # //// Neoffice — a workbook of figures to make (23.10), see _is_sheet_request: NORA's own, decided like a presentation
     # //// (which it gives way to). From an open NeoGrille it is the editor's turn: the figures go into the open sheet.
     # //// Neoffice — whether one CAN be made is answered by NORA, and the yes that follows makes it (23.10), see
@@ -5174,7 +5297,7 @@ def route_chat_message(
                                      _FRESH_THREAD_HINT if _fresh_yes else None,
                                      _editor_hint(_editor) if _editor_turn else None,
                                      _LETTER_HINT if _letter_turn else None,  # //// Neoffice — a letter (21.10)
-                                     _DECK_HINT if _deck_turn else None,  # //// Neoffice — a presentation (22.10)
+                                     _deck_hint,  # //// Neoffice — a presentation (22.10), a report (05.11)
                                      _sheet_hint,  # //// Neoffice — a workbook, or whether one can be made (23.10)
                                      _SCHEDULED_TASKS_HINT if _tasks_turn else None) if h]  # //// Neoffice — 09.10
         return {"routed": False, "category": "DIRECT", "ack": None, "task_id": None,

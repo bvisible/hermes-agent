@@ -44,6 +44,15 @@ def test_kanban_create_is_refused_in_a_presentation_turn(board):
     assert "nora_presentation_create" in json.dumps(out, ensure_ascii=False)
 
 
+def test_kanban_create_is_refused_in_a_report_turn_with_what_to_do(board, monkeypatch):
+    # //// Neoffice — no pole makes reports either (05.11)
+    monkeypatch.setattr(board, "_REPORT_TURNS", {})
+    board._remember(board._REPORT_TURNS, "delivery-1")
+    out = _create()
+    assert out.get("ok") is not True, out
+    assert "nora_report_create" in json.dumps(out, ensure_ascii=False)
+
+
 def test_another_turn_of_the_same_thread_creates_tasks(board):
     # A second message of the thread (a second tab) is its own turn: the presentation's mark is not its.
     from gateway import session_context
