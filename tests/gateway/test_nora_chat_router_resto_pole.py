@@ -123,3 +123,21 @@ def test_the_classifier_is_told_what_it_did_not_know():
     prompt = r._CLASSIFIER_SYSTEM
     for words in ("À traiter", "IMPORT d'articles", "numéros de série", "MÉMOIRE", "NOMME un pôle"):
         assert words in prompt, words
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Fais une facture d'une borne wifi EAP 723 à Jules Exemple.", "Tu crées la facture, s'il te plaît ?", "Crée une facture pour Atelier Exemple SA",
+     "Fais-moi une nouvelle facture pour une borne Wi-Fi", "crée une facture daniel exemple pour un epa730", "Modifie la facture FA-2026-02477 : il faut trois siphons",
+     "Remets la RPLP sur le mitigeur de la facture FA-2026-02585."],
+)
+def test_writing_a_sales_invoice_is_the_sales_pole(message):
+    assert r._keyword_pole(message) == "ventes"
+
+
+@pytest.mark.parametrize(
+    "message, pole",
+    [("Crée une facture fournisseur pour Exemple SA", "compta"), ("Combien de factures impayées avons-nous ?", "compta"), ("Modifie la facture fournisseur 12", "compta")],
+)
+def test_a_supplier_invoice_and_reading_invoices_stay_with_accounting(message, pole):
+    assert r._keyword_pole(message) == pole

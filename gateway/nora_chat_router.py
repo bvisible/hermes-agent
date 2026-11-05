@@ -489,7 +489,7 @@ _CLASSIFIER_SYSTEM = (
     # //// its own (frappe_job_report_work): « Qu'est-ce qui attend dans À traiter ? » went to rh, frappe_to_handle was never
     # //// called in 30 days (état des lieux du 05.11, #2257).
     "  Et « À traiter » (ce que les clients ont demandé, les appels notés : « qu'est-ce qui attend dans À traiter ? ») "
-    "et le travail qu'une personne raconte avoir fait chez un client (« je sors de chez Dupont, 1h30 »).\n"
+    "et le travail qu'une personne raconte avoir fait chez un client (« je sors de chez Dupont, 1h30 »), et les tâches (« quelles tâches sont en retard ? »).\n"
     # //// END Neoffice ////
     # //// END Neoffice ////
     # //// Neoffice — changing a client's or supplier's contact details is ventes' own tool
@@ -502,7 +502,7 @@ _CLASSIFIER_SYSTEM = (
     "incluses (« commander 15 unités », « passer commande au fournisseur »).\n"
     # //// Neoffice — what the sales pole holds that this prompt did not name (05.11, #2289): an item import was sent to support
     # //// and to compta, a serial number to support; a customer's figures went to compta one day and to ventes the next.
-    "  Et l'IMPORT d'articles depuis un fichier ou un catalogue de fournisseur (« importe mes articles », « où en est l'import ISI-… ? »), les numéros de série et les lots, les bons de livraison (à livrer, à facturer), les traductions des articles et du contenu. Pour un client : ses devis, commandes, livraisons et articles achetés sont à ventes ; ce qu'il doit et ses factures sont à compta.\n"
+    "  Et l'IMPORT d'articles depuis un fichier ou un catalogue de fournisseur (« importe mes articles », « où en est l'import ISI-… ? »), les numéros de série et les lots, les bons de livraison (à livrer, à facturer), les traductions des articles et du contenu. CRÉER ou MODIFIER une facture de vente (« fais une facture à Dupont », « ajoute deux siphons sur la facture ») est à ventes, comme le contact d'un client (« qui est le contact chez X ? »). Pour un client : ses devis, commandes, livraisons et articles achetés sont à ventes ; ce qu'il doit et la lecture de ses factures sont à compta.\n"
     # //// END Neoffice ////
     # //// Neoffice — the restaurant is its own pole since 05.11: everything below was ventes' (03-04.11) and now belongs to
     # //// `resto`, which holds the list, card, menus, options, recipes, season, buying and cost tools. ventes no longer does.
@@ -759,6 +759,15 @@ _ITEM_IMPORT_RE = re.compile(
     r"|\bimport(?:e[rsz]?|ons|ent|ation|s)?\b[^.!?]{0,40}?\b(?:articles?|fichiers?|catalogues?|produits?|liste\s+d.articles)\b"
     r"|\b(?:articles?|fichiers?|catalogues?)\b[^.!?]{0,40}?\bimport\w*"
     r"|\brelanc\w*\s+(?:l['’]\s*|cet\s+|mon\s+|notre\s+)import\b",
+    re.IGNORECASE,
+)
+# //// Neoffice — writing a sales invoice is the sales pole's (05.11, #2289): it holds frappe_sales_invoice_create and frappe_draft_line.
+# //// « Fais une facture à Dupont » reached the classifier, for which « factures » is compta's first word. A supplier's invoice stays out.
+_SALES_INVOICE_WRITE_RE = re.compile(
+    r"^(?![^.!?]*\bfournisseurs?\b)[^.!?]*\b(?:fai[st]e?s?|cr[ée]{1,2}[sz]?|cr[ée]er|pr[ée]pare[rz]?|[ée]tabli[rs]|g[ée]n[èe]re[rz]?)\b"
+    r"(?:[-\s]+(?:moi|nous|lui))?\s+(?:une?\s+|la\s+|ma\s+|cette\s+)?(?:nouvelle\s+|autre\s+)?factures?\b"
+    r"|^(?![^.!?]*\bfournisseurs?\b)[^.!?]*\bmodifi\w*\s+(?:la\s+|cette\s+|ma\s+)?facture\b"
+    r"|\b(?:remets?|enl[èe]ve|retire)\b[^.!?]{0,60}\bsur\b[^.!?]{0,60}\bfacture\b",
     re.IGNORECASE,
 )
 # //// Neoffice — the jobs pole's « À traiter » list named as a place (05.11, #2257): « qu'est-ce qui attend dans À traiter ? ».
@@ -1790,6 +1799,8 @@ _FAST_PATH_RULES = (
     # //// Neoffice — an item import is ventes' (05.11, #2288/#2289): « …, oui, relance l'import » matched the dunning rule
     # //// (« relance ») and went to compta; « où en est mon import d'articles ISI-… ? » went to support.
     (_ITEM_IMPORT_RE, "ventes"),
+    # //// Neoffice — see _SALES_INVOICE_WRITE_RE (05.11, #2289).
+    (_SALES_INVOICE_WRITE_RE, "ventes"),
     # //// Neoffice — « À traiter » is the jobs pole's list (05.11, #2257).
     (_TO_HANDLE_RE, "projet"),
     # //// END Neoffice ////
