@@ -1173,6 +1173,12 @@ _DECK_REQUEST_RE = re.compile(
     r"\b" + _DECK_MAKE_FR + _DECK_PRONOUNS_FR + r"\s+" + _DECK_COUNT + r"\s+" + _DECK_ADJECTIVES + _DECK_NOUN_FR + r"\b"
     r"|\b" + _DECK_MAKE_FR + _DECK_PRONOUNS_FR + r"\s+(?:la|le|les|cette|ce|ces|ma|mon|mes|notre|nos)\s+"
     + _DECK_ADJECTIVES + _DECK_NOUN_FR + r"[^.!?\n]{0,25}?\b(?:sur|pour|concernant)\b"
+    # //// Neoffice — the year's accounts with a definite article (05.11): « prépare la présentation des comptes annuels
+    # //// 2025 » fell to the accounting pole, which holds no deck tool and answered in text. Only these subjects: « prépare
+    # //// la présentation de la société » stays a question for the classifier.
+    r"|\b" + _DECK_MAKE_FR + _DECK_PRONOUNS_FR + r"\s+(?:la|ma|notre)\s+" + _DECK_ADJECTIVES + _DECK_NOUN_FR
+    + r"\s+(?:des\s+comptes|du\s+bouclement|de\s+bouclement|de\s+cl[ôo]ture|des\s+r[ée]sultats)\b"
+    # //// END Neoffice ////
     r"|\b(?:(?:voudrais|voudrions|aimerais|aimerions|veux|voulons|souhaite\w*|faut)\s+(?:d['’]\s*)?|besoin\s+d['’]\s*)"
     r"(?:une?|des|\d{1,2})\s+" + _DECK_ADJECTIVES + _DECK_NOUN_FR + r"\b"
     # the noun opening the message with its subject; never a German noun without its article

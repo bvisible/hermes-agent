@@ -1,6 +1,10 @@
 {
  "_comment": "Presentations to make and the sentences that must not be one (22.10, step 4 of the plan). All names are invented. The router's tests read this file: tests/gateway/test_nora_chat_router_presentation.py. `recurring_decks`: presentations asked as a habit, which stay recurring jobs (23.10).",
  "decks": [
+  "Prépare la présentation des comptes annuels 2025.",
+  "Prépare la présentation des comptes annuels",
+  "Fais-moi la présentation du bouclement 2025",
+  "Prépare la présentation de clôture",
   "Fais-moi une présentation de 5 diapositives sur nos services de maintenance",
   "Fais moi une présentation sur nos services",
   "Prépare une présentation pour la réunion de lundi avec la Régie Fictive",
@@ -34,6 +38,8 @@
   "Erstelle eine Präsentation über unsere Öffnungszeiten von Montag bis Freitag"
  ],
  "not_decks": [
+  "Où est la présentation des comptes annuels ?",
+  "Montre-moi les comptes annuels 2025",
   "Où est la présentation de la société ?",
   "Quelle est la présentation de la société ?",
   "Tu as la présentation de la société ?",
@@ -57,7 +63,6 @@
   "Fais une lettre à la gérance pour la fuite d'eau",
   "How do I make a presentation?",
   "The slide 3 is wrong",
-  "Prépare la présentation des comptes annuels",
   "Fais un résumé de la présentation de Dupont Fictif",
   "Ajoute une diapositive sur les prix",
   "Crée un devis pour la présentation du produit",
