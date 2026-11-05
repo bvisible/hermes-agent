@@ -284,6 +284,37 @@ def _neoffice_fact_key(text: Optional[str]) -> str:
 _NEOFFICE_RECALL_MIN_SCORE = 0.55
 
 
+# //// Neoffice — the raw turns have a life span (05.11, #2291). sync_turn stores each turn as it was said (infer=False), on
+# //// purpose: recallable at once, no load on the chat model; the nightly consolidation then draws the durable facts from
+# //// nora_chat_log. Nothing ever removed the raw turn: 545 of the 905 memories of the development instance were turns (« Je
+# //// transmets à votre pôle Ventes », « Yo », a question), and they came first in the recall of unrelated questions. A turn
+# //// past its window has given what it could. Facts are written with the channel `cli` (retain_facts), never touched here.
+_NEOFFICE_FACT_CHANNELS = frozenset({"cli"})
+
+
+def _neoffice_raw_turns_past(points: list, cutoff) -> list:
+    """The ids of the raw turns older than `cutoff` (aware datetime); `points` = (id, payload). An undated row, or one
+    without a channel (written before channels existed), is left alone."""
+    from datetime import datetime, timezone
+
+    ids = []
+    for point_id, payload in points:
+        channel = (payload or {}).get("channel")
+        created = (payload or {}).get("created_at")
+        if not channel or channel in _NEOFFICE_FACT_CHANNELS or not created:
+            continue
+        try:
+            when = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=timezone.utc)
+        if when < cutoff:
+            ids.append(point_id)
+    return ids
+# //// END Neoffice ////
+
+
 def _neoffice_above_recall_floor(items: list, floor: float) -> list:
     """The results worth injecting: a score at the floor or above; a result without a score stays (the platform's may have none)."""
     kept = []
@@ -887,6 +918,30 @@ class Mem0MemoryProvider(MemoryProvider):
                     return
             self._sync_thread = spawn_context_thread(_sync, name="mem0-sync")
             self._sync_thread.start()
+
+    # //// Neoffice — see _neoffice_raw_turns_past (05.11, #2291): every bucket of the instance, oss mode with qdrant only.
+    def prune_raw_turns(self, older_than_days: int) -> Dict[str, int]:
+        """Delete the raw turns older than ``older_than_days``; {"examined": n, "removed": m}."""
+        from datetime import datetime, timedelta, timezone
+
+        memory = getattr(self._backend, "_memory", None)
+        store = getattr(memory, "vector_store", None)
+        client = getattr(store, "client", None)
+        if client is None or not hasattr(client, "scroll"):
+            return {"examined": 0, "removed": 0}
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(older_than_days)))
+        points, offset = [], None
+        while True:
+            batch, offset = client.scroll(
+                collection_name=store.collection_name, limit=500, offset=offset, with_payload=True, with_vectors=False)
+            points.extend((p.id, p.payload) for p in batch)
+            if offset is None:
+                break
+        ids = _neoffice_raw_turns_past(points, cutoff)
+        for point_id in ids:
+            store.delete(vector_id=point_id)
+        return {"examined": len(points), "removed": len(ids)}
+    # //// END Neoffice ////
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         return list(TOOL_SCHEMAS)

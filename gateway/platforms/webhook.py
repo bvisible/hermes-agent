@@ -1162,6 +1162,33 @@ class WebhookAdapter(BasePlatformAdapter):
     # The decision stays on NORA's side; this endpoint only executes it, mirroring
     # our "the model classifies, the code acts" rule. Same HMAC channel as
     # memory_retain / memory_read. grep "//// Neoffice".
+    async def _handle_memory_prune(self, payload: dict) -> "web.Response":
+        # //// Neoffice — the raw turns past their window are deleted by NORA's nightly pass (05.11, #2291); see
+        # //// prune_raw_turns in plugins/memory/mem0. Same HMAC channel as memory_forget.
+        try:
+            days = int(payload.get("older_than_days") or 0)
+        except (TypeError, ValueError):
+            days = 0
+        if days < 1:
+            return web.json_response({"error": "memory_prune requires 'older_than_days' >= 1"}, status=400)
+
+        @with_launch_profile_secrets  # //// Neoffice — see gateway/neoffice_scope.py
+        def _prune() -> dict:
+            from plugins.memory.mem0 import Mem0MemoryProvider
+
+            prov = Mem0MemoryProvider()
+            prov.initialize("memory_prune", user_id="memory_prune")
+            return prov.prune_raw_turns(days)
+
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(None, _prune)
+        except Exception as e:  # noqa: BLE001 — surface as 502, never crash the loop
+            logger.exception("[webhook] memory_prune failed")
+            return web.json_response({"status": "error", "error": str(e)}, status=502)
+        logger.info("[webhook] memory_prune older_than_days=%d %s", days, result)
+        return web.json_response({"status": "pruned", **result})
+    # //// END Neoffice ////
+
     async def _handle_memory_forget(self, payload: dict) -> "web.Response":
         user = str(payload.get("user") or "").strip()
         raw_ids = payload.get("ids")
@@ -1384,7 +1411,7 @@ class WebhookAdapter(BasePlatformAdapter):
         # //// 2026-09-24 22:33). Their own bucket keeps their pacing and their 429 back-off.
         _rate_bucket = route_name
         if isinstance(payload, dict) and payload.get("event_type") in (
-                "memory_retain", "memory_read", "memory_forget"):
+                "memory_retain", "memory_read", "memory_forget", "memory_prune"):
             _rate_bucket = f"{route_name}::memory"
         # //// Neoffice — a stop said by the person (#1568) is never refused because people's messages filled the minute
         if isinstance(payload, dict) and payload.get("event_type") == "chat_cancel":
@@ -1420,6 +1447,10 @@ class WebhookAdapter(BasePlatformAdapter):
             return await self._handle_memory_retain(payload)
         if event_type == "memory_read":
             return await self._handle_memory_read(payload)
+        # //// Neoffice — the raw turns past their window (05.11, #2291).
+        if event_type == "memory_prune":
+            return await self._handle_memory_prune(payload)
+        # //// END Neoffice ////
         if event_type == "memory_forget":
             return await self._handle_memory_forget(payload)
         # //// Neoffice — the person stopped requests in flight (#1568): handled before the prompt path, which would
