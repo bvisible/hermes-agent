@@ -40,8 +40,11 @@ _ROLE_RE = re.compile(
     # //// word: « Le spécialiste projet va… » came out « Le équipe projet va… ».
     # //// A list of poles written by hand drifts the day a pole is added — these two
     # //// arrived on 16.09 and nothing here knew.
+    # //// Neoffice — `resto` added (06.11, #2328): the restaurant pole arrived on 05.11 and this list
+    # //// did not know it, so « Le spécialiste resto va… » came out « L'équipe resto va… » — the pole's
+    # //// internal name said to the customer. `test_every_pole_is_softened_into_the_team` caught it.
     r"(compta\w*|ventes?|support|rh|ressources?\s+humaines?|commercial\w*"
-    r"|analyses?|projets?)\b[`'\"*]*",
+    r"|analyses?|projets?|restos?)\b[`'\"*]*",
     re.IGNORECASE,
 )
 # //// Neoffice — « spécialiste » is replaced only where it stands for the machinery (07.10, #1294).
