@@ -46,3 +46,29 @@ def test_orders_with_anaphora_or_spelled_quantities_are_not_capability(message):
 )
 def test_genuine_capability_questions_still_take_the_light_path(message):
     assert _CAPABILITY_RE.match(message)
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        # The live bug of 07.11, verbatim: asked from the quote, answered « quel client, quel montant ? ».
+        "Est-ce que tu peux me faire un acompte sur ce devis ?",
+        "Peux-tu transformer cette commande en facture ?",
+        "Tu peux envoyer cet acompte au client ?",
+        "Est-ce que tu peux le faire là-dessus ?",
+    ),
+)
+def test_a_demonstrative_points_at_a_document_so_it_is_a_request(message):
+    assert not _CAPABILITY_RE.match(message)
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Est-ce que tu peux faire ce genre de document ?",
+        "tu sais faire ce type de facture ?",
+        "Est-ce que tu peux faire des acomptes ?",
+    ),
+)
+def test_a_generic_this_kind_of_question_stays_a_capability_question(message):
+    assert _CAPABILITY_RE.match(message)

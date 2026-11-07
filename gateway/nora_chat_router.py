@@ -1803,6 +1803,18 @@ def _take_sheet_offer(conversation_id: Optional[str]) -> bool:
 # //// END Neoffice ////
 
 
+# //// Neoffice — a deposit asked from a customer on a quote or a sales order is ventes' (07.11): only ventes holds
+# //// frappe_sales_deposit, which makes the deposit invoice or the payment request. « demande un acompte de 500 francs au client
+# //// sur la commande » reached no rule. A deposit to a supplier, a salary advance or an LPP / AVS / tax instalment is not one.
+_SALES_DEPOSIT_RE = re.compile(
+    r"^(?!.*\b(?:fournisseurs?|lpp|avs|salaires?|imp[ôo]ts?|tva|employ[ée]s?|collaborat\w+)\b)"
+    r"(?=.*\bacomptes?\b)(?=.*\b(?:devis|offres?|commandes?|client(?:e|s)?|"
+    r"(?:facture|demande)s?\s+d['\u2019]\s*acomptes?)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
+# //// END Neoffice ////
+
+
 # //// Neoffice — the restaurant owner's shopping list (03.11), in the chat's four languages. « liste d'achat » in the singular
 # //// only: « la liste des achats du mois » is a purchase report (compta), and so is « la liste d'achats de septembre ».
 _SHOPPING_LIST_RE = re.compile(
@@ -1937,6 +1949,9 @@ _FAST_PATH_RULES = (
     # //// Neoffice — the owner's shopping list is ventes' (03.11): see _SHOPPING_LIST_RE. Only ventes holds the two tools
     # //// that propose it and write it (frappe_shopping_list_propose / _add).
     (_SHOPPING_LIST_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
+    # //// END Neoffice ////
+    # //// Neoffice — a deposit on a quote or a sales order, see _SALES_DEPOSIT_RE (07.11).
+    (_SALES_DEPOSIT_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — the card of the restaurant's till is ventes' too (03.11): see _RESTO_CARD_RE. Its three tools live in that pole.
     (_RESTO_CARD_RE, "resto"),  # //// Neoffice — resto since 05.11 ////
@@ -3222,6 +3237,13 @@ _CAPABILITY_RE = re.compile(
     # me donner / m'afficher …" is a real business request and must reach its pole.
     r"(?![^?]*\b(?:me\s+dire|me\s+donner|me\s+montrer|me\s+sortir|me\s+lister|"
     r"me\s+rappeler|me\s+trouver|me\s+chercher|m['’](?:afficher|indiquer|envoyer|donner|dire))\b)"
+    # //// Neoffice — a demonstrative points at a document in front of the person, so it is a
+    # //// request, not a question about what NORA can do (07.11): « Est-ce que tu peux me faire un
+    # //// acompte sur ce devis ? », asked from the quote, was answered « Oui, je peux gérer les acomptes
+    # //// — quel client, quel montant ? » without a pole. « ce genre / ce type de … » stays generic, and so
+    # //// does a question that asks WHAT (« Tu peux faire quoi dans ce document ? »).
+    r"(?!(?![^?]*\bquoi\b)[^?]*\b(?:(?:ce|cet|cette|ces)\s+(?!genre\b|type\b|style\b|sorte\b|format\b)\w|"
+    r"l[aà][-\s]dessus|dessus\b|celui[-\s]ci|celle[-\s]ci|celui[-\s]l[aà]|celle[-\s]l[aà]))"
     r"[^?]{0,90}\?\s*$",
     re.IGNORECASE,
 )
