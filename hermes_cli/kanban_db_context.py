@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re  # //// Neoffice — see _chat_conversation ////
 import sqlite3
 import time
 from typing import TYPE_CHECKING, Any, Optional
@@ -205,18 +206,48 @@ def _ctx_parent_results(lines: list[str], conn: sqlite3.Connection, task_id: str
         lines.append("")
 
 
+# //// Neoffice — the conversation a chat task belongs to, read from its idempotency key « <conversation>:<ms> » (the
+# chat router's request id, nora_chat_router._request_id_of); "" for any other task. See _ctx_role_history.
+_CHAT_REQUEST_KEY = re.compile(r"^([A-Za-z0-9_.-]{1,140}):\d{10,16}$")
+
+
+def _chat_conversation(key: Optional[str]) -> str:
+    match = _CHAT_REQUEST_KEY.match(key or "")
+    return match.group(1) if match else ""
+# //// END Neoffice ////
+
+
 def _ctx_role_history(lines: list[str], conn: sqlite3.Connection, task: Task, now: int) -> None:
     """The assignee's 5 most recent completed runs on OTHER tasks — implicit
     role continuity without wiring anything into SOUL.md / MEMORY.md."""
     if not task.assignee:
         return
-    role_rows = conn.execute(
-        "SELECT t.id, t.title, r.summary, r.ended_at "
-        "FROM task_runs r JOIN tasks t ON r.task_id = t.id "
-        "WHERE r.profile = ? AND r.task_id != ? "
-        "  AND r.outcome = 'completed' "
-        "ORDER BY r.ended_at DESC LIMIT 5", (task.assignee, task.id),
-    ).fetchall()
+    # //// Neoffice — a chat task's recent work is its own conversation's (09.11, neoffice-maintenance#2376). A NORA pole
+    # serves every person and every conversation: upstream listed its last five tasks whoever they were for, and a
+    # worker took another conversation's job (the same words, another customer) for the one it was asked about, then
+    # booked and invoiced it; it also read the summaries of work done for other people. A task the chat router made
+    # carries « <conversation>:<ms> » as its idempotency key: its recent work is that conversation's tasks only. Any
+    # other task keeps upstream's role continuity.
+    conversation = _chat_conversation(getattr(task, "idempotency_key", None))
+    if conversation:
+        prefix = conversation + ":"
+        role_rows = conn.execute(
+            "SELECT t.id, t.title, r.summary, r.ended_at "
+            "FROM task_runs r JOIN tasks t ON r.task_id = t.id "
+            "WHERE r.profile = ? AND r.task_id != ? "
+            "  AND r.outcome = 'completed' "
+            "  AND substr(coalesce(t.idempotency_key, ''), 1, ?) = ? "
+            "ORDER BY r.ended_at DESC LIMIT 5", (task.assignee, task.id, len(prefix), prefix),
+        ).fetchall()
+    else:
+        # //// END Neoffice ////
+        role_rows = conn.execute(
+            "SELECT t.id, t.title, r.summary, r.ended_at "
+            "FROM task_runs r JOIN tasks t ON r.task_id = t.id "
+            "WHERE r.profile = ? AND r.task_id != ? "
+            "  AND r.outcome = 'completed' "
+            "ORDER BY r.ended_at DESC LIMIT 5", (task.assignee, task.id),
+        ).fetchall()
     if not role_rows:
         return
     lines.append(f"## Recent work by @{task.assignee}")
