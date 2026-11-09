@@ -224,7 +224,7 @@ def _fake_kanban(monkeypatch, on_create=None):
     return made
 
 
-def _route(monkeypatch, message="Crée un devis pour Daniel Moret avec cinq pièces.", key=RID, classify=None):
+def _route(monkeypatch, message="Crée un devis pour Daniel Morez avec cinq pièces.", key=RID, classify=None):
     import urllib.request
 
     http = _Http()

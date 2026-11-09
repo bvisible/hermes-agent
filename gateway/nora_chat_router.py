@@ -891,6 +891,39 @@ def _takes_up_the_question(msg: str, question: Optional[str]) -> bool:
     if not question:
         return False
     return bool((_content_words(msg) & _content_words(question, common_only=True)) - _QUESTION_FILLER)
+
+
+# //// Neoffice — the rule of a question about a desk's question, shared by _fast_path and the routing, and the sentence the
+# //// notifier asks again after the answer (09.11, #2376).
+def _about_the_question(msg: str, prior: Optional[dict]) -> bool:
+    """A question about the question a desk asked and still waits on (« qu'est-ce que je gagnerais à avoir un nouveau
+    projet ? »): it stays with that desk, see _fast_path, and the desk's question is asked again after the answer."""
+    return bool(
+        prior
+        and prior.get("asked")
+        and prior.get("pole") in POLES
+        and "?" in msg
+        and len(msg) <= 160
+        and not _RECUR_RE.search(msg)
+        and not _is_one_off_reminder(msg)
+        and (
+            _ABOUT_THE_QUESTION_RE.search(msg)
+            or (not _NEW_REQUEST_RE.search(msg) and _takes_up_the_question(msg, prior.get("question")))
+        )
+    )
+
+
+# A sentence ends at « . ! ? … » followed by a capital or an opening quote: « (ex. dépannage …) » does not end one.
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?…])\s+(?=[A-ZÀ-ÖØ-Þ«\"(])")
+_DESK_LABEL_RE = re.compile(r"^\s*(?:✋\s*[^:\n]{1,40}:|[^\W\d][^\n—:]{0,30}\s—)\s*")
+
+
+def _question_to_ask_again(question: Optional[str]) -> str:
+    """The sentence of a desk's question that asks (its last one ending in « ? »), without the desk's « ✋ Projets : »,
+    or '' when none is whole (the film keeps 400 characters of a reply)."""
+    text = _DESK_LABEL_RE.sub("", (question or "").strip(), count=1)
+    asks = [s.strip() for s in _SENTENCE_END_RE.split(text) if s.strip().endswith("?") and len(s.strip()) > 3]
+    return asks[-1] if asks else ""
 # //// END Neoffice ////
 
 # //// Neoffice — a client's or supplier's contact change, as a request (« change l'adresse de … »)
@@ -3442,19 +3475,7 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
         return prior["pole"]
     # //// Neoffice — a question about the desk's question stays there too, see _ABOUT_THE_QUESTION_RE (09.11, #2376). A deliberation
     # //// may start like a new request (« quelle est la différence ? »); a question that only shares a word must not be one.
-    if (
-        prior
-        and prior.get("asked")
-        and prior.get("pole") in POLES
-        and "?" in msg
-        and len(msg) <= 160
-        and not _RECUR_RE.search(msg)
-        and not _is_one_off_reminder(msg)
-        and (
-            _ABOUT_THE_QUESTION_RE.search(msg)
-            or (not _NEW_REQUEST_RE.search(msg) and _takes_up_the_question(msg, prior.get("question")))
-        )
-    ):
+    if _about_the_question(msg, prior):
         logger.info("nora_chat_router: a question about the question of %s stays there (rules and classifier skipped)", prior["pole"])
         return prior["pole"]
     # //// Neoffice — see _CORRECTION_RE (05.11).
@@ -5683,6 +5704,15 @@ def route_chat_message(
                 conversation_id=_unified_cid,
                 page_context=page_context,  # //// Neoffice — carries the voice source (see _add_notify_sub)
                 request_id=_request_id,  # //// Neoffice — #1568 ////
+                # //// Neoffice — a question about the desk's question: the desk's question rides with the task, and the
+                # //// notifier asks it again when the answer asks nothing (09.11, #2376; kanban_watchers_notifier).
+                delivery_metadata=(
+                    {"neoffice_ask_again": _ask_again}
+                    if category == (prior or {}).get("pole")
+                    and _about_the_question((message or "").strip(), prior)
+                    and (_ask_again := _question_to_ask_again((prior or {}).get("question")))
+                    else None
+                ),
             )
             _steps["subscribed"] = _time_thread.monotonic()  # //// Neoffice — see _steps ////
             # //// Neoffice — #1568: a stop that crossed the creation (it read the board before the task existed)

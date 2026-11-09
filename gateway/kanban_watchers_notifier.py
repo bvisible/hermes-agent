@@ -969,6 +969,13 @@ class _KanbanNotification:
                             ev.kind, self.task_id)
                 return False
         # //// END Neoffice ////
+        # //// Neoffice — a question about a desk's question is answered, then the desk's question is asked again (09.11,
+        # //// #2376). The router names it in the subscription (nora_chat_router, neoffice_ask_again): asked « what would a
+        # //// new project bring me? », the jobs pole answered for the customer and stopped, twice out of twice, and the
+        # //// person was left without the question still waiting on them. An answer that asks something itself is left alone.
+        if ev.kind == "completed" and metadata.get("neoffice_ask_again") and not re.search(r"\?(?:\s|$)", msg or ""):
+            msg = f"{msg.rstrip()}\n\n{metadata['neoffice_ask_again']}"
+        # //// END Neoffice ////
         _send_res = None
         async def send_ping():
             nonlocal _send_res
