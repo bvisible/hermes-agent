@@ -159,8 +159,8 @@ def test_a_supplier_invoice_and_reading_invoices_stay_with_accounting(message, p
 
 @pytest.mark.parametrize(
     "message",
-    ["Alors attends, c'est toujours pas juste, tu as écrit Daniel Moret, c'est M-O-R-E-T, Daniel Moret.", "Non, tu as écrit Dupond avec un d",
-     "C'est faux, tu t'es trompé de client", "Ce n'est pas correct", "t’as écrit Moret, pas Morey"],
+    ["Alors attends, c'est toujours pas juste, tu as écrit Jean Morez, c'est M-O-R-E-Z, Jean Morez.", "Non, tu as écrit Dupond avec un d",
+     "C'est faux, tu t'es trompé de client", "Ce n'est pas correct", "t’as écrit Morez, pas Morey"],
 )
 def test_a_correction_of_what_the_desk_wrote_stays_with_it(message):
     assert r._fast_path(message, {"msg": "x", "pole": "compta"}) == "compta"
@@ -224,6 +224,58 @@ def test_an_instruction_is_not_taken_for_an_answer(message):
 
 def test_without_a_question_waiting_the_rules_decide_as_before():
     assert r._fast_path("le devis, pas la facture", {"msg": "x", "pole": "projet"}) == "ventes"
+
+
+# //// Neoffice — a question about the question the desk asked (09.11, #2376): « qu'est-ce que je gagnerais à avoir un nouveau projet ? »
+# //// went to the orchestrator, which has no thread, and was answered in general.
+JOB_ASKED = {
+    "msg": "Je dois aller chez Jean Dupont pour régler son scanner.",
+    "pole": "projet",
+    "asked": True,
+    "question": "✋ Projets : Jean Dupont a déjà un projet ouvert : « Dépannage — ordinateur du bureau ». L'intervention « régler son "
+    "scanner » doit-elle y être rattachée, ou faut-il ouvrir un nouveau projet ?",
+}
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Qu'est-ce que je gagnerais à avoir un nouveau projet ?", "Qu'est-ce que j'y gagne ?", "Quelle est la différence ?",
+     "C'est quoi la différence entre les deux ?", "Lequel tu me conseilles ?", "Vous me conseillez quoi ?", "Ça change quoi ?",
+     "C'est mieux de l'ouvrir à part ?", "Pourquoi un nouveau projet ?", "Et le projet ouvert, il sert à quoi ?",
+     "What would I gain with a new project?", "Was ist der Unterschied?", "Qual è la differenza?"],
+)
+def test_a_question_about_the_desk_s_question_stays_with_that_desk(message):
+    assert r._fast_path(message, JOB_ASKED) == "projet", message
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["Combien de congés me reste-t-il ?", "Quel est mon chiffre d'affaires ?", "Combien de clients ont une facture impayée ?",
+     "Quelles factures sont en retard ?", "Tu peux me rappeler demain à 9h d'appeler Dupont ?", "Combien de devis sont ouverts ?"],
+)
+def test_a_new_question_still_leaves_the_desk_that_asked(message):
+    assert r._fast_path(message, JOB_ASKED) != "projet", message
+
+
+def test_a_shared_word_counts_only_when_it_says_the_subject():
+    assert r._takes_up_the_question("Pourquoi un nouveau projet ?", JOB_ASKED["question"])
+    # « client », « pouvez » … are in any desk's question: they prove nothing
+    assert not r._takes_up_the_question("Et ce client, il paie quand ?", "Le client a déjà un projet : pouvez-vous confirmer ?")
+    assert not r._takes_up_the_question("Pourquoi un nouveau projet ?", "")
+    # a name says who, not what is asked
+    assert not r._takes_up_the_question("Dupont a payé ?", JOB_ASKED["question"])
+
+
+def test_without_a_question_waiting_a_deliberation_is_left_to_the_rest():
+    assert r._fast_path("Quelle est la différence ?", {"msg": "x", "pole": "projet"}) is None
+    assert r._fast_path("Quelle est la différence ?", None) is None
+
+
+def test_the_desk_s_question_is_the_last_thing_nora_said(monkeypatch):
+    monkeypatch.setitem(r._CONV_HISTORY, "cid-q", ["User: je dois aller chez Jean", "NORA: ✋ Projets : dedans, ou un nouveau projet ?",
+                                                   "User: qu'est-ce que je gagnerais ?"])
+    assert r._waiting_question_text("cid-q") == "✋ Projets : dedans, ou un nouveau projet ?"
+    assert r._waiting_question_text("cid-none") == ""
 
 
 def test_the_board_says_which_desk_waits(monkeypatch, tmp_path):

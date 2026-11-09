@@ -828,7 +828,7 @@ _NEW_REQUEST_RE = re.compile(
 # //// END Neoffice ////
 
 # //// Neoffice — three real misses left after the replay of 05.11 (481 requests). The orchestrator has neither what the desk wrote nor the
-# //// doctrine: « c'est toujours pas juste, tu as écrit Daniel Moret » must reach the desk that wrote it, and « dans quel texte de l'AFC… »
+# //// doctrine: « c'est toujours pas juste, tu as écrit <le nom du client> » must reach the desk that wrote it, and « dans quel texte de l'AFC… »
 # //// the accounting pole, which holds the wiki and must source it. A Neoffice Note is named VN-<year>-<number>, and notes are support's.
 _CORRECTION_RE = re.compile(
     r"\b(?:pas\s+juste|pas\s+correct|mal\s+[ée]crit|c[’']est\s+faux|tu\s+as\s+[ée]crit|t[’']as\s+[ée]crit|tu\s+t[’']es\s+tromp)",
@@ -836,6 +836,61 @@ _CORRECTION_RE = re.compile(
 )
 _TAX_LAW_RE = re.compile(r"\b(?:AFC|LTVA|OTVA)\b", re.IGNORECASE)
 _NOTE_NUMBER_RE = re.compile(r"\bVN-\d{4}-\d+", re.IGNORECASE)
+# //// END Neoffice ////
+
+# //// Neoffice — a question ABOUT the question a desk asked stays with that desk (09.11, #2376). « Qu'est-ce que je gagnerais à avoir un
+# //// nouveau projet ? », asked while the jobs pole waited for « dans le projet ouvert, ou un nouveau ? », went to the orchestrator: it holds
+# //// no thread (only the sentence), searched its wiki, and answered in general, quoting another customer's job. The desk that asked holds
+# //// the context and the answer. Two signs: a deliberation (what it brings, the difference, which one, what is advised), or a question that
+# //// takes up a word of the desk's question (« pourquoi un nouveau projet ? »).
+_ABOUT_THE_QUESTION_RE = re.compile(
+    r"(?:"
+    r"\bqu['\u2019]est[-\s]ce\s+que\s+(?:je|j['\u2019]|on|nous|[çc]a|cela)\s*(?:y\s+)?(?:gagne\w*|perd\w*|change\w*|apporte\w*)"
+    r"|\b(?:[çc]a|cela)\s+(?:me\s+|nous\s+)?(?:change|apporte|donne|sert)\s+(?:quoi|[àa]\s+quoi)"
+    r"|\b[àa]\s+quoi\s+(?:[çc]a|cela)\s+(?:sert|servirait)"
+    r"|\bquel(?:le)?s?\s+(?:est\s+la\s+|sont\s+les\s+)?(?:diff[ée]rences?|avantages?|inconv[ée]nients?)\b"
+    r"|\bc['\u2019]est\s+quoi\s+la\s+diff[ée]rence"
+    r"|\b(?:lequel|laquelle|lesquels|lesquelles)\b"
+    r"|\b(?:tu|vous)\s+(?:me\s+|nous\s+)?(?:conseill\w+|recommand\w+)"
+    r"|\b(?:c['\u2019]est|qu['\u2019]est[-\s]ce\s+qui\s+est)\s+(?:mieux|pr[ée]f[ée]rable|le\s+mieux)"
+    r"|\bwhat\s+(?:do|would|will)\s+(?:i|we)\s+(?:gain|get)|\bwhat\s+(?:does|would)\s+(?:it|that)\s+change"
+    r"|\bwhat['\u2019]?s\s+the\s+difference|\bwhich\s+(?:one|is\s+better)|\bdo\s+you\s+recommend"
+    r"|\bwas\s+(?:bringt|[äa]ndert)|\bwas\s+ist\s+der\s+unterschied|\bwelche[rs]?\s+(?:ist\s+)?besser|\bwas\s+empfiehlst"
+    r"|\bcosa\s+(?:ci\s+)?guadagn\w+|\bqual\s*[èe]\s+la\s+differenza|\bquale\s+(?:[èe]\s+)?meglio|\bcosa\s+(?:mi\s+)?consigli"
+    r")",
+    re.IGNORECASE,
+)
+# Words of six letters or more that a desk's question uses whatever its subject: a shared « pouvez » or « client » proves nothing
+# (« combien de clients ? » is a new question, even after « le client a déjà un projet ouvert »).
+_QUESTION_FILLER = frozenset(
+    {
+        "pouvez", "voulez", "souhaitez", "quelle", "quelles", "lequel", "laquelle", "plutôt", "plutot", "client", "clients",
+        "cliente", "clientes", "bonjour", "toujours", "encore", "maintenant", "aujourd", "please", "should", "kunden",
+        "clienti",
+    }
+)
+
+
+def _waiting_question_text(conversation_id: Optional[str]) -> str:
+    """The last thing NORA said in this conversation (the desk's question, when one waits), or ''."""
+    for line in reversed(_CONV_HISTORY.get(conversation_id) or []):
+        if line.startswith("NORA: "):
+            return line[6:]
+    return ""
+
+
+def _content_words(text: str, common_only: bool = False) -> set:
+    """Lowercased words of six letters or more, elisions kept apart (« l'intervention » → intervention). `common_only`: the words
+    written in lower case only — a name (« Dupont ») says who, not what is asked, and a reminder to call him is no answer."""
+    words = re.findall(r"[^\W\d_]{6,}", text or "")
+    return {w.lower() for w in words if not common_only or w[0].islower()}
+
+
+def _takes_up_the_question(msg: str, question: Optional[str]) -> bool:
+    """A question that takes up a word of the desk's question: « pourquoi un nouveau projet ? » after « … ou un nouveau projet ? »."""
+    if not question:
+        return False
+    return bool((_content_words(msg) & _content_words(question, common_only=True)) - _QUESTION_FILLER)
 # //// END Neoffice ////
 
 # //// Neoffice — a client's or supplier's contact change, as a request (« change l'adresse de … »)
@@ -3385,6 +3440,23 @@ def _fast_path(msg: str, prior: Optional[dict]) -> Optional[str]:
     ):
         logger.info("nora_chat_router: the answer to a question of %s stays there (rules and classifier skipped)", prior["pole"])
         return prior["pole"]
+    # //// Neoffice — a question about the desk's question stays there too, see _ABOUT_THE_QUESTION_RE (09.11, #2376). A deliberation
+    # //// may start like a new request (« quelle est la différence ? »); a question that only shares a word must not be one.
+    if (
+        prior
+        and prior.get("asked")
+        and prior.get("pole") in POLES
+        and "?" in msg
+        and len(msg) <= 160
+        and not _RECUR_RE.search(msg)
+        and not _is_one_off_reminder(msg)
+        and (
+            _ABOUT_THE_QUESTION_RE.search(msg)
+            or (not _NEW_REQUEST_RE.search(msg) and _takes_up_the_question(msg, prior.get("question")))
+        )
+    ):
+        logger.info("nora_chat_router: a question about the question of %s stays there (rules and classifier skipped)", prior["pole"])
+        return prior["pole"]
     # //// Neoffice — see _CORRECTION_RE (05.11).
     if (
         prior
@@ -4824,6 +4896,8 @@ def route_chat_message(
     _asked = _question_waiting(conversation_id, board)
     if _asked and (not prior or prior.get("pole") == _asked):
         prior = {**(prior or {"msg": ""}), "pole": _asked, "asked": True}
+        # //// Neoffice — and what it asked, for a question about it (09.11, #2376): the film, when the gateway still holds it.
+        prior["question"] = _waiting_question_text(conversation_id)
     # //// END Neoffice ////
 
     # //// Neoffice — briefing CTA continuity. On the FIRST inbound after an out-of-band
