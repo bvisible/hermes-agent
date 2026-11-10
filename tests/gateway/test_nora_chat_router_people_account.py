@@ -63,6 +63,10 @@ def test_the_rule_comes_right_after_recruitment_in_the_table():
     assert poles[indexes[id(router._PEOPLE_ACCOUNT_RE)]][1] == "rh"
 
 
-def test_the_classifier_prompt_names_the_access_and_keeps_a_subcontractor_off_ventes():
+def test_the_classifier_prompt_is_left_alone():
+    # A clause naming the access in the classifier's prompt was tried (10.11): with it, « Quel client commande toujours par e-mail, jamais par
+    # téléphone ? » and « Quel est le produit le plus vendu cette année dans le groupe d'articles Produits ? » went from ventes to 'direct'
+    # (route_truth_replay: 474 of 481 right before, 472 after, the same two requests every run). The rule above decides in code and touches only
+    # the sentences it names; the prompt is measured on the whole set (bench/route_truth_replay.py) before anyone adds a phrase to it.
     source = open(router.__file__, encoding="utf-8").read()
-    assert "SOUS-TRAITANT" in source and "un sous-traitant n'est pas un fournisseur" in source
+    assert "un sous-traitant n'est pas un fournisseur" not in source

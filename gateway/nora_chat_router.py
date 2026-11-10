@@ -573,13 +573,6 @@ _CLASSIFIER_SYSTEM = (
     "  Et le RECRUTEMENT : offres d'emploi publiées sur le site, candidatures reçues, "
     "candidats, leur dossier et les questions d'entretien (« qui a postulé ? »).\n"
     # //// END Neoffice ////
-    # //// Neoffice — a person's access to Neoffice is rh's (10.11): « crée un compte pour un sous-traitant » reached ventes, which proposed a
-    # //// SUPPLIER record; « donne un accès à Marie » was left to 'direct'. See _PEOPLE_ACCOUNT_RE.
-    "  Et l'ACCÈS à Neoffice d'une personne : le compte d'un employé (« donne un accès à Marie », « c'est un chef de chantier, crée son compte »), "
-    "l'EMBAUCHE (« j'engage Marie Dupont ») et le compte d'un SOUS-TRAITANT, une personne qui se connecte sans être employée (« crée un compte "
-    "pour un sous-traitant »), jamais à ventes : un sous-traitant n'est pas un fournisseur. Et les places de licence qui restent. Un compte CLIENT "
-    "(« crée le client X ») reste à ventes.\n"
-    # //// END Neoffice ////
     # //// Neoffice — Swiss HR/payroll doctrine questions need the rh worker's
     # curated wiki (RAG-rh-suisse, wired 2026-08-21): rates and obligations are
     # knowledge questions, not chit-chat, and must not fall to 'direct'.
