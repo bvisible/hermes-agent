@@ -573,6 +573,13 @@ _CLASSIFIER_SYSTEM = (
     "  Et le RECRUTEMENT : offres d'emploi publiées sur le site, candidatures reçues, "
     "candidats, leur dossier et les questions d'entretien (« qui a postulé ? »).\n"
     # //// END Neoffice ////
+    # //// Neoffice — a person's access to Neoffice is rh's (10.11): « crée un compte pour un sous-traitant » reached ventes, which proposed a
+    # //// SUPPLIER record; « donne un accès à Marie » was left to 'direct'. See _PEOPLE_ACCOUNT_RE.
+    "  Et l'ACCÈS à Neoffice d'une personne : le compte d'un employé (« donne un accès à Marie », « c'est un chef de chantier, crée son compte »), "
+    "l'EMBAUCHE (« j'engage Marie Dupont ») et le compte d'un SOUS-TRAITANT, une personne qui se connecte sans être employée (« crée un compte "
+    "pour un sous-traitant »), jamais à ventes : un sous-traitant n'est pas un fournisseur. Et les places de licence qui restent. Un compte CLIENT "
+    "(« crée le client X ») reste à ventes.\n"
+    # //// END Neoffice ////
     # //// Neoffice — Swiss HR/payroll doctrine questions need the rh worker's
     # curated wiki (RAG-rh-suisse, wired 2026-08-21): rates and obligations are
     # knowledge questions, not chit-chat, and must not fall to 'direct'.
@@ -1075,6 +1082,34 @@ _RECRUITMENT_RE = re.compile(
     r"|\bjob\s+(?:applications?|openings?|postings?|offers?|ads?|adverts?|interviews?)\b|\bapplicants?\b"
     r"|\bvacanc(?:y|ies)\b|\brecruit\w*|\bhiring\b|\binterview\s+questions?\b|\bcover\s+letters?\b"
     r")",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
+
+# //// Neoffice — a person's ACCESS to Neoffice is rh's (10.11): an employee's account, a hire, a subcontractor's login, the licence
+# //// seats left. « Crée un compte pour un sous-traitant » reached ventes, which proposed a SUPPLIER record (a subcontractor who must
+# //// sign in is a person, never a supplier); « Donne un accès à Marie » and « combien de places de licence me reste-t-il ? » were left to
+# //// the classifier, which answered 'direct'. The tools are rh's: frappe_access_options / _propose / _give, frappe_employee_hire,
+# //// frappe_subcontractor_create (scripts/hermes-poc/mcp-frappe/gen_server_full.py). Four shapes, each with its own guard:
+# //// - a subcontractor with a verb that makes or opens an account or access, or who must sign in: a subcontractor's INVOICE or the
+# ////   ledger account is not this;
+# //// - an account or access given to someone said to be an employee, a worker, a foreman: « un compte client » / bancaire / comptable is
+# ////   not (the lookahead), and « donne » is the verb, not « données »;
+# //// - a hire said with « j'engage », or a new employee created: « j'embauche » is the recruitment rule's;
+# //// - the seats of the licence.
+_PEOPLE_ACCOUNT_RE = re.compile(
+    r"(?=[\s\S]*\b(?:sous[-\s]?traitant\w*|subcontractor\w*|subunternehmer\w*|subappaltator\w*)\b)"
+    r"(?:(?=[\s\S]*\b(?:cr[ée]{1,2}[rsz]?|ouvre[rz]?|ouvrir|donne[rz]?|accorde[rz]?|octroie[rz]?|ajoute[rz]?|pr[ée]pare[rz]?|configure[rz]?"
+    r"|open|create|give|erstell\w*|[öo]ffne\w*)\b[^.!?]{0,40}\b(?:compte|acc[èe]s|identifiant|login|account|access|konto|zugang)\b)"
+    r"|(?=[\s\S]*\b(?:se\s+(?:re)?connect\w*|se\s+logu\w*|connexion|invit\w*|sign\s+in|log\s*in|anmelden)\b))"
+    r"|\b(?:donne[rz]?|ouvre[rz]?|ouvrir|cr[ée]{1,2}[rsz]?|accorde[rz]?|octroie[rz]?|pr[ée]pare[rz]?|configure[rz]?)\b[^.!?]{0,30}"
+    r"\b(?:acc[èe]s|compte)\b(?!\s+(?:client|fournisseur|bancaire|comptable|de\s+charge|courant|postal))"
+    r"[^.!?]{0,60}\b(?:employ[ée]e?s?|collaborat\w+|ouvri\w+|monteu\w+|chef(?:fe)?\s+de\s+chantier|secr[ée]taire|apprenti\w*|stagiaire"
+    r"|nouvel(?:le)?\s+(?:arrivant\w*|embauch\w+|recrue\w*)|nouveau\s+(?:monteur|ouvrier|collaborat\w*|employ[ée]))\b"
+    r"|\b(?:j['\u2019]\s*engage|on\s+engage|nous\s+engageons|je\s+vais\s+engager|on\s+va\s+engager)\b"
+    r"|\b(?:cr[ée]{1,2}[rsz]?|ajoute[rz]?|enregistre[rz]?)\s+(?:un|une|le|la|l['\u2019])\s*(?:nouvel(?:le)?\s+)?employ[ée]e?\b"
+    r"|\bplaces?\s+de\s+licences?\b|\blicences?\s+(?:restantes?|disponibles?|libres?)\b",
     re.IGNORECASE,
 )
 # //// END Neoffice ////
@@ -2029,6 +2064,9 @@ _FAST_PATH_RULES = (
     # //// END Neoffice ////
     # //// Neoffice — recruitment, see _RECRUITMENT_RE (07.10). Here so the go-ahead guard sees it too.
     (_RECRUITMENT_RE, "rh"),
+    # //// END Neoffice ////
+    # //// Neoffice — a person's access to Neoffice, a hire, a subcontractor's login, the licence seats: rh's, see _PEOPLE_ACCOUNT_RE (10.11).
+    (_PEOPLE_ACCOUNT_RE, "rh"),
     # //// END Neoffice ////
     # //// Neoffice — a letter to post, see _LETTER_REQUEST_RE (21.10): before every rule a letter's words can meet (the
     # //// dunning rule's « relance », a job, a contact change, an e-mail), after recruitment (a cover letter is rh's).
