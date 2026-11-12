@@ -721,6 +721,33 @@ def resolve_underlying_call(args: dict[str, Any], session_tool_names: Optional[I
     return name, raw_args, None
 
 
+# //// Neoffice — port of upstream PR #137817 (open on 2026-11-12, fixes #137639): a tool_call that names
+# //// a tool THIS session already lists (a core tool, or an MCP tool pinned by tools.tool_search.eager)
+# //// is run as the direct call the model meant. Upstream refuses it with « is a directly-listed tool,
+# //// call it directly » and the model spends a whole turn re-issuing the same call: 108 refusals in 7
+# //// days on our development instance, 2 to 15 a day per pole worker, one model round each. Membership
+# //// is read in the session's own tool defs, so the bridge still reaches nothing the session lacks; a
+# //// deferred name, a connector, a multi-entry local batch or an out-of-grant name keep their own
+# //// answers. Drop this block (and its caller in model_tools) when upstream merges #137817.
+def directly_listed_target(args: dict[str, Any],
+                           tool_defs: list[dict[str, Any]]) -> Optional[tuple[str, dict[str, Any]]]:
+    """``(name, arguments)`` when a ``tool_call`` names a tool this session lists directly, else ``None``."""
+    entries, err = normalize_tool_call_entries(args)
+    if err or len(entries) != 1:
+        return None
+    name = entries[0]["name"]
+    if is_connector_name(name) or is_deferrable_tool_name(name, load_config_readonly().effective_defer_tools):
+        return None
+    if name not in frozenset(_tool_def_names(tool_defs)):
+        return None
+    return name, entries[0]["arguments"]
+
+
+DIRECT_CALL_NOTE = ("[hermes note: '{name}' is already in your tool list: this tool_call ran it directly. "
+                    "Call it by its own name next time, without tool_call or tool_describe.]")
+# //// END Neoffice ////
+
+
 __all__ = [
     "BRIDGE_TOOL_NAMES",
     "CONNECTOR_BATCH_SENTINEL",
@@ -735,6 +762,7 @@ __all__ = [
     "build_catalog",
     "build_catalog_listing_with_form",
     "classify_tools",
+    "directly_listed_target",  # //// Neoffice — upstream PR #137817
     "dispatch_tool_describe",
     "dispatch_tool_search",
     "estimate_tokens_from_schemas",

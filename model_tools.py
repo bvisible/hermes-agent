@@ -721,6 +721,11 @@ def _emit_post_tool_call_hook(
         logger.debug("post_tool_call hook error: %s", _hook_err)
 
 
+# //// Neoffice — upstream PR #137817: marks the re-dispatch of a tool the session lists directly.
+_DIRECT_CALL = "direct"
+# //// END Neoffice ////
+
+
 def _dispatch_bridge_tool(function_name: str, function_args: dict[str, Any],
                           enabled_toolsets: Optional[list[str]], disabled_toolsets: Optional[list[str]],
                           ids: Optional[_CallIds] = None):
@@ -754,6 +759,13 @@ def _dispatch_bridge_tool(function_name: str, function_args: dict[str, Any],
     # session (clarify in a subagent) must not be told to "call it directly".
     underlying_name, underlying_args, err = ts.resolve_underlying_call(args, ts.session_tool_names(current_defs))
     if err or not underlying_name:
+        # //// Neoffice — port of upstream PR #137817: a tool_call naming a tool this session lists
+        # //// directly runs it (with a note to the model) instead of a refusal that costs a turn; see
+        # //// tools.tool_search.directly_listed_target. Drop when upstream merges #137817.
+        direct = ts.directly_listed_target(args, current_defs)
+        if direct is not None:
+            return None, (*direct, _DIRECT_CALL)
+        # //// END Neoffice ////
         return tool_error(err or "tool_call could not be resolved"), None
     if underlying_name == ts.CONNECTOR_BATCH_SENTINEL:
         # //// Neoffice — a batch may hold MCP tools only (#710): the connectors toolset is
@@ -945,12 +957,19 @@ def handle_function_call(
                 enabled_tools=enabled_tools, middleware_trace=trace,
                 enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets,
             ), duration_ms=_elapsed_ms(start))
-        return handle_function_call(
-            *underlying, **asdict(ids), user_task=user_task, enabled_tools=enabled_tools,
+        # //// Neoffice — upstream PR #137817: a direct call carries a third item, the _DIRECT_CALL marker;
+        # //// it runs exactly as a validated deferred call, and its result tells the model what happened.
+        result = handle_function_call(
+            *underlying[:2], **asdict(ids), user_task=user_task, enabled_tools=enabled_tools,
             skip_pre_tool_call_hook=skip_pre_tool_call_hook, skip_tool_request_middleware=skip_tool_request_middleware,
             skip_tool_execution_middleware=skip_tool_execution_middleware, tool_request_middleware_trace=list(trace),
             enabled_toolsets=enabled_toolsets, disabled_toolsets=disabled_toolsets,
         )
+        if len(underlying) == 3 and underlying[2] == _DIRECT_CALL and isinstance(result, str):
+            from tools.tool_search import DIRECT_CALL_NOTE
+            result = result + "\n\n" + DIRECT_CALL_NOTE.format(name=underlying[0])
+        return result
+        # //// END Neoffice ////
 
     from tools.connectors import is_connector_name
     from tools.connectors.gateway.names import parse_connector_name
