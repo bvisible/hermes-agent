@@ -259,6 +259,19 @@ REPLIES = {
         "it": "Non ho potuto elaborare il suo messaggio in questo momento. Lo invii di nuovo tra un istante.",
         "en": "I could not handle your message just now. Please send it again in a moment.",
     },
+    # //// Neoffice — the question a card asks when its answer was cut off at the output limit
+    # //// (neoffice-maintenance#2755, agent/kanban_turn_recovery.py). Upstream's copy for a cut-off
+    # //// turn is English and names `continue`, which the failure-copy rule below replaces whole.
+    "truncated_card": {
+        "fr": "Ma réponse était trop longue et a été coupée avant la fin. Posez la question en plus "
+              "petites étapes, par exemple une partie à la fois.",
+        "de": "Meine Antwort war zu lang und wurde vor dem Ende abgeschnitten. Stellen Sie die Frage "
+              "bitte in kleineren Schritten, zum Beispiel einen Teil nach dem anderen.",
+        "it": "La mia risposta era troppo lunga ed è stata interrotta prima della fine. Ponga la "
+              "domanda in passi più piccoli, per esempio una parte alla volta.",
+        "en": "My answer was too long and was cut off before the end. Please ask in smaller steps, "
+              "for example one part at a time.",
+    },
 }
 
 

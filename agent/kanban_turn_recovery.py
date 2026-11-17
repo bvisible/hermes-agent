@@ -334,6 +334,56 @@ def _emit_recovery_skipped(emit: Optional[Callable[[str], None]], task_id: Optio
             logger.debug("kanban turn-recovery emit failed", exc_info=True)
 
 
+# //// Neoffice — a card whose turn was cut off at the output limit asks its person instead of crashing
+# //// (neoffice-maintenance#2755). Such a turn ends incomplete with failure_reason "truncated": the
+# //// continuations were spent, the window was full, a tool call was cut, or the model's budget went on
+# //// reasoning or a repeated fragment. It returns early, so it never reaches finalize_turn and its
+# //// net; only its failed ending is in-place retry authority, rerun first below. The worker then exited
+# //// non-zero with its card still running: a crash counted against the card, a run from scratch into the
+# //// same cut, and after two the card was abandoned with nothing said. When the recovery declines the
+# //// turn and the worker still owns its live run, the card is now blocked `needs_input` through the
+# //// worker's own kanban_block handler (secret masking, the goal-mode gate, the run-ownership proof,
+# //// one write), with the branding catalog's sentence as its question, in the profile's language.
+# //// Never `done`: no real cut-off card turn has been observed yet, so what its text holds is not
+# //// known. Nothing is counted. Remove when upstream settles a truncated kanban turn itself.
+def _neoffice_block_truncated_turn(result: Any, *, task_id: Optional[str], check: Callable[[], bool]) -> bool:
+    """Block the card ``needs_input`` when its latest turn was cut off; True when it now waits on a person."""
+    if not isinstance(result, dict) or result.get("failure_reason") != "truncated" or result.get("interrupted"):
+        return False
+    tid = _resolve_task_id(task_id)
+    if tid is None or not check():
+        return False
+    import json
+
+    try:
+        from neoffice_branding import reply
+        from tools.kanban_tools import _handle_block
+
+        try:
+            from agent.i18n import get_language
+
+            lang = get_language()
+        except Exception:
+            lang = None
+        raw = _handle_block({"task_id": tid, "reason": reply("truncated_card", lang), "kind": "needs_input"})
+    except Exception:  # never worse than before: the card is then booked as upstream books it
+        logger.warning("kanban truncated turn: %s not blocked", tid, exc_info=True)
+        return False
+    try:
+        answer = json.loads(raw)
+    except (TypeError, ValueError):
+        answer = None
+    if not isinstance(answer, dict) or answer.get("error") or answer.get("status") != "blocked":
+        logger.warning("kanban truncated turn: %s could not be blocked, left as upstream books it: %s",
+                       tid, str((answer or {}).get("error") if isinstance(answer, dict) else raw)[:200])
+        return False
+    final = result.get("final_response")
+    logger.warning("kanban truncated turn: %s blocked needs_input (failed=%s, reply_chars=%s)",
+                   tid, bool(result.get("failed")), len(final) if isinstance(final, str) else 0)
+    return True
+# //// END Neoffice ////
+
+
 def recover_failed_kanban_turns(
     turn_fn: Callable[[str], Any],
     get_result: Callable[[], Any],
@@ -362,6 +412,7 @@ def recover_failed_kanban_turns(
     while True:
         result = get_result()
         if not should_recover_turn(result, attempt=attempts, task_id=task_id):
+            _neoffice_block_truncated_turn(result, task_id=task_id, check=check)  # //// Neoffice — #2755
             return attempts
         if not check():
             _emit_recovery_skipped(emit, task_id)
