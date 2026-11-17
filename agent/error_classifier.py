@@ -1109,9 +1109,32 @@ def _by_status(c: _Ctx) -> Optional[Verdict]:
 # Stage order: plugin hooks → the provider's own profile hook → provider-specific special cases →
 # HTTP status → MoA shapes → structured error code → message patterns → SSL → disconnect +
 # large session → transport types → unknown (retryable with backoff).
+# //// Neoffice — an empty stream is a transient provider failure that fails over at once (#2810).
+# //// EmptyStreamError (a stream that ended with no finish/stop reason and nothing in it: chat completions, Anthropic,
+# //// Bedrock) has no HTTP status and its words matched no pattern, so it fell to `unknown`, and a kanban worker exited
+# //// 1: a crash counted against the card, abandoned at its second empty stream. The stream reader has already retried
+# //// it with a fresh connection (chat_completion_helpers, `_is_empty_stream`) before it gets here, so this verdict
+# //// does not retry it again: `server_error` with retryable=False and should_fallback=True, the shape upstream's open
+# //// PR #153572 gives it. Not retryable keeps it out of the outer retry loop, of the auto-recovery ladder (minutes of
+# //// waiting) and of the kanban in-place recovery; `server_error` makes a kanban worker exit on the transient code, so
+# //// the dispatcher requeues the card, spaced and capped (kanban_db_dispatch._bounded_transient_requeue). Matched by
+# //// type, as chat_completion_helpers does, so every raise site is covered. Remove when upstream classifies it.
+_V_EMPTY_STREAM = _v(_R.server_error, retryable=False, should_fallback=True)
+
+
+def _neoffice_empty_stream(c: _Ctx) -> Optional[Verdict]:
+    """An EmptyStreamError, by type (see the block above)."""
+    from agent.errors import EmptyStreamError
+
+    return _V_EMPTY_STREAM if isinstance(c.error, EmptyStreamError) else None
+# //// END Neoffice ////
+
+
 _STAGES: Sequence[Callable[[_Ctx], Optional[Verdict]]] = (
     _plugin_verdict, _profile_verdict, _provider_special_cases, _by_status, _moa_special_cases,
-    _by_error_code, _by_message, _by_transport,
+    _by_error_code,
+    _neoffice_empty_stream,  # //// Neoffice — an empty stream, by type, before the message patterns (#2810)
+    _by_message, _by_transport,
 )
 
 

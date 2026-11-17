@@ -969,6 +969,79 @@ def _protocol_violation_streak(conn: sqlite3.Connection, task_id: str) -> int:
     return streak
 
 
+# //// Neoffice — a card that sets max_retries is not requeued for free for ever (neoffice-maintenance#2810).
+# //// A transient provider exit (KANBAN_RATE_LIMIT_EXIT_CODE: quota, overloaded, server_error, timeout, an empty stream)
+# //// is requeued without counting a failure, spaced by the rate-limit cooldown, and check_respawn_guard retries it
+# //// for ever. That suits a provider-wide quota wall. It does not suit a request the model cannot serve: a
+# //// self-hosted model that answers « busy » or an empty stream to one card on every run kept that card going every
+# //// five minutes, holding the pole, while the card's creator had asked for a bound with max_retries (two, on the
+# //// cards a scan places). So, for a card that sets max_retries only, the free requeues are a streak capped at
+# //// HERMES_KANBAN_TRANSIENT_REQUEUE_LIMIT (default 6, about half an hour of cooldowns: a morning burst of the box).
+# //// Beyond it each transient exit counts as a failure, still spaced by the cooldown, and the card stops at its
+# //// max_retries. The streak starts again once the card is unblocked, promoted or moved, as consecutive_failures
+# //// does. A card without max_retries keeps upstream's behaviour. Remove when upstream bounds transient requeues.
+_TRANSIENT_REQUEUE_LIMIT = 6
+_TRANSIENT_REQUEUE_SCAN_LIMIT = 50
+
+
+def _transient_requeue_limit() -> int:
+    """``HERMES_KANBAN_TRANSIENT_REQUEUE_LIMIT`` (0 = no cap) else ``_TRANSIENT_REQUEUE_LIMIT``."""
+    return _kb._env_int("HERMES_KANBAN_TRANSIENT_REQUEUE_LIMIT", _TRANSIENT_REQUEUE_LIMIT)
+
+
+def _transient_requeue_streak(conn: sqlite3.Connection, task_id: str) -> int:
+    """Count the task's trailing run of transient provider exits, the free requeues and the counted ones past the cap.
+
+    Walks closed runs newest-first: a ``rate_limited`` run, or a crash this cap turned into a counted failure (its
+    ``transient_requeues`` run-metadata marker), continues the streak; any other closed run ends it. Counting the
+    capped ones too is what makes the card stop at its max_retries instead of earning a new free streak after each
+    counted failure. Only the runs closed after the card was last unblocked, promoted or moved count: an operator
+    who unblocks a card (unblock_task resets consecutive_failures) gives it a new streak, not the end of the old one."""
+    since = _kb._to_epoch(conn.execute(
+        "SELECT MAX(created_at) FROM task_events WHERE task_id = ? AND kind IN ('unblocked', 'promoted', 'status')",
+        (task_id,),
+    ).fetchone()[0])
+    streak = 0
+    rows = conn.execute(
+        "SELECT outcome, metadata, ended_at FROM task_runs WHERE task_id = ? AND ended_at IS NOT NULL "
+        "ORDER BY id DESC LIMIT ?",
+        (task_id, _TRANSIENT_REQUEUE_SCAN_LIMIT),
+    ).fetchall()
+    for row in rows:
+        ended = _kb._to_epoch(row["ended_at"])
+        if since is not None and (ended is None or ended <= since):
+            break  # closed before the card was last unblocked, promoted or moved (a run the unblock closes too)
+        if (row["outcome"] or "") == "rate_limited" or _kb._json_dict(row["metadata"]).get("transient_requeues"):
+            streak += 1
+            continue
+        break
+    return streak
+
+
+def _bounded_transient_requeue(conn: sqlite3.Connection, task_id: str, dead: "_DeadWorker") -> "_DeadWorker":
+    """``dead`` as booked, or, past the cap of a card that sets max_retries, the same exit as a counted failure."""
+    if not dead.rate_limited:
+        return dead
+    limit = _transient_requeue_limit()
+    if limit <= 0:
+        return dead
+    row = conn.execute("SELECT max_retries FROM tasks WHERE id = ?", (task_id,)).fetchone()
+    if row is None or _kb._row_get(row, "max_retries") is None:
+        return dead
+    streak = _transient_requeue_streak(conn, task_id)
+    if streak < limit:
+        return dead
+    pid = dead.event_payload.get("pid")
+    return _DeadWorker(
+        "transient_exhausted", dead.code,
+        f"pid {pid} exited on a transient provider error {streak + 1} times in a row: the model gave no usable "
+        "answer to this card — counted as a failure past the transient requeue cap",
+        "crashed",
+        {**dead.event_payload, "transient_requeues": streak + 1, "transient_requeue_limit": limit},
+    )
+# //// END Neoffice ////
+
+
 WORKER_OUTPUT_SEP = " Worker's last output: "  # dead-worker error text: our words, then the worker's
 _PROTOCOL_VIOLATION_ERROR = (
     # Worker subprocess returned 0 but its task is still ``running`` in the DB — it exited without calling
@@ -1192,6 +1265,8 @@ def _reclaim_dead_workers(conn: sqlite3.Connection, board: Optional[str] = None)
             # A managed run's authority-recorded exit (its bound interpreter's, under this claim).
             exit_code = managed_run_exit_code(conn, row["id"], pid, row["claim_lock"])
             dead = _classify_dead_worker(pid, row["claim_lock"], exit_code, task_id=row["id"], board=board)
+            # //// Neoffice — past the cap, a transient exit of a card that sets max_retries counts (#2810)
+            dead = _bounded_transient_requeue(conn, row["id"], dead)
             apply_attempt_note(conn, row["id"], pid, dead)
             retry_status = _kb._retry_status_for_run(conn, row["id"])
             dead.event_payload["retry_status"] = retry_status
@@ -1600,7 +1675,9 @@ def check_respawn_guard(
             ended_at = _kb._to_epoch(latest_run["ended_at"])
             if ended_at is not None and (now - ended_at) < rl_cooldown:
                 return "infrastructure_cooldown"
-    if latest_run is not None and latest_run["outcome"] == "rate_limited":
+    # //// Neoffice — a transient exit counted past the cap (#2810) is the same exit, spaced like the free ones
+    if latest_run is not None and (latest_run["outcome"] == "rate_limited"
+                                   or _kb._json_dict(latest_run["metadata"]).get("transient_requeues")):
         if rl_cooldown <= 0:
             # Cooldown disabled — respawn immediately, skipping blocker_auth so
             # the stamped rate-limit text doesn't re-trap the task.
