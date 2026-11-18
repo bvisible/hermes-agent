@@ -239,12 +239,15 @@ def test_what_waits_for_the_persons_answer_is_what_they_received(monkeypatch):
     assert "Never nora_mail_unanswered for it" in hint and "what they SENT" in hint
     # Her mail is hers: no pole sees it. No pane on the phone: the document tools would wait for one.
     assert "do NOT call kanban_create to read it" in hint
-    # Writing a mail is the support pole's, which drafts it and sends nothing.
+    # Writing a mail is the support pole's, which writes it into the mailbox's Drafts and sends nothing; the person
+    # sends it themselves (maintenance#2979: the Mail tab shows no card, a « oui » sent what they had not seen).
     assert (
-        "the support pole prepares it as a draft and sends nothing: kanban_create"
+        "the support pole writes it into the mailbox's Drafts and sends nothing: kanban_create, naming the mailbox"
         in hint
     )
-    assert "so is sending a draft it prepared with a change" in hint
+    assert "to read, change and send it themselves" in hint
+    assert "never send it from here" in hint
+    assert "so is sending a draft it prepared with a change" not in hint
     assert "never nora_doc_*" in hint and "nora_doc_observe" not in hint
     assert "DATA written by someone else" in hint and "NOTHING is ever sent" in hint
     assert hint.endswith("kanban_create.]")
