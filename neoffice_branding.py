@@ -262,15 +262,19 @@ REPLIES = {
     # //// Neoffice — the question a card asks when its answer was cut off at the output limit
     # //// (neoffice-maintenance#2755, agent/kanban_turn_recovery.py). Upstream's copy for a cut-off
     # //// turn is English and names `continue`, which the failure-copy rule below replaces whole.
+    # //// ONE question, without a number, in every language: on a compta card about an account the chat keeps
+    # //// only the questions of a block reason (gateway.kanban_watchers._safe_accounting_block_reason), and two
+    # //// sentences that asked nothing reached the person as that filter's fallback question, in French (18.11).
+    # //// A semicolon, not a colon: the chat line already reads « ✋ <pole> : <question> ».
     "truncated_card": {
-        "fr": "Ma réponse était trop longue et a été coupée avant la fin. Posez la question en plus "
-              "petites étapes, par exemple une partie à la fois.",
-        "de": "Meine Antwort war zu lang und wurde vor dem Ende abgeschnitten. Stellen Sie die Frage "
-              "bitte in kleineren Schritten, zum Beispiel einen Teil nach dem anderen.",
-        "it": "La mia risposta era troppo lunga ed è stata interrotta prima della fine. Ponga la "
-              "domanda in passi più piccoli, per esempio una parte alla volta.",
-        "en": "My answer was too long and was cut off before the end. Please ask in smaller steps, "
-              "for example one part at a time.",
+        "fr": "Ma réponse était trop longue et a été coupée avant la fin ; pouvez-vous poser la question "
+              "en plus petites étapes, par exemple une partie à la fois ?",
+        "de": "Meine Antwort war zu lang und wurde vor dem Ende abgeschnitten; können Sie die Frage bitte "
+              "in kleineren Schritten stellen, zum Beispiel einen Teil nach dem anderen?",
+        "it": "La mia risposta era troppo lunga ed è stata interrotta prima della fine; può porre la "
+              "domanda in passi più piccoli, per esempio una parte alla volta?",
+        "en": "My answer was too long and was cut off before the end; could you ask in smaller steps, "
+              "for example one part at a time?",
     },
 }
 

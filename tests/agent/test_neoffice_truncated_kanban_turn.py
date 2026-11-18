@@ -137,13 +137,15 @@ def test_the_gateway_worker_blocks_on_its_bound_claim(kanban_home, monkeypatch):
     assert _state(tid)[0].status == "blocked"
 
 
-def test_the_question_is_in_the_profiles_language(kanban_home, monkeypatch):
+@pytest.mark.parametrize("lang", ["fr", "de", "it", "en"])
+def test_the_question_is_in_the_profiles_language(kanban_home, monkeypatch, lang):
+    """Written through the worker's block handler (its redaction, block_task, the event's JSON), word for word."""
     import agent.i18n
 
-    monkeypatch.setattr(agent.i18n, "get_language", lambda: "de")
+    monkeypatch.setattr(agent.i18n, "get_language", lambda: lang)
     tid, _run = _running_card(monkeypatch)
     _settle(ENDINGS["ceiling with text"]())
-    assert [b.get("reason") for b in _state(tid)[1]] == [reply("truncated_card", "de")]
+    assert [b.get("reason") for b in _state(tid)[1]] == [reply("truncated_card", lang)]
 
 
 @pytest.mark.parametrize("lang", ["fr", "de", "it", "en"])
@@ -152,6 +154,39 @@ def test_the_question_reaches_the_person_as_written(lang):
     question = reply("truncated_card", lang)
     assert question and strip_internal_mechanics(question, lang) == question
     assert "continue" not in question.lower()
+
+
+# A compta card about an account goes through one more filter on its way to the chat
+# (gateway.kanban_watchers._safe_accounting_block_reason): only the questions of its block reason are kept. A
+# sentence that asked nothing was replaced by the filter's fallback, « Quelle information factuelle manque-t-il
+# pour départager les traitements comptables possibles ? », in French whatever the person's language: a false
+# question about an answer that was only cut (seen with the deployed code on the work instance, 18.11).
+_CHAT_CARDS = {
+    "sales": ("ventes", "Devis pour une pose de parquet", "Prépare un devis."),
+    "compta, no account": ("compta", "Relance des factures en retard", "Liste les factures en retard."),
+    "compta, about an account": (
+        "compta",
+        "Sur quel compte imputer une facture de nettoyage ?",
+        "Dans quel compte passer cette facture ?",
+    ),
+}
+
+
+@pytest.mark.parametrize("card", list(_CHAT_CARDS))
+@pytest.mark.parametrize("lang", ["fr", "de", "it", "en"])
+def test_the_chat_shows_the_question_whatever_the_card(lang, card):
+    """The whole delivery of the block on a customer chat: the notifier's formatter, then the webhook's filter."""
+    import types
+
+    from gateway import kanban_watchers_notifier as notifier
+
+    assignee, title, body = _CHAT_CARDS[card]
+    question = reply("truncated_card", lang)
+    task = types.SimpleNamespace(assignee=assignee, title=title, body=body, status="blocked", result="")
+    note = types.SimpleNamespace(task=task, title=title, platform_str="webhook")
+    event = types.SimpleNamespace(kind="blocked", payload={"reason": question, "kind": "needs_input"})
+    text, _wake, _extra = notifier._EVENT_FORMATTERS["blocked"](event, note)
+    assert question in strip_internal_mechanics(text, lang)
 
 
 def test_a_worker_that_lost_its_claim_changes_nothing(kanban_home, monkeypatch):
