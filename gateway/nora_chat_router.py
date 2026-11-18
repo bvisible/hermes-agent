@@ -1162,14 +1162,26 @@ _FOREIGN_SALES_DOCUMENT_RE = re.compile(
 # //// or by « chez le fournisseur », is an order to place: « commande 5 arrosoirs », « recommande-nous-en 10 »,
 # //// « commandes-en 10 chez le fournisseur », « passe une commande de 20 siphons ». A year is no quantity
 # //// (« les commandes 2026 »), and « un » is an article (« recommande-moi un bon fournisseur »).
+# //// Neoffice — the verb and the branch that names a supplier are named apart (#2307), so the visit rule can be lifted
+# //// by that branch alone (_ORDER_AT_A_SUPPLIER_RE); « mes » joined the supplier's words: « recommander chez mes
+# //// fournisseurs » is an order to place. The pattern is otherwise the one of 10.10, character for character.
+_ORDER_VERB = r"\b(?:re)?command(?:e|ez|er|ons|es(?=[-\s]+en\b))\b"
+_AT_A_SUPPLIER = r"[^.?!]{0,60}\bchez\s+(?:le|notre|nos|mes|ce|cet|un|mon)\s+fournisseurs?\b"
 _ORDER_TO_PLACE_RE = re.compile(
-    r"\b(?:re)?command(?:e|ez|er|ons|es(?=[-\s]+en\b))\b"
-    r"(?:(?:[-\s]+(?:nous|moi|en|les?|la))*[-\s]+(?:\d{1,3}\b|(?:deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze"
+    # //// Neoffice — the verb, then the quantity or the supplier (_AT_A_SUPPLIER), as on 10.10 (#2307)
+    _ORDER_VERB
+    + r"(?:(?:[-\s]+(?:nous|moi|en|les?|la))*[-\s]+(?:\d{1,3}\b|(?:deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze"
     r"|douze|treize|quatorze|quinze|seize|vingt|trente|quarante|cinquante|soixante|cent)\b)"
-    r"|[^.?!]{0,60}\bchez\s+(?:le|notre|nos|ce|cet|un|mon)\s+fournisseurs?\b)"
+    # //// Neoffice — the supplier's branch, named apart since #2307
+    r"|" + _AT_A_SUPPLIER + r")"
     r"|\bpass(?:e|es|ez|er|ons)\s+(?:une\s+)?commande\s+(?:de\s+\d|d['\u2019]|au\s+fournisseur|chez\b)",
     re.IGNORECASE,
 )
+# //// Neoffice — an order to place AT a supplier (#2307): « Qu'est-ce que je dois recommander chez mes fournisseurs
+# //// d'après mes catalogues ? » was read by the visit rule (_APPOINTMENT_RE, « je dois … chez ») as a visit and went to
+# //// projet, which has no catalogue tool. This branch only lifts the visit rule in _keyword_pole: the other job rules
+# //// and the table decide after it as before, and the order rule stays where it was in the table, last.
+_ORDER_AT_A_SUPPLIER_RE = re.compile(_ORDER_VERB + _AT_A_SUPPLIER, re.IGNORECASE)
 # //// END Neoffice ////
 
 
@@ -2453,7 +2465,8 @@ def _keyword_pole(msg: str) -> Optional[str]:
         logger.info("nora_chat_router: a letter to post → support (nora_letter_create)")
         return "support"
     # //// END Neoffice ////
-    if _APPOINTMENT_RE.search(msg):
+    # //// Neoffice — `and not _ORDER_AT_A_SUPPLIER_RE` (#2307): an order to place at a supplier is no visit
+    if _APPOINTMENT_RE.search(msg) and not _ORDER_AT_A_SUPPLIER_RE.search(msg):
         logger.info("nora_chat_router: booking a visit → projet (keyword rules skipped)")
         return "projet"
     if _DID_WORK_RE.search(msg):
