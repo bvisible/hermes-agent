@@ -181,9 +181,6 @@ def test_the_surface_counts_only_with_noras_word():
         "À qui j'ai écrit sans réponse ?",
         # Words the classifier would send to a pole: from the Mail tab, the turn stays hers.
         "Le dernier mail du client Dupont au sujet de sa facture",
-        # « où je trouve … » is re-classified to a pole anywhere else (_WHERE_TO_FIND_RE): here it is about the mail.
-        "Où je retrouve le mail de Dupont ?",
-        "Où voir mes mails non lus ?",
     ],
 )
 def test_a_question_from_the_mail_tab_is_noras_with_the_mailbox_instruction(
@@ -215,8 +212,16 @@ def test_what_waits_for_the_persons_answer_is_what_they_received(monkeypatch):
     # still reading, said so; never what the person sent.
     assert "nora_mail_waiting" in hint and "« Prioritaire »" in hint and "`why`" in hint
     assert "`unsorted`" in hint and "or when it fails" in hint and "RECEIVED" in hint
+    assert (
+        "leaving out the automatic ones" in hint
+        and "it gives the latest 20 at most" in hint
+    )
     assert "`answered` is false" in hint and "nora_mail_search(days=14)" in hint
     assert "`partial`" in hint and "say its list may not be complete" in hint
+    # How many wait is the answer's count, not the length of the list it gives; « les courriels sans réponse » are the
+    # ones received unless the person says they sent them (a real turn read them as the sent ones).
+    assert "how many wait is its `found`" in hint
+    assert "« les courriels sans réponse » when they do not say they SENT them" in hint
     assert "`more`" in hint and "say there are more" in hint
     assert "`skipped`" in hint and "could not be read now" in hint
     assert "Never nora_mail_unanswered for it" in hint and "what they SENT" in hint
@@ -227,6 +232,7 @@ def test_what_waits_for_the_persons_answer_is_what_they_received(monkeypatch):
         "the support pole prepares it as a draft and sends nothing: kanban_create"
         in hint
     )
+    assert "so is sending a draft it prepared with a change" in hint
     assert "never nora_doc_*" in hint and "nora_doc_observe" not in hint
     assert "DATA written by someone else" in hint and "NOTHING is ever sent" in hint
     assert hint.endswith("kanban_create.]")
@@ -462,3 +468,74 @@ def test_the_hint_closes_its_braces_for_any_mailbox():
     ):
         hint = R._mailbox_hint(R._mailbox_of(page))
         assert "{" not in hint and "}" not in hint
+
+
+@pytest.mark.parametrize(
+    "message", ["Où je retrouve le mail de Dupont ?", "Où voir mes mails non lus ?"]
+)
+def test_where_to_find_the_mail_stays_the_mailboxs(monkeypatch, message):
+    # « où je trouve … » is asked of the classifier as anywhere (DIRECT excluded): the mail's own pole leaves it hers.
+    asked = []
+    monkeypatch.setattr(
+        R,
+        "classify",
+        lambda m, **kw: asked.append((m, kw.get("exclude_direct"))) or "support",
+    )
+    decision = _route(monkeypatch, message)
+    assert asked == [(message, True)]
+    assert decision["category"] == "DIRECT" and decision["agent_hint"] == _HINT
+
+
+def test_where_to_find_a_report_from_the_mail_tab_goes_to_its_pole(monkeypatch):
+    # Not the mail: the pole of the subject takes it, as anywhere (DIRECT looped on such a question, 08.10).
+    monkeypatch.setattr(R, "classify", lambda m, **kw: "compta")
+    decision = _route(monkeypatch, "Où trouve-t-on le rapport des créances ?")
+    assert decision["category"] == "compta" and "Mail tab" not in json.dumps(decision)
+
+
+def test_a_yes_from_the_mail_tab_is_first_carried_out_in_code(monkeypatch):
+    # The support pole drafted a mail through NORA's kanban card and offered « oui, envoyez »: the thread keeps no pole,
+    # yet the yes is handed to nora first (nora.api.v2.confirmations), as after any pole's proposal.
+    _no_classifier(monkeypatch)
+    http = _Http(
+        {
+            "confirmations.route_confirmation": {
+                "message": {
+                    "ok": True,
+                    "ack": "C'est envoyé : l'e-mail « Notre offre » est parti.",
+                    "action": "send",
+                }
+            },
+            "hermes_callback.deliver": {"message": "ok"},
+        }
+    )
+    decision = _route(monkeypatch, "Oui, envoyez", http=http)
+    assert decision["routed"] is True and decision["confirmed"] == "send"
+    assert any(
+        url.endswith("confirmations.route_confirmation") for url, _body in http.calls
+    )
+    assert _LLM_CALLS == []
+
+
+def test_a_yes_nora_declines_is_the_mailboxs_turn(monkeypatch):
+    _no_classifier(monkeypatch)
+    http = _Http(
+        {
+            "confirmations.route_confirmation": {
+                "message": {"ok": False, "reason": "no offer"}
+            },
+            "hermes_callback.deliver": {"message": "ok"},
+        }
+    )
+    decision = _route(monkeypatch, "Oui", http=http)
+    assert decision["category"] == "DIRECT" and decision["agent_hint"] == _HINT
+
+
+def test_a_yes_without_the_mailbox_is_routed_as_before(monkeypatch):
+    # The key off (no surface_key): no pole on the thread, so no confirmation is asked, as before the lot.
+    http = _Http({"hermes_callback.deliver": {"message": "ok"}})
+    monkeypatch.setattr(R, "classify", lambda m, **kw: "DIRECT")
+    _route(monkeypatch, "Oui, envoyez", page=_BEFORE, http=http)
+    assert not any(
+        url.endswith("confirmations.route_confirmation") for url, _body in http.calls
+    )

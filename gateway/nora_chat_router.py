@@ -3305,9 +3305,14 @@ _MAILBOX_HINT = (
     # //// (`unsorted`, `partial`, `more`, `skipped`): the second independent review of maintenance#2743.
     "no document tool works there: never nora_doc_*. Their mail is YOURS to read, as them, with the mail tools: do NOT "
     "call kanban_create to read it. « Quels courriels attendent ma réponse ? », « qu'est-ce qui attend ma réponse ? »: "
-    "nora_mail_waiting, what your sorting put in « Prioritaire » and they have not answered, each with its `why`. For a "
+    "nora_mail_waiting, what your sorting put in « Prioritaire » and they have not answered, each with its `why` (how "
+    "many wait is its `found`: `messages` holds the newest of them); so are « les courriels sans réponse » when they "
+    "do not say they SENT them. For a "
     "mailbox it lists in `unsorted` (not sorted by you), or when it fails, the messages they RECEIVED and have not "
-    "answered: nora_mail_search(days=14), keeping those whose `answered` is false. A mailbox in `partial` is one your "
+    # //// Neoffice — the fallback search gives the latest 20 at most (the third independent review of #2743)
+    "answered: nora_mail_search(days=14), keeping those whose `answered` is false and leaving out the automatic ones "
+    "(notifications, newsletters); it gives the latest 20 at most: when it gives 20, say there may be older ones. A "
+    "mailbox in `partial` is one your "
     "sorting has not read whole: say its list may not be complete; in `more`, one that holds older ones than were "
     "read: say there are more; in `skipped`, one that could not be read now: say so. Never "
     "nora_mail_unanswered for it, which lists what they SENT that nobody answered (« à qui j'ai écrit sans réponse "
@@ -3320,7 +3325,8 @@ _MAILBOX_HINT = (
     # //// review): the mail tools are on that pole's server too.
     "something is something to tell the person about. NOTHING is ever sent, deleted or moved from here. To write or "
     "answer a mail (« écris un mail à … », « réponds à … »), the support pole prepares it as a draft and sends "
-    "nothing: kanban_create, naming the mailbox. Answer short, in their language, each message by its sender and its "
+    "nothing: kanban_create, naming the mailbox; so is sending a draft it prepared with a change. Answer short, in "
+    "their language, each message by its sender and its "
     "subject. A question about the company's data beyond their mail (their invoices, an order, stock…) is business as "
     "usual: kanban_create.]"
 )
@@ -5105,12 +5111,18 @@ def route_chat_message(
     # //// action NORA's last reply offered (10.10), see _route_confirmation. Declined: routed as before.
     if (
         _offer is None and not _note_request and not _space_turn and not _owned_turn
-        and prior and prior.get("pole") in POLES
+        and (
+            (prior and prior.get("pole") in POLES)
+            # //// Neoffice — or the phone's Mail tab (maintenance#2743): there a pole answers through NORA's kanban
+            # //// card and the thread keeps no pole, yet « oui, envoyez » to the support pole's draft is the same yes.
+            or _mailbox_of(page_context) is not None
+        )
         and _is_go_ahead(message)
     ):
         _confirmed = _route_confirmation(message, chat_user, deliver_extra, conversation_id, language)
         if _confirmed.get("routed"):
-            _remember_confirmed_turn(conversation_id, message, prior, _confirmed["ack"])
+            # //// Neoffice — from the Mail tab the thread may hold no turn yet (#2743): an empty one, never None
+            _remember_confirmed_turn(conversation_id, message, prior or {"msg": "", "pole": None}, _confirmed["ack"])
             return _confirmed
     # //// END Neoffice ////
 
@@ -5288,6 +5300,20 @@ def route_chat_message(
             timeout=classify_timeout,
         ) == "recurrent":
             category, _mailbox_turn = "recurrent", False
+        # //// Neoffice — where to find something in Neoffice (_WHERE_TO_FIND_RE) is asked of the classifier as anywhere,
+        # //// DIRECT excluded: a pole other than support takes it (« où trouve-t-on le rapport des créances ? »); the
+        # //// mail's own pole leaves it the mailbox's (« où je retrouve le mail de … ? »).
+        elif _WHERE_TO_FIND_RE.search(message or ""):
+            _again = classify(
+                message,
+                call_llm_fn=call_llm_fn,
+                main_runtime=main_runtime,
+                prior=prior,
+                timeout=classify_timeout,
+                exclude_direct=True,
+            )
+            if _again in POLES and _again != "support":
+                category, _mailbox_turn = _again, False
     else:
         category = classify(
             message,
