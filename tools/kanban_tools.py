@@ -11,6 +11,7 @@ import functools
 import json
 import logging
 import os
+import re  # //// Neoffice — the document names of the cited-names guard (#2675)
 import time
 from contextlib import contextmanager
 from typing import Any, Callable, Optional
@@ -987,6 +988,68 @@ def _neoffice_preview_guard_rejection(session_id: Optional[str], handoff: str) -
 # //// END Neoffice ////
 
 
+# //// Neoffice — a document name that no tool returned is not cited as a fact (neoffice-maintenance#2675).
+# //// On the hub, 13.11: a compta worker called frappe_dunning_send with a reminder name it made up
+# //// (DUN-2026-00001), got a refusal of the right to write a Dunning (the tool refuses the right before it
+# //// looks the name up), and handed off « le rappel DUN-2026-00001 (2 factures, 1'250.00 CHF) … reste en
+# //// brouillon »: none of it existed. Its SOUL already says « never invent a number ». What the model breaks is
+# //// held here by a fact the code can check: a name shaped like a document's (a series prefix, then a year or
+# //// a long number: DUN-2026-00001, ACC-SINV-2026-00012, CRM-LEAD-2026-00012) that the handoff cites must appear
+# //// in a tool result of this worker's session, or in what the person wrote (the task's own text). Recognising
+# //// a printed identifier is a use of words rule N1 allows; nothing here decides what the answer says.
+# //// Behind the site key nora_cited_names_guard, off by default (rule N4): off, nothing is read and nothing
+# //// changes. Like the preview guard, a session that cannot be read is no evidence and lets the handoff through,
+# //// and the auto-complete net (no session id) is not held.
+_NEOFFICE_DOCUMENT_NAME = re.compile(r"\b[A-Z]{2}[A-Z0-9]{0,8}(?:-[A-Z][A-Z0-9]{1,9})*-\d{4,}(?:-[0-9A-Z]{1,8})*\b")
+_NEOFFICE_SITE_CONFIG = "/home/neoffice/frappe-bench/sites/prod.local/site_config.json"
+
+
+def _neoffice_site_key_on(name: str) -> bool:
+    """A site_config key of this instance, read as frappe's cint reads it: absent, unreadable or not 1 is off.
+
+    The site's own site_config.json, as scripts/hermes-poc/configs/keyed.py reads it for the keyed profiles."""
+    path = os.environ.get("SITE_CONFIG") or _NEOFFICE_SITE_CONFIG
+    try:
+        with open(path, encoding="utf-8") as fh:
+            conf = json.load(fh)
+    except Exception:  # noqa: BLE001 — no site_config: every key is off
+        return False
+    value = conf.get(name) if isinstance(conf, dict) else None
+    if isinstance(value, bool):
+        return value
+    try:
+        return int(float(str(value).strip())) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _neoffice_cited_names_rejection(session_id: Optional[str], handoff: str) -> Optional[str]:
+    """Rejection text when the handoff cites a document name that no tool returned, else None."""
+    if not _neoffice_site_key_on("nora_cited_names_guard"):
+        return None
+    names = sorted(set(_NEOFFICE_DOCUMENT_NAME.findall(handoff or "")))
+    if not names or not session_id:
+        return None
+    try:
+        from hermes_state import SessionDB
+
+        with SessionDB(read_only=True) as db:
+            rows = db.get_messages(session_id, include_inactive=True)
+    except Exception:  # noqa: BLE001
+        return None
+    seen = "\n".join(str(row.get("content") or "") for row in rows if row.get("role") in ("tool", "user"))
+    missing = [name for name in names if name not in seen]
+    if not missing:
+        return None
+    return (
+        f"kanban_complete blocked: your handoff names {', '.join(missing)}, which no tool returned in this task "
+        "and the person did not write. Do not name a document no tool gave you, and do not report an action on it "
+        "(created, sent, refused, left in draft): say what the tools actually answered. A refused right does not "
+        "say the document exists. Retry kanban_complete without these names. The task is still in-flight."
+    )
+# //// END Neoffice ////
+
+
 @_kanban_handler("kanban_complete")
 def _handle_complete(args: dict, **kw) -> str:
     """Mark the current task done with a structured handoff."""
@@ -1041,6 +1104,13 @@ def _handle_complete(args: dict, **kw) -> str:
             kw.get("session_id"), f"{summary or ''}\n{result or ''}")
         if _neoffice_rejection is not None:
             logger.warning("kanban_complete refused for %s: a preview handed off as done", tid)
+            return tool_error(_neoffice_rejection)
+        # //// END Neoffice ////
+        # //// Neoffice — a document name no tool returned, see _neoffice_cited_names_rejection (#2675).
+        _neoffice_rejection = _neoffice_cited_names_rejection(
+            kw.get("session_id"), f"{summary or ''}\n{result or ''}")
+        if _neoffice_rejection is not None:
+            logger.warning("kanban_complete refused for %s: it names a document no tool returned", tid)
             return tool_error(_neoffice_rejection)
         # //// END Neoffice ////
         _goal_gate("kanban_complete", task, tid, (summary or result or "").strip())
