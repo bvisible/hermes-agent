@@ -4576,10 +4576,15 @@ def _route_confirmation(
     import json as _json
     import urllib.request
 
+    payload = {"user": user, "message": message, "conversation_id": cid, "language": language or ""}
+    # //// Neoffice — the request this yes answers, when the message named one (#2901, nora #2867): nora reads the yes
+    # //// at the hour THIS message was sent, not at the thread's last send. Without it, nora's rule of before applies.
+    if _CURRENT_REQUEST.get():
+        payload["request_id"] = _CURRENT_REQUEST.get()
+    # //// END Neoffice ////
     req = urllib.request.Request(
         cb.replace(_DELIVER, _ROUTE),
-        data=_json.dumps({"user": user, "message": message, "conversation_id": cid,
-                          "language": language or ""}).encode(),
+        data=_json.dumps(payload).encode(),
         method="POST", headers={"X-Hermes-Token": token, "Content-Type": "application/json"},
     )
     try:

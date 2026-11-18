@@ -50,7 +50,7 @@ class _Routed(Exception):
     """The message went on to the classifier: routed as before."""
 
 
-def _route(http, monkeypatch, message, prior_pole="ventes"):
+def _route(http, monkeypatch, message, prior_pole="ventes", idempotency_key="k"):
     import urllib.request
 
     monkeypatch.setattr(urllib.request, "urlopen", http)
@@ -65,7 +65,7 @@ def _route(http, monkeypatch, message, prior_pole="ventes"):
 
     return R.route_chat_message(
         message=message, session_chat_id="webhook:nora_chat:test", conversation_id="conv-c", thread_id=None,
-        user_id="u", notifier_profile="default", idempotency_key="k", call_llm_fn=no_llm, main_runtime=None,
+        user_id="u", notifier_profile="default", idempotency_key=idempotency_key, call_llm_fn=no_llm, main_runtime=None,
         deliver_extra=_EXTRA, chat_user="staff@example.test", language="fr")
 
 
@@ -85,6 +85,30 @@ def test_a_yes_to_an_offer_is_carried_out_by_nora_and_answered_at_once(monkeypat
     # the conversation goes on: the pole stays, the film holds the yes and the answer for the next worker
     assert R._LAST_ROUTE["conv-c"]["pole"] == "ventes"
     assert R._CONV_HISTORY["conv-c"][-2:] == ["User: Oui, valide-la.", "NORA: " + _ACK]
+
+
+def test_the_yes_names_the_request_it_answers(monkeypatch):
+    """#2901: nora reads a yes at the hour THIS message was sent (nora #2867), not at the thread's last send; the
+    router hands it the request the message names (« <conversation>:<ms> »), as every reply of it already carries."""
+    http = _Http({"confirmations.route_confirmation": {"message": {"ok": True, "action": "submit", "ack": _ACK}},
+                  "hermes_callback.deliver": {"message": "ok"}})
+
+    decision = _route(http, monkeypatch, "Oui, valide-la.", idempotency_key="conv-c:1794961204956")
+
+    assert decision["routed"] is True
+    (_url, body, _headers), (_ack_url, ack_body, _h) = http.calls
+    assert body["request_id"] == "conv-c:1794961204956"
+    assert ack_body["request_id"] == "conv-c:1794961204956"
+
+
+def test_a_yes_that_names_no_request_sends_none(monkeypatch):
+    """A delivery id that is no request key (a WhatsApp provider id, a test's) sends nothing: nora's rule of before."""
+    http = _Http({"confirmations.route_confirmation": {"message": {"ok": True, "action": "submit", "ack": _ACK}},
+                  "hermes_callback.deliver": {"message": "ok"}})
+
+    _route(http, monkeypatch, "Oui, valide-la.", idempotency_key="wamid.HBgLNDE3OTk")
+
+    assert "request_id" not in http.calls[0][1]
 
 
 @pytest.mark.parametrize("answer", (
