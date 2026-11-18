@@ -221,6 +221,8 @@ def test_what_waits_for_the_persons_answer_is_what_they_received(monkeypatch):
     # How many wait is the answer's count, not the length of the list it gives; « les courriels sans réponse » are the
     # ones received unless the person says they sent them (a real turn read them as the sent ones).
     assert "how many wait is its `found`" in hint
+    # The same evening: « Vous avez 12 courriels en attente », then ten of them, without saying they were the newest ten.
+    assert "when it holds fewer, say these are the newest of `found`" in hint
     assert "it reads the last `days` days: say so, older mail is not in it" in hint
     assert "« les courriels sans réponse » when they do not say they SENT them" in hint
     assert "`more`" in hint and "say there are more" in hint
@@ -472,7 +474,7 @@ def test_the_hint_closes_its_braces_for_any_mailbox():
 
 
 @pytest.mark.parametrize(
-    "message", ["Où je retrouve le mail de Dupont ?", "Où voir mes mails non lus ?"]
+    "message", ["Où voir mes mails non lus ?", "Où je retrouve ma boîte d'envoi ?"]
 )
 def test_where_to_find_the_mail_stays_the_mailboxs(monkeypatch, message):
     # « où je trouve … » is asked of the classifier as anywhere (DIRECT excluded): the mail's own pole leaves it hers.
@@ -484,6 +486,27 @@ def test_where_to_find_the_mail_stays_the_mailboxs(monkeypatch, message):
     )
     decision = _route(monkeypatch, message)
     assert asked == [(message, True)]
+    assert decision["category"] == "DIRECT" and decision["agent_hint"] == _HINT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Où je retrouve le mail de Ventes ?",
+        "Où je retrouve le mail de Dupont ?",
+        "Où je retrouve le courriel de la comptabilité ?",
+        "Où je vois les messages d'Alice ?",
+        "Where can I find the email from Sales?",
+    ],
+)
+def test_where_to_find_someones_mail_stays_the_mailboxs_whatever_their_name(
+    monkeypatch, message
+):
+    # The real turn of 18.11.2026 on osiris: a sender of the test box is named « Ventes », and the classifier sent « où je
+    # retrouve le mail de Ventes ? » to the sales pole, with its acknowledgement. Someone's mail is the mailbox's,
+    # whatever their name: the classifier is not asked.
+    _no_classifier(monkeypatch)
+    decision = _route(monkeypatch, message)
     assert decision["category"] == "DIRECT" and decision["agent_hint"] == _HINT
 
 

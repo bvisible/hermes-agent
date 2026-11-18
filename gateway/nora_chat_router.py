@@ -3311,6 +3311,14 @@ def _editor_hint(editor: dict) -> str:
 # //// another order) classifies it as before too.
 _MAILBOX_KEY = "nora_mailbox_surface"
 _MAILBOX_ADDRESS_RE = re.compile(r"^[^@\s\[\]{}<>\"]{1,64}@[^@\s\[\]{}<>\"]{1,190}$")
+# //// Neoffice — someone's mail (« où je retrouve le mail de Ventes ? », « the email from Sales »): a where-to-find
+# //// question about it stays the mailbox's, whatever the sender is named. On the real turn of 18.11.2026 on osiris, a
+# //// sender of the test box named « Ventes » made the classifier answer the sales pole (maintenance#2743). Routing a
+# //// chat request by its words is the declared exception of the rule « Nora decides, the code checks » (N1).
+_MAILBOX_SOMEONES_MAIL_RE = re.compile(
+    r"\b(?:e-?mails?|mails?|courriels?|messages?)\s+(?:de\b|d['’]|du\b|des\b|from\b)",
+    re.IGNORECASE,
+)
 
 
 def _mailbox_of(page_context: Optional[dict]) -> Optional[dict]:
@@ -3343,8 +3351,10 @@ _MAILBOX_HINT = (
     "no document tool works there: never nora_doc_*. Their mail is YOURS to read, as them, with the mail tools: do NOT "
     "call kanban_create to read it. « Quels courriels attendent ma réponse ? », « qu'est-ce qui attend ma réponse ? »: "
     "nora_mail_waiting, what your sorting put in « Prioritaire » and they have not answered, each with its `why` (how "
-    # //// Neoffice — its `found` and its `days` are said (the third and fourth independent reviews of #2743)
-    "many wait is its `found`: `messages` holds the newest of them; it reads the last `days` days: say so, older mail "
+    # //// Neoffice — its `found` and its `days` are said (the third and fourth independent reviews of #2743), and a
+    # //// shorter list is said to be the newest (the real turn of 18.11.2026: « 12 en attente », then ten of them)
+    "many wait is its `found`: `messages` holds the newest of them, and when it holds fewer, say these are the newest "
+    "of `found`; it reads the last `days` days: say so, older mail "
     "is not in it); so are « les courriels sans réponse » when they "
     "do not say they SENT them. For a "
     "mailbox it lists in `unsorted` (not sorted by you), or when it fails, the messages they RECEIVED and have not "
@@ -5341,8 +5351,9 @@ def route_chat_message(
             category, _mailbox_turn = "recurrent", False
         # //// Neoffice — where to find something in Neoffice (_WHERE_TO_FIND_RE) is asked of the classifier as anywhere,
         # //// DIRECT excluded: a pole other than support takes it (« où trouve-t-on le rapport des créances ? »); the
-        # //// mail's own pole leaves it the mailbox's (« où je retrouve le mail de … ? »).
-        elif _WHERE_TO_FIND_RE.search(message or ""):
+        # //// mail's own pole leaves it the mailbox's (« où voir mes mails non lus ? »), and someone's mail is never
+        # //// asked (_MAILBOX_SOMEONES_MAIL_RE: « où je retrouve le mail de Ventes ? »).
+        elif _WHERE_TO_FIND_RE.search(message or "") and not _MAILBOX_SOMEONES_MAIL_RE.search(message or ""):
             _again = classify(
                 message,
                 call_llm_fn=call_llm_fn,
