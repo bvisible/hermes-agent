@@ -3306,7 +3306,9 @@ _MAILBOX_HINT = (
     "no document tool works there: never nora_doc_*. Their mail is YOURS to read, as them, with the mail tools: do NOT "
     "call kanban_create to read it. « Quels courriels attendent ma réponse ? », « qu'est-ce qui attend ma réponse ? »: "
     "nora_mail_waiting, what your sorting put in « Prioritaire » and they have not answered, each with its `why` (how "
-    "many wait is its `found`: `messages` holds the newest of them); so are « les courriels sans réponse » when they "
+    # //// Neoffice — its `found` and its `days` are said (the third and fourth independent reviews of #2743)
+    "many wait is its `found`: `messages` holds the newest of them; it reads the last `days` days: say so, older mail "
+    "is not in it); so are « les courriels sans réponse » when they "
     "do not say they SENT them. For a "
     "mailbox it lists in `unsorted` (not sorted by you), or when it fails, the messages they RECEIVED and have not "
     # //// Neoffice — the fallback search gives the latest 20 at most (the third independent review of #2743)

@@ -221,6 +221,7 @@ def test_what_waits_for_the_persons_answer_is_what_they_received(monkeypatch):
     # How many wait is the answer's count, not the length of the list it gives; « les courriels sans réponse » are the
     # ones received unless the person says they sent them (a real turn read them as the sent ones).
     assert "how many wait is its `found`" in hint
+    assert "it reads the last `days` days: say so, older mail is not in it" in hint
     assert "« les courriels sans réponse » when they do not say they SENT them" in hint
     assert "`more`" in hint and "say there are more" in hint
     assert "`skipped`" in hint and "could not be read now" in hint
@@ -528,6 +529,10 @@ def test_a_yes_nora_declines_is_the_mailboxs_turn(monkeypatch):
         }
     )
     decision = _route(monkeypatch, "Oui", http=http)
+    # nora was asked first, and declined: only then is the turn the mailbox's.
+    assert any(
+        url.endswith("confirmations.route_confirmation") for url, _body in http.calls
+    )
     assert decision["category"] == "DIRECT" and decision["agent_hint"] == _HINT
 
 
