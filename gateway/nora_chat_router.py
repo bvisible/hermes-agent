@@ -2059,6 +2059,21 @@ _RESTO_SEASON_RE = re.compile(
 # //// END Neoffice ////
 
 
+# //// Neoffice — the RECORD of a prospect is the sales pole's (#2674), the only pole that holds frappe_lead_create.
+# //// « Complète la fiche du prospect … (CRM-LEAD-…) : … rendez-vous … devis » went to projet by the visit rule,
+# //// « Complète le prospect … dans notre CRM : … relances de factures impayées » to compta by the dunning rule; both
+# //// answered that the prospect did not exist. Deliberately NARROW: a verb said to the record itself, in the imperative
+# //// or the infinitive (complète, ajoute, crée, mets à jour), then the prospect or lead, or its « fiche ». Its number,
+# //// « du CRM » and a participle (« j'ai créé un prospect : envoie-lui… ») decide nothing: a prospect who is only the
+# //// addressee of something else keeps its rule (an e-mail, a visit, a chantier). Like recruitment, it skips the job
+# //// rules and the table still decides, so a chart goes to analyse (see _keyword_pole).
+_LEAD_RECORD_RE = re.compile(
+    r"\b(?:compl[eè]te[sz]?|compl[eé]ter|ajoute[sz]?|ajouter|cr[eé]e[sz]?|cr[eé]er|(?:mets|mettez|mettre)\s+[àa]\s+jour)"
+    r"\s+(?:la\s+fiche\s+(?:du\s+|de\s+ce\s+|d['’]un\s+)?|(?:le|ce|cet|un|du|notre)\s+)(?:prospects?|leads?)\b",
+    re.IGNORECASE,
+)
+# //// END Neoffice ////
+
 _FAST_PATH_RULES = (
     (re.compile(r"(graphique|en graphique|visuel|visualise|dataviz|tableau de bord|histogramme|camembert|courbe|diagramme)", re.IGNORECASE), "analyse"),
     # //// Neoffice — the same in English, German and Italian, see _FOREIGN_CHART_RE (08.10).
@@ -2177,6 +2192,9 @@ _FAST_PATH_RULES = (
         ),
         "ventes",
     ),
+    # //// END Neoffice ////
+    # //// Neoffice — the record of a prospect, before the dunning rule: see _LEAD_RECORD_RE (#2674).
+    (_LEAD_RECORD_RE, "ventes"),
     # //// END Neoffice ////
     # //// Neoffice — relancer un PROSPECT is a sales follow-up, not a collection (17.09).
     # //// The dunning rule just below matches \brelanc\w* — deliberately broad, because a
@@ -2464,6 +2482,12 @@ def _keyword_pole(msg: str) -> Optional[str]:
     if _is_letter_request(msg):
         logger.info("nora_chat_router: a letter to post → support (nora_letter_create)")
         return "support"
+    # //// END Neoffice ////
+    # //// Neoffice — the record of a prospect before the three job rules too (#2674, see _LEAD_RECORD_RE): to them
+    # //// « complète la fiche du prospect … : il tient ses rendez-vous sur un tableur » is a visit. As for recruitment,
+    # //// the table still decides, so a chart goes to analyse.
+    if _LEAD_RECORD_RE.search(msg):
+        return next(pole for rx, pole in _FAST_PATH_RULES if rx.search(msg))
     # //// END Neoffice ////
     # //// Neoffice — `and not _ORDER_AT_A_SUPPLIER_RE` (#2307): an order to place at a supplier is no visit
     if _APPOINTMENT_RE.search(msg) and not _ORDER_AT_A_SUPPLIER_RE.search(msg):
