@@ -2045,10 +2045,11 @@ class WebhookAdapter(BasePlatformAdapter):
         payload via _render_delivery_extra).
 
         Vocal-in -> vocal-out (NORA #30): when ``is_audio`` is truthy (the user sent a
-        voice note), synthesize the reply with edge-tts and push it as a WhatsApp voice
-        note (PTT) via ``/api/sendAudio`` (the router transcodes MP3 -> OGG/Opus). Any
-        synthesis/delivery failure falls back to plain text so the user always gets a
-        reply."""
+        voice note), synthesize the reply and push it as a WhatsApp voice note (PTT) via
+        ``/api/sendAudio`` (the router transcodes MP3 -> OGG/Opus). Any synthesis/delivery
+        failure falls back to plain text so the user always gets a reply."""
+        # //// Neoffice — 18.11.2026: the voice note is said by the instance's TTS (tts.noraai.ch), no longer by edge-tts
+        # //// (_neoffice_instance_tts_mp3); whatever fails in the synthesis, the reply still goes as text (below).
         extra = delivery.get("deliver_extra", {}) or {}
         url = extra.get("router_url", "")
         token = extra.get("router_api_key", "")
@@ -2074,7 +2075,13 @@ class WebhookAdapter(BasePlatformAdapter):
 
         # Vocal-out: try a synthesized voice note first when the inbound was audio.
         if is_audio:
-            audio_b64 = await self._synthesize_voice_b64(content)
+            # //// Neoffice — a synthesis that raises (a setting that does not parse, say) must not cost the text reply (18.11.2026)
+            try:
+                audio_b64 = await self._synthesize_voice_b64(content)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("[webhook] voice synthesis error: %s — text fallback", type(e).__name__)
+                audio_b64 = None
+            # //// END Neoffice ////
             if audio_b64:
                 try:
                     import aiohttp
@@ -2159,19 +2166,78 @@ class WebhookAdapter(BasePlatformAdapter):
             )
             # //// END Neoffice ////
 
+    # //// Neoffice — the voice of a WhatsApp voice reply is the instance's own (18.11.2026). It was edge-tts, a Microsoft
+    # //// service that read the person's reply in another voice than every other way Nora speaks (the Nora app's
+    # //// read-aloud and briefings, this gateway's own TTS, the voice consoles): all of them speak with tts.noraai.ch,
+    # //// our TTS on Olares. The same call as the Nora app's (nora.api.tts.speak): POST <url>/synthesize with
+    # //// {text, voice, format: mp3}. Its address and key are this gateway's own `tts.openai` settings, which provision.sh
+    # //// writes from the Nora app's (nora.api.tts._get_tts_config); without them, NORA_TTS_URL (default
+    # //// https://tts.noraai.ch) and OLARES_API_KEY, the key the Nora app sends too (site_config nora_api_key). Voice:
+    # //// WHATSAPP_TTS_VOICE, default fr_female, the Nora app's (Tiphaine). The call waits WHATSAPP_TTS_TIMEOUT seconds
+    # //// (150: the engine says about 2.2 times real time, a 1200-character reply takes about a minute).
+    async def _neoffice_instance_tts_mp3(self, spoken: str) -> Optional[bytes]:
+        """The MP3 of *spoken* said by the instance's TTS, or None (the caller then replies in text)."""
+
+        def _tts_settings() -> dict:
+            from hermes_cli.config import load_config
+
+            return (load_config().get("tts") or {}).get("openai") or {}
+
+        tts_cfg = {}
+        try:
+            tts_cfg = await asyncio.to_thread(_tts_settings)  # a file read: off the event loop
+        except Exception as e:  # noqa: BLE001
+            logger.debug("[webhook] tts settings unreadable: %s", e)
+        if not isinstance(tts_cfg, dict):
+            tts_cfg = {}
+        base = str(tts_cfg.get("base_url") or os.environ.get("NORA_TTS_URL") or "https://tts.noraai.ch").strip().rstrip("/")
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]  # the settings name the OpenAI-shaped root; /synthesize sits beside it
+        key = str(tts_cfg.get("api_key") or os.environ.get("OLARES_API_KEY") or "").strip()
+        voice = os.environ.get("WHATSAPP_TTS_VOICE") or "fr_female"
+        try:
+            timeout = float(os.environ.get("WHATSAPP_TTS_TIMEOUT") or 150)
+        except ValueError:
+            timeout = 150.0
+        if not key:
+            logger.warning("[webhook] no TTS key (tts.openai.api_key, OLARES_API_KEY) — text fallback")
+            return None
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    base + "/synthesize",
+                    json={"text": spoken, "voice": voice, "format": "mp3"},
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as resp:
+                    status = resp.status
+                    kind = resp.headers.get("Content-Type", "")
+                    data = await resp.read()
+        except Exception as e:  # noqa: BLE001
+            reason = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            logger.warning("[webhook] TTS %s failed: %s — text fallback", base, reason)
+            return None
+        # The router is told audio/mpeg: a WAV (the TTS answers one when its MP3 encoder fails) goes as text instead.
+        if status != 200 or len(data) < 100 or "mpeg" not in kind:
+            logger.warning("[webhook] TTS %s answered %s (%s, %d bytes) — text fallback", base, status, kind or "no type", len(data))
+            return None
+        logger.info("[webhook] TTS %s: %d chars -> %d bytes of MP3 (voice %s)", base, len(spoken), len(data), voice)
+        return data
+    # //// END Neoffice ////
+
     async def _synthesize_voice_b64(self, text: str):
-        """Synthesize *text* to base64 MP3 with edge-tts (NORA #30, vocal-out).
+        """Synthesize *text* to base64 MP3 with the instance's own voice (NORA #30, vocal-out).
 
         Strips markdown/URLs/code (they read terribly aloud) and caps length on a
         sentence boundary so a long reply doesn't become a multi-minute note. Returns
-        None on any failure (caller falls back to text). Voice is configurable via
-        WHATSAPP_TTS_VOICE (default fr-FR-VivienneMultilingualNeural — female,
-        multilingual: pronounces German/English terms cleanly)."""
-        import asyncio
+        None on any failure (caller falls back to text)."""
+        # //// Neoffice — 18.11.2026: said by the instance's TTS, tts.noraai.ch, no longer by edge-tts (_neoffice_instance_tts_mp3)
         import base64
         import os
         import re
-        import tempfile
+        # //// Neoffice — no temporary file any more: edge-tts wrote one (18.11.2026)
 
         raw = text or ""
         for rx, repl in (
@@ -2208,31 +2274,10 @@ class WebhookAdapter(BasePlatformAdapter):
             cut = spoken[:max_chars]
             end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
             spoken = (cut[: end + 1] if end >= max_chars // 2 else cut).strip()
-        voice = os.environ.get(
-            "WHATSAPP_TTS_VOICE", "fr-FR-VivienneMultilingualNeural"
-        )
-        timeout = float(os.environ.get("WHATSAPP_TTS_TIMEOUT", "15"))
-        try:
-            import edge_tts
-        except Exception as e:  # noqa: BLE001
-            logger.warning("[webhook] edge-tts unavailable: %s — text fallback", e)
-            return None
-        fd, path = tempfile.mkstemp(suffix=".mp3")
-        os.close(fd)
-        try:
-            communicate = edge_tts.Communicate(spoken, voice=voice)
-            await asyncio.wait_for(communicate.save(path), timeout=timeout)
-            with open(path, "rb") as fh:
-                data = fh.read()
-            return base64.b64encode(data).decode("ascii") if data else None
-        except Exception as e:  # noqa: BLE001
-            logger.warning("[webhook] edge-tts synth failed: %s — text fallback", e)
-            return None
-        finally:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+        # //// Neoffice — the instance's voice, tts.noraai.ch, instead of edge-tts (18.11.2026, _neoffice_instance_tts_mp3)
+        data = await self._neoffice_instance_tts_mp3(spoken)
+        return base64.b64encode(data).decode("ascii") if data else None
+        # //// END Neoffice ////
 
     # //// Neoffice — whether work still goes on for this conversation when a reply is delivered (24.10). The agent's
     # //// answer may only hand over to a pole: the pole's card and its result come minutes later, and an editor's pane
