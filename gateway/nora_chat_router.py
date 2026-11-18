@@ -3315,8 +3315,26 @@ _MAILBOX_ADDRESS_RE = re.compile(r"^[^@\s\[\]{}<>\"]{1,64}@[^@\s\[\]{}<>\"]{1,19
 # //// question about it stays the mailbox's, whatever the sender is named. On the real turn of 18.11.2026 on osiris, a
 # //// sender of the test box named « Ventes » made the classifier answer the sales pole (maintenance#2743). Routing a
 # //// chat request by its words is the declared exception of the rule « Nora decides, the code checks » (N1).
+# //// Neoffice — the fifth independent review of #2743 found its gaps: « le mail que Ventes m'a envoyé », « envoyé par
+# //// … », « reçus de … », « la réponse de … », "Sales' email", "the email Sales sent me", « E-Mail von … », « la mail
+# //// di … » were missed; and a question about Neoffice itself was caught (« le modèle de mail de relance », « les
+# //// messages d'erreur de … », « l'adresse mail de … »), which the classifier sends to the pole that knows the screens
+# //// (_MAILBOX_NOT_SOMEONES_MAIL_RE).
+_MAILBOX_MAIL_WORD = r"(?:e-?mails?|mails?|courriels?|messages?|nachrichten|messaggi|messaggio)"
 _MAILBOX_SOMEONES_MAIL_RE = re.compile(
-    r"\b(?:e-?mails?|mails?|courriels?|messages?)\s+(?:de\b|d['’]|du\b|des\b|from\b)",
+    rf"\b{_MAILBOX_MAIL_WORD}\s+(?:de\b|d['’]|du\b|des\b|from\b|von\b|vom\b|di\b|da\b|del\b|della\b|dal\b|que\b|qu['’])"
+    rf"|\b{_MAILBOX_MAIL_WORD}\s+(?:envoy|re[çc]u|sent\b|received\b)"
+    r"|\b(?:envoy[ée]e?s?|re[çc]u(?:e|s|es)?|sent|received)\s+(?:par|by|from)\b"
+    r"|\br[ée]ponses?\s+(?:de\b|d['’])"
+    rf"|\w['’]s?\s+{_MAILBOX_MAIL_WORD}\b"
+    r"|\bsent\s+(?:me|us)\b",
+    re.IGNORECASE,
+)
+_MAILBOX_NOT_SOMEONES_MAIL_RE = re.compile(
+    rf"\b(?:mod[èe]les?|templates?)\s+(?:de\s+|d['’]|of\s+)?{_MAILBOX_MAIL_WORD}"
+    rf"|\b{_MAILBOX_MAIL_WORD}\s+templates?\b"
+    r"|\bmessages?\s+d['’]erreur|\berror\s+messages?\b"
+    r"|\badresses?\s+(?:e-?mail|mail|courriel)|\be-?mail\s+address(?:es)?\b",
     re.IGNORECASE,
 )
 
@@ -3358,9 +3376,13 @@ _MAILBOX_HINT = (
     "is not in it); so are « les courriels sans réponse » when they "
     "do not say they SENT them. For a "
     "mailbox it lists in `unsorted` (not sorted by you), or when it fails, the messages they RECEIVED and have not "
-    # //// Neoffice — the fallback search gives the latest 20 at most (the third independent review of #2743)
-    "answered: nora_mail_search(days=14), keeping those whose `answered` is false and leaving out the automatic ones "
-    "(notifications, newsletters); it gives the latest 20 at most: when it gives 20, say there may be older ones. A "
+    # //// Neoffice — the fallback search gives the latest 20 at most (the third independent review of #2743); read from
+    # //// its rows, keeping all but the automatic ones (the fifth: on a real turn she read 20 mails one by one, left out
+    # //// a quote request as « information » and listed mails she said she had left out)
+    "answered: ONE nora_mail_search(days=14); from its rows alone (sender, subject), never reading them one by one, "
+    "keep those whose `answered` is false and leave out only the automatic ones (notifications, newsletters, automatic "
+    "notices): a question, a quote request, an order or a greeting stays; list what you kept, and say only that the "
+    "automatic ones were left out; it gives the latest 20 at most: when it gave 20 rows, say there may be older ones. A "
     "mailbox in `partial` is one your "
     "sorting has not read whole: say its list may not be complete; in `more`, one that holds older ones than were "
     "read: say there are more; in `skipped`, one that could not be read now: say so. Never "
@@ -5352,8 +5374,12 @@ def route_chat_message(
         # //// Neoffice — where to find something in Neoffice (_WHERE_TO_FIND_RE) is asked of the classifier as anywhere,
         # //// DIRECT excluded: a pole other than support takes it (« où trouve-t-on le rapport des créances ? »); the
         # //// mail's own pole leaves it the mailbox's (« où voir mes mails non lus ? »), and someone's mail is never
-        # //// asked (_MAILBOX_SOMEONES_MAIL_RE: « où je retrouve le mail de Ventes ? »).
-        elif _WHERE_TO_FIND_RE.search(message or "") and not _MAILBOX_SOMEONES_MAIL_RE.search(message or ""):
+        # //// asked (_MAILBOX_SOMEONES_MAIL_RE: « où je retrouve le mail de Ventes ? »), unless the words name a screen
+        # //// of Neoffice (_MAILBOX_NOT_SOMEONES_MAIL_RE: « le modèle de mail de relance »).
+        elif _WHERE_TO_FIND_RE.search(message or "") and (
+            not _MAILBOX_SOMEONES_MAIL_RE.search(message or "")
+            or _MAILBOX_NOT_SOMEONES_MAIL_RE.search(message or "")
+        ):
             _again = classify(
                 message,
                 call_llm_fn=call_llm_fn,

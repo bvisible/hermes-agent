@@ -212,9 +212,18 @@ def test_what_waits_for_the_persons_answer_is_what_they_received(monkeypatch):
     # still reading, said so; never what the person sent.
     assert "nora_mail_waiting" in hint and "« Prioritaire »" in hint and "`why`" in hint
     assert "`unsorted`" in hint and "or when it fails" in hint and "RECEIVED" in hint
+    # The fifth review, from a real turn: she read the 20 mails one by one, left out a quote request as « information »,
+    # and listed mails she said she had left out.
     assert (
-        "leaving out the automatic ones" in hint
-        and "it gives the latest 20 at most" in hint
+        "ONE nora_mail_search(days=14)" in hint
+        and "never reading them one by one" in hint
+    )
+    assert "leave out only the automatic ones" in hint
+    assert "a question, a quote request, an order or a greeting stays" in hint
+    assert "say only that the automatic ones were left out" in hint
+    assert (
+        "it gives the latest 20 at most: when it gave 20 rows, say there may be older ones"
+        in hint
     )
     assert "`answered` is false" in hint and "nora_mail_search(days=14)" in hint
     assert "`partial`" in hint and "say its list may not be complete" in hint
@@ -497,6 +506,16 @@ def test_where_to_find_the_mail_stays_the_mailboxs(monkeypatch, message):
         "Où je retrouve le courriel de la comptabilité ?",
         "Où je vois les messages d'Alice ?",
         "Where can I find the email from Sales?",
+        # the fifth review's: how someone's mail is said too
+        "Où je retrouve le mail que Ventes m'a envoyé ?",
+        "Où je retrouve le mail envoyé par la comptabilité ?",
+        "Où je retrouve les mails reçus de Ventes ?",
+        "Où je retrouve la réponse de Ventes ?",
+        "Where can I find Sales' email?",
+        "Where can I find the email Sales sent me?",
+        "Where do I find the mail sent by Paul?",
+        "Wo finde ich die E-Mail von Verkauf?",
+        "Dove trovo la mail di Vendite?",
     ],
 )
 def test_where_to_find_someones_mail_stays_the_mailboxs_whatever_their_name(
@@ -508,6 +527,32 @@ def test_where_to_find_someones_mail_stays_the_mailboxs_whatever_their_name(
     _no_classifier(monkeypatch)
     decision = _route(monkeypatch, message)
     assert decision["category"] == "DIRECT" and decision["agent_hint"] == _HINT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Où je trouve le modèle de mail de relance ?",
+        "Où je trouve les modèles d'e-mail ?",
+        "Où je vois les messages d'erreur de la synchronisation bancaire ?",
+        "Où se trouve l'adresse mail de la comptabilité ?",
+        "Where can I find the email templates?",
+    ],
+)
+def test_where_to_find_a_screen_named_with_mail_words_is_asked_as_anywhere(
+    monkeypatch, message
+):
+    # The fifth review: these name a screen of Neoffice, not someone's mail. The classifier is asked, and the pole that
+    # knows the screens takes them (the orchestrator holds no map of Neoffice).
+    asked = []
+    monkeypatch.setattr(
+        R,
+        "classify",
+        lambda m, **kw: asked.append((m, kw.get("exclude_direct"))) or "compta",
+    )
+    decision = _route(monkeypatch, message)
+    assert asked == [(message, True)]
+    assert decision["category"] == "compta"
 
 
 def test_where_to_find_a_report_from_the_mail_tab_goes_to_its_pole(monkeypatch):
@@ -559,11 +604,14 @@ def test_a_yes_nora_declines_is_the_mailboxs_turn(monkeypatch):
     assert decision["category"] == "DIRECT" and decision["agent_hint"] == _HINT
 
 
-def test_a_yes_without_the_mailbox_is_routed_as_before(monkeypatch):
-    # The key off (no surface_key): no pole on the thread, so no confirmation is asked, as before the lot.
+@pytest.mark.parametrize("page", [_BEFORE, _UNVETTED], ids=["key-off", "older-nora"])
+def test_a_yes_without_the_mailbox_is_routed_as_before(monkeypatch, page):
+    # The key off, or an older nora that lets the surface through without its word (the fifth review: `_BEFORE` alone
+    # would pass a router that trusted `surface` without `surface_key`): no pole on the thread, so no confirmation is
+    # asked, as before the lot.
     http = _Http({"hermes_callback.deliver": {"message": "ok"}})
     monkeypatch.setattr(R, "classify", lambda m, **kw: "DIRECT")
-    _route(monkeypatch, "Oui, envoyez", page=_BEFORE, http=http)
+    _route(monkeypatch, "Oui, envoyez", page=page, http=http)
     assert not any(
         url.endswith("confirmations.route_confirmation") for url, _body in http.calls
     )
