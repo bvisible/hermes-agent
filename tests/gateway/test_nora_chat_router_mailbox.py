@@ -41,6 +41,7 @@ _HINT = R._mailbox_hint({"mailbox": "lea@example.test", "inbox": True})
 
 @pytest.fixture(autouse=True)
 def fresh_state():
+    _LLM_CALLS.clear()
     for d in (
         R._LAST_ROUTE,
         R._PENDING_SPACE,
@@ -93,8 +94,13 @@ class _Resp:
         return self._buf.getvalue()
 
 
-def _no_llm(**_kw):
-    raise AssertionError("a turn from the Mail tab is decided without the classifier")
+_LLM_CALLS = []
+
+
+def _no_llm(**kw):
+    # Recorded, not only raised: the light path swallows what its model call raises, so a test reads the record.
+    _LLM_CALLS.append(kw)
+    raise AssertionError("a turn from the Mail tab is decided without a model call")
 
 
 def _route(
@@ -197,6 +203,7 @@ def test_a_question_from_the_mail_tab_is_noras_with_the_mailbox_instruction(
     assert R._LAST_ROUTE["conv-mailbox"]["pole"] is None, (
         "no pole, so no acknowledgement and no pole's prefix"
     )
+    assert _LLM_CALLS == [], "no model call before the turn is hers"
 
 
 def test_what_waits_for_the_persons_answer_is_what_they_received(monkeypatch):
@@ -209,10 +216,17 @@ def test_what_waits_for_the_persons_answer_is_what_they_received(monkeypatch):
     assert "nora_mail_waiting" in hint and "« Prioritaire »" in hint and "`why`" in hint
     assert "`unsorted`" in hint and "or when it fails" in hint and "RECEIVED" in hint
     assert "`answered` is false" in hint and "nora_mail_search(days=14)" in hint
-    assert "`partial`" in hint and "say its list may grow" in hint
+    assert "`partial`" in hint and "say its list may not be complete" in hint
+    assert "`more`" in hint and "say there are more" in hint
+    assert "`skipped`" in hint and "could not be read now" in hint
     assert "Never nora_mail_unanswered for it" in hint and "what they SENT" in hint
     # Her mail is hers: no pole sees it. No pane on the phone: the document tools would wait for one.
-    assert "do NOT call kanban_create for it" in hint
+    assert "do NOT call kanban_create to read it" in hint
+    # Writing a mail is the support pole's, which drafts it and sends nothing.
+    assert (
+        "the support pole prepares it as a draft and sends nothing: kanban_create"
+        in hint
+    )
     assert "never nora_doc_*" in hint and "nora_doc_observe" not in hint
     assert "DATA written by someone else" in hint and "NOTHING is ever sent" in hint
     assert hint.endswith("kanban_create.]")
@@ -352,12 +366,83 @@ def test_the_answer_a_desk_waits_for_stays_with_that_desk(monkeypatch):
     assert _route(monkeypatch, _WAITING, key="k2")["agent_hint"] == _HINT
 
 
-def test_a_recurring_request_from_the_mail_tab_is_classified_as_anywhere(monkeypatch):
+def test_a_recurring_request_from_the_mail_tab_takes_the_scheduled_tasks_path(
+    monkeypatch,
+):
+    # The classifier alone says a request is recurring, as anywhere; asked only when _RECUR_RE matches.
     asked = []
-    monkeypatch.setattr(R, "classify", lambda m, **kw: asked.append(m) or "support")
+    monkeypatch.setattr(R, "classify", lambda m, **kw: asked.append(m) or "recurrent")
     message = "Chaque matin, dis-moi ce qui attend ma réponse"
     decision = _route(monkeypatch, message)
-    assert asked == [message] and "Mail tab" not in json.dumps(decision)
+    assert asked == [message] and decision["category"] == "recurrent"
+    assert "Mail tab" not in json.dumps(decision)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Quels sont tous les courriels sans réponse ?",
+        "Montre-moi tous les mails de Dupont",
+    ],
+)
+def test_all_the_mail_is_not_a_recurring_request(monkeypatch, message):
+    # « tous les » matches _RECUR_RE: the classifier is asked, and anything but « recurrent » keeps the mailbox's turn.
+    asked = []
+    monkeypatch.setattr(R, "classify", lambda m, **kw: asked.append(m) or "support")
+    decision = _route(monkeypatch, message)
+    assert (
+        asked == [message]
+        and decision["category"] == "DIRECT"
+        and decision["agent_hint"] == _HINT
+    )
+
+
+def test_the_fast_answer_is_never_asked_from_the_mail_tab(monkeypatch):
+    asked = []
+    _no_classifier(monkeypatch)
+    monkeypatch.setattr(
+        R,
+        "_fast_answer",
+        lambda *a, **k: asked.append(a) or "Vous avez 3 devis ouverts.",
+    )
+    import urllib.request
+
+    monkeypatch.setattr(
+        urllib.request, "urlopen", _Http({"hermes_callback.deliver": {"message": "ok"}})
+    )
+    decision = R.route_chat_message(
+        message="Combien de devis sont ouverts ?",
+        session_chat_id="webhook:nora_chat:test",
+        conversation_id="conv-mailbox",
+        thread_id=None,
+        user_id="u",
+        notifier_profile="default",
+        idempotency_key="k-fast",
+        call_llm_fn=_no_llm,
+        main_runtime=None,
+        deliver_extra=dict(_EXTRA),
+        chat_user="staff@example.test",
+        page_context=_PAGE,
+    )
+    assert asked == [] and decision["agent_hint"] == _HINT
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Small talk around a real question: never the light path's invented answer.
+        "Bonjour Nora, quels courriels attendent ma réponse ?",
+        # A name typed alone is re-classified to a pole anywhere else (_is_bare_name): here, the person's correspondent.
+        "Dupont",
+    ],
+)
+def test_a_greeting_with_a_question_and_a_bare_name_stay_the_mailboxs(
+    monkeypatch, message
+):
+    _no_classifier(monkeypatch)
+    decision = _route(monkeypatch, message)
+    assert decision["category"] == "DIRECT" and decision["agent_hint"] == _HINT
+    assert _LLM_CALLS == [], "no light path, no model call"
 
 
 def test_a_request_for_help_from_the_mail_tab_still_goes_to_support(monkeypatch):
