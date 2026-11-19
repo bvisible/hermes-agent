@@ -398,6 +398,48 @@ def _neoffice_block_truncated_turn(result: Any, *, task_id: Optional[str], check
 # //// END Neoffice ////
 
 
+# //// Neoffice — the question a worker's card ends on when the loop guardrail stopped the worker and it gave no
+# //// answer when asked twice (agent/neoffice_kanban_breaker.neoffice_guardrail_summary), neoffice-maintenance#3154.
+# //// Upstream's stop text (run_agent._toolguard_controlled_halt_response) is written for whoever runs the agent: it
+# //// names the tool, a result "above" the reader never sees, and `continue`. It became the card's handoff: the board,
+# //// the exam and the poles' film read it in English, while the person read the delivery filter's generic
+# //// guardrail_halt sentence (neoffice_branding.strip_internal_mechanics). The card now ends on the catalog's
+# //// guardrail_card question, in the language the router gave the task. Only the text changes: with the keys of #3016
+# //// off the auto-complete net closes the card done as before; with them on, the block carries the same question. A
+# //// chat turn and a fork turn keep upstream's text. Remove when upstream ends a stopped kanban worker on its own text
+# //// for the person.
+def neoffice_guardrail_card_question(agent: Any) -> str:
+    """The question a stopped worker's card ends on; "" outside a kanban worker's own turn."""
+    task_id = kanban_task_id()
+    if task_id is None or getattr(agent, "_turn_origin", None):
+        return ""
+    from neoffice_branding import reply
+
+    return reply("guardrail_card", neoffice_task_language(task_id))
+
+
+def neoffice_task_language(task_id: str) -> str:
+    """The language the router gave the task: the « [Reply to the user in <Language> » line of its body, read with the
+    notifier's own pattern (the one that names the pole above the answer). French, the product default and the
+    notifier's fallback, when the body names none or the board cannot be read."""
+    try:
+        from gateway.kanban_watchers_notifier import _NEOFFICE_LANGUAGE_CODES, _NEOFFICE_REPLY_LANGUAGE_RE
+        from hermes_cli import kanban_db_connect
+
+        conn = kanban_db_connect.connect(board=os.environ.get("HERMES_KANBAN_BOARD") or None)
+        try:
+            row = conn.execute("SELECT body FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        finally:
+            conn.close()
+    except Exception:  # the question is still asked, in French
+        logger.warning("kanban worker %s: the task's language could not be read, French is used", task_id,
+                       exc_info=True)
+        return "fr"
+    match = _NEOFFICE_REPLY_LANGUAGE_RE.search((row[0] if row else "") or "")
+    return _NEOFFICE_LANGUAGE_CODES.get(match.group(1), "fr") if match else "fr"
+# //// END Neoffice ////
+
+
 def recover_failed_kanban_turns(
     turn_fn: Callable[[str], Any],
     get_result: Callable[[], Any],

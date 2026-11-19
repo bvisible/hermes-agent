@@ -196,9 +196,14 @@ def run_tool_round(
         final_response = _neoffice_answer or final_response
         # //// Neoffice — no answer: with the key on, the card is blocked, never left for the auto-complete net to
         # //// close done (#3016, see neoffice_block_unanswered). Its reason, which the person reads, is what the
-        # //// model wrote around the lookups it wrote instead of answering, else the stop text.
+        # //// model wrote around the lookups it wrote instead of answering, else the card's question.
+        # //// Neoffice — the card's question replaces upstream's stop text on a worker's own turn (#3154, see
+        # //// neoffice_guardrail_card_question); a chat turn keeps the stop text, which the delivery filter replaces.
         if not _neoffice_answer:
-            final_response = neoffice_unanswered_text(agent) or final_response
+            from agent.kanban_turn_recovery import neoffice_guardrail_card_question
+
+            final_response = (neoffice_unanswered_text(agent) or neoffice_guardrail_card_question(agent)
+                              or final_response)
             neoffice_block_unanswered(agent, final_response)
         # //// END Neoffice ////
         agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")

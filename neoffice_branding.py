@@ -302,6 +302,21 @@ REPLIES = {
         "en": "I could not answer you, the service is not responding right now; could you ask your question again "
               "in a few minutes?",
     },
+    # //// Neoffice — the question a card ends on when the loop guardrail stopped its worker and the worker, asked
+    # //// twice for its answer, gave none (neoffice-maintenance#3154, agent/kanban_turn_recovery.py). Honest about
+    # //// whose the loop was: the worker repeated itself, the person's request is not called unclear. One question,
+    # //// a semicolon, no number, as truncated_card. Remove with its use there.
+    "guardrail_card": {
+        "fr": "Je n'ai pas pu aller au bout de votre demande, car je répétais la même opération sans avancer ; "
+              "pouvez-vous me la reposer, et prévenir votre administrateur si cela se reproduit ?",
+        "de": "Ich konnte Ihre Anfrage nicht zu Ende führen, da ich immer wieder dieselbe Operation ausführte, ohne "
+              "voranzukommen; könnten Sie Ihre Frage noch einmal stellen und Ihren Administrator informieren, falls "
+              "dies erneut vorkommt?",
+        "it": "Non ho potuto portare a termine la sua richiesta, perché ripetevo la stessa operazione senza fare "
+              "progressi; può ripropormela e, se il problema si ripete, avvisare il suo amministratore?",
+        "en": "I could not complete your request, because I kept repeating the same operation without making "
+              "progress; could you ask me again, and notify your administrator if this happens again?",
+    },
 }
 
 
