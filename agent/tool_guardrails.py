@@ -88,6 +88,13 @@ _DEFAULT_MAX_SUBAGENTS_PER_TURN = 50
 _ATTENDED_PLATFORMS = frozenset({"cli", "tui", "desktop", "acp", "subagent", "api_server"})
 
 
+# //// Neoffice — see ToolCallGuardrailConfig.neoffice_doctrine_tools.
+def is_neoffice_doctrine_tool(tool_name: str, names: frozenset[str]) -> bool:
+    """True when the profile names this tool, or the last segment of this MCP tool, as a doctrine read."""
+    return any(tool_name == name or tool_name.endswith("__" + name) for name in names)
+# //// END Neoffice ////
+
+
 def is_stall_guard_repeatable(tool_name: str) -> bool:
     """Whether a tool is exempt from the identical-call loop notice."""
     return tool_name in STALL_GUARD_REPEATABLE_TOOLS or tool_name.endswith(_STALL_GUARD_REPEATABLE_SUFFIXES)
@@ -133,6 +140,16 @@ class ToolCallGuardrailConfig:
     idempotent_tools: frozenset[str] = field(default_factory=lambda: IDEMPOTENT_TOOL_NAMES)
     mutating_tools: frozenset[str] = field(default_factory=lambda: MUTATING_TOOL_NAMES)
     loop_caps: LoopCapConfig = field(default_factory=LoopCapConfig)
+    # //// Neoffice — read-only tools served by MCP, named in the profile (neoffice-maintenance#3016). Upstream's
+    # //// read-only list is frozen and holds no MCP tool: a NORA pole worker that ran the same doctrine search
+    # //// (wiki_search, wiki_read, the knowledge page) again and again, interleaved with other calls, was never seen
+    # //// by the no-progress detector, which is the one that counts non-consecutive repeats (the identical-call streak
+    # //// needs them consecutive). On the accounting and HR exams 6 to 18 questions per pass repeated one search more
+    # //// than twice without chaining it. A name matches a tool called that, or an MCP tool whose last segment it is
+    # //// (``mcp__<server>__wiki_search``). Empty, the default: nothing changes. Drop this field if upstream makes
+    # //// idempotent_tools configurable.
+    neoffice_doctrine_tools: frozenset[str] = frozenset()
+    # //// END Neoffice ////
 
     @classmethod
     def from_mapping(
@@ -152,7 +169,13 @@ class ToolCallGuardrailConfig:
             return _int_at_least(nested, getattr(d, name), 1)
 
         thresholds = {name: threshold(name, *src) for name, src in _THRESHOLD_SOURCES.items()}
-        return cls(loop_caps=LoopCapConfig.from_mapping(data.get("loop_caps")), **flags, **thresholds)
+        # //// Neoffice — see neoffice_doctrine_tools ////
+        doctrine = data.get("neoffice_doctrine_tools")
+        doctrine_tools = frozenset(
+            str(name).strip() for name in doctrine if str(name).strip()
+        ) if isinstance(doctrine, (list, tuple, set, frozenset)) else frozenset()
+        return cls(loop_caps=LoopCapConfig.from_mapping(data.get("loop_caps")), neoffice_doctrine_tools=doctrine_tools,
+                   **flags, **thresholds)
 
 
 @dataclass(frozen=True)
@@ -454,7 +477,10 @@ class ToolCallGuardrailController:
         return ToolGuardrailDecision(tool_name=tool_name, count=repeat_count, signature=signature)
 
     def _is_idempotent(self, tool_name: str) -> bool:
-        return tool_name not in self.config.mutating_tools and tool_name in self.config.idempotent_tools
+        return tool_name not in self.config.mutating_tools and (
+            tool_name in self.config.idempotent_tools
+            or is_neoffice_doctrine_tool(tool_name, self.config.neoffice_doctrine_tools)  # //// Neoffice — #3016 ////
+        )
 
     def observe_call(
         self, tool_name: str, args: Mapping[str, Any] | None, result: str | None,
