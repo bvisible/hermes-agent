@@ -725,26 +725,22 @@ def _kanban_task_user() -> str:
         for db_path in candidates:
             if not os.path.exists(db_path):
                 continue
+            # //// Neoffice — the task's person is read by the one reader the worker's context uses too (#3025,
+            # //// hermes_cli/kanban_task_person.py): the rights a worker acts with and the recent work it is shown
+            # //// name the same person. It keeps the rule written here on 22.10 (the LAST `:user:` of a thread's
+            # //// chat id, else an e-mail user_id).
+            from hermes_cli.kanban_task_person import latest_sub, person_of_sub
+
             conn = sqlite3.connect("file:%s?mode=ro" % db_path, uri=True, timeout=2)
             try:
-                row = conn.execute(
-                    "SELECT chat_id, user_id FROM kanban_notify_subs "
-                    "WHERE task_id=? AND platform='webhook' ORDER BY rowid DESC LIMIT 1",
-                    (task_id,),
-                ).fetchone()
+                sub = latest_sub(conn, task_id)  # //// Neoffice — the shared reader (#3025) ////
             finally:
                 conn.close()
-            if not row:
+            if not sub:  # //// Neoffice — no webhook sub in this file: the next candidate ////
                 continue
-            marker = ":user:"
-            chat_id = (row[0] or "")
-            if chat_id.startswith("webhook:nora_chat:") and marker in chat_id:
-                # //// Neoffice — the LAST `:user:` (22.10): a thread's chat id puts the client's thread id
-                # //// before the person (webhook.py _neoffice_thread_chat_id), and a thread named « user »
-                # //// made the first cut name `user:<person>`.
-                found = chat_id.rsplit(marker, 1)[1].strip()
-            elif "@" in (row[1] or ""):
-                found = (row[1] or "").strip()
+            # //// Neoffice — the person by the shared rule; the chat id still gives the thread just below ////
+            chat_id, user_id = sub
+            found = person_of_sub(chat_id, user_id)
             # //// Neoffice — the task's conversation thread too, read from the same chat id (24.10): see
             # //// _neoffice_thread_of_chat_id.
             _TASK_THREAD_CACHE[task_id] = _neoffice_thread_of_chat_id(chat_id)

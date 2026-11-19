@@ -9,6 +9,7 @@ Split out of ``hermes_cli.kanban_db``; origin-resident helpers are reached late-
 from __future__ import annotations
 
 import json
+import logging  # //// Neoffice — see _ctx_role_history ////
 import os
 import re  # //// Neoffice — see _chat_conversation ////
 import sqlite3
@@ -16,6 +17,9 @@ import time
 from typing import TYPE_CHECKING, Any, Optional
 
 import hermes_cli.kanban_db as _kb
+from hermes_cli import kanban_task_person as _person  # //// Neoffice — see _ctx_role_history ////
+
+_log = logging.getLogger(__name__)  # //// Neoffice — a recent-work section left out says why ////
 
 if TYPE_CHECKING:
     from hermes_cli.kanban_db import Attachment, Comment, Task
@@ -214,6 +218,22 @@ _CHAT_REQUEST_KEY = re.compile(r"^([A-Za-z0-9_.-]{1,140}):\d{10,16}$")
 def _chat_conversation(key: Optional[str]) -> str:
     match = _CHAT_REQUEST_KEY.match(key or "")
     return match.group(1) if match else ""
+
+
+# //// Neoffice — the person a completed run of a recent-work candidate was done for (#3025, see _ctx_role_history).
+def _done_for(conn: sqlite3.Connection, row: Any) -> str:
+    """The task's sole person, or '' when a webhook sub of the task is newer than the run's end (or carries no
+    readable time): that sub is not the person the run served."""
+    ended = _kb._to_epoch(row["ended_at"])
+    if ended is None:
+        return ""
+    for (stamp,) in conn.execute(
+        "SELECT created_at FROM kanban_notify_subs WHERE task_id=? AND platform='webhook'", (row["id"],),
+    ):
+        created = _kb._to_epoch(stamp)
+        if created is None or created > ended:
+            return ""
+    return _person.sole_person(conn, row["id"])
 # //// END Neoffice ////
 
 
@@ -227,7 +247,7 @@ def _ctx_role_history(lines: list[str], conn: sqlite3.Connection, task: Task, no
     # worker took another conversation's job (the same words, another customer) for the one it was asked about, then
     # booked and invoiced it; it also read the summaries of work done for other people. A task the chat router made
     # carries « <conversation>:<ms> » as its idempotency key: its recent work is that conversation's tasks only. Any
-    # other task keeps upstream's role continuity.
+    # other task keeps upstream's query; both are then filtered to the same person (#3025, below).
     conversation = _chat_conversation(getattr(task, "idempotency_key", None))
     if conversation:
         prefix = conversation + ":"
@@ -248,6 +268,29 @@ def _ctx_role_history(lines: list[str], conn: sqlite3.Connection, task: Task, no
             "  AND r.outcome = 'completed' "
             "ORDER BY r.ended_at DESC LIMIT 5", (task.assignee, task.id),
         ).fetchall()
+    # //// Neoffice — of these rows, only the work done for the SAME person is shown (neoffice-maintenance#3025). A NORA
+    # pole serves every person of an instance, and the rows above are the pole's last completed tasks whoever they
+    # were for: the first line of another person's result reached the worker (a record that person may read and this
+    # one may not), and the worker repeated it to the person it served. #2376 bounded only the chat router's tasks, by
+    # conversation; a task the root profile delegates with kanban_create, a card's or a night job's has no such key.
+    # Here the rows are only filtered: nothing is shown that was not shown before. The person is the one the gateway
+    # stamps on the worker's calls, read by the same function (hermes_cli/kanban_task_person.py), and a task counts as
+    # a person's only while every one of its webhook subs names that person: subs are added after a task ran (a
+    # delegation that reuses an idempotency key, a link). A task that names nobody, or several people, gets no recent
+    # work: what it loses is upstream's role continuity across people (the style and figures of the pole's last
+    # tasks). A failure to read the subs loses the section, never the worker's start (gateway/session_kanban.py only
+    # catches ValueError, OSError and sqlite3.Error). Upstream PR #107105 (open) offers a per-task opt-out of the
+    # section; it does not scope it to a person.
+    # A candidate whose subs changed after its run ended is nobody's either: a task done for nobody, later linked from
+    # someone's task, or a task whose subs were purged and then re-subscribed through a reused key, would otherwise
+    # become the new subscriber's.
+    try:
+        person = _person.sole_person(conn, task.id)
+        role_rows = [row for row in role_rows if person and _done_for(conn, row) == person]
+    except Exception as exc:
+        _log.warning("kanban %s: recent work left out, the subs could not be read (%s)", task.id, type(exc).__name__)
+        role_rows = []
+    # //// END Neoffice ////
     if not role_rows:
         return
     lines.append(f"## Recent work by @{task.assignee}")
