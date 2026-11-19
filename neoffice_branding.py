@@ -289,6 +289,19 @@ REPLIES = {
         "en": "Your request made me read too many documents to answer it in one go; could you ask it again more "
               "briefly, one topic or one period at a time?",
     },
+    # //// Neoffice — the question a card asks when the model failed twice in a row on an error that is no quota
+    # //// (server error, timeout, overloaded: neoffice-maintenance#3118, hermes_cli/kanban_db_dispatch.py).
+    # //// One question, a semicolon, no number, as truncated_card. Remove with its use there.
+    "transient_card": {
+        "fr": "Je n'ai pas pu vous répondre, le service ne répond pas en ce moment ; pouvez-vous reposer votre "
+              "question dans quelques minutes ?",
+        "de": "Ich konnte Ihnen nicht antworten, der Dienst antwortet gerade nicht; können Sie Ihre Frage in "
+              "einigen Minuten erneut stellen?",
+        "it": "Non ho potuto risponderle, il servizio non risponde in questo momento; può riproporre la domanda "
+              "tra qualche minuto?",
+        "en": "I could not answer you, the service is not responding right now; could you ask your question again "
+              "in a few minutes?",
+    },
 }
 
 

@@ -295,3 +295,22 @@ def managed_run_exit_code(conn, task_id, worker_pid, claim_lock):
     result, bound = latest('worker_result'), latest('worker_bound')
     pids = {worker_pid, *([bound.get('pid')] if bound.get('claim_lock') == claim_lock else [])}
     return result.get('exit_code') if result.get('claim_lock') == claim_lock and result.get('pid') in pids else None
+
+
+# //// Neoffice — added function: the failure reason of a managed run's transient exit (neoffice-maintenance#3118).
+# //// Remove with its use in kanban_db_dispatch, once upstream tells a quota wall from an error the model may not repeat.
+def neoffice_managed_run_transient_reason(conn, task_id, worker_pid, claim_lock):
+    """The failure reason the authority recorded with the task's CURRENT run's transient exit, else None.
+
+    It speaks for that exit only: ``managed_run_exit_code`` must accept the run (same claim, a pid of this run)."""
+    if managed_run_exit_code(conn, task_id, worker_pid, claim_lock) is None:
+        return None
+    row = conn.execute(
+        "SELECT e.payload FROM task_events e JOIN tasks t ON t.current_run_id=e.run_id "
+        "WHERE t.id=? AND e.task_id=t.id AND e.kind='worker_result' ORDER BY e.id DESC LIMIT 1", (task_id,)).fetchone()
+    try:
+        payload = json.loads(row['payload']) if row else {}
+    except ValueError:
+        return None
+    reason = payload.get('transient_reason') if isinstance(payload, dict) else None
+    return reason if isinstance(reason, str) and reason else None

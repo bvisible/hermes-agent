@@ -1042,6 +1042,72 @@ def _bounded_transient_requeue(conn: sqlite3.Connection, task_id: str, dead: "_D
 # //// END Neoffice ////
 
 
+# //// Neoffice — a transient exit that is no quota is retried in seconds, and a second one in a row is said to the
+# //// person (neoffice-maintenance#3118). Upstream books every transient provider exit (quota, overloaded,
+# //// server_error, timeout, an empty stream) as the same rate-limited requeue and spaces it by the quota cooldown,
+# //// 300 s: a card whose model gave one empty stream kept its person waiting five minutes in silence, then started
+# //// again from zero. The worker now records the turn's failure reason with the exit (gateway/session_kanban.py,
+# //// read back by kanban_owner_recovery.neoffice_managed_run_transient_reason). A quota or billing wall keeps
+# //// upstream's cooldown; server_error, timeout and overloaded wait HERMES_KANBAN_TRANSIENT_RETRY_SECONDS (15), and
+# //// at the second such exit in a row the card is blocked on a question that tells the person what to do. A run
+# //// recorded without a reason (before this change, or a start failure) keeps upstream's cooldown. Remove when
+# //// upstream tells a quota wall from an error the model may not repeat.
+NEOFFICE_SHORT_RETRY_REASONS = frozenset({"server_error", "timeout", "overloaded"})
+_NEOFFICE_SHORT_RETRY_SECONDS = 15
+
+
+def _neoffice_transient_block_reason() -> str:
+    """The question the person reads in the chat (gateway/kanban_watchers_notifier.py, `blocked`), from the
+    branding catalog in the profile's language, as a cut-off card's (agent/kanban_turn_recovery.py)."""
+    from neoffice_branding import reply
+
+    try:
+        from agent.i18n import get_language
+
+        lang = get_language()
+    except Exception:
+        lang = None
+    return reply("transient_card", lang)
+
+
+def _neoffice_short_retry_seconds() -> int:
+    """``HERMES_KANBAN_TRANSIENT_RETRY_SECONDS`` (0 = next tick) else ``_NEOFFICE_SHORT_RETRY_SECONDS``."""
+    return _kb._env_int("HERMES_KANBAN_TRANSIENT_RETRY_SECONDS", _NEOFFICE_SHORT_RETRY_SECONDS)
+
+
+def _neoffice_short_transient(metadata: Any) -> bool:
+    """A rate-limited run whose recorded reason is no quota wall.
+
+    ``metadata`` is either a closed run's JSON text or the dead worker's own payload, a dict
+    (``_DeadWorker.event_payload``): ``_json_dict`` decodes text only and reads a dict as ``{}``."""
+    data = metadata if isinstance(metadata, dict) else _kb._json_dict(metadata)
+    return data.get("transient_reason") in NEOFFICE_SHORT_RETRY_REASONS
+
+
+def _neoffice_second_short_transient(conn: sqlite3.Connection, task_id: str, dead: _DeadWorker) -> bool:
+    """``dead`` is a short transient exit and the card's previous closed run was one too.
+
+    Only the runs closed after the card was last unblocked, promoted or moved count, as in
+    ``_transient_requeue_streak``: the person's answer to the sentence starts again from one."""
+    if not dead.rate_limited or not _neoffice_short_transient(dead.event_payload):
+        return False
+    since = _kb._to_epoch(conn.execute(
+        "SELECT MAX(created_at) FROM task_events WHERE task_id = ? AND kind IN ('unblocked', 'promoted', 'status')",
+        (task_id,),
+    ).fetchone()[0])
+    row = conn.execute(
+        "SELECT outcome, metadata, ended_at FROM task_runs WHERE task_id = ? AND ended_at IS NOT NULL "
+        "ORDER BY id DESC LIMIT 1", (task_id,),
+    ).fetchone()
+    if row is None:
+        return False
+    ended = _kb._to_epoch(row["ended_at"])
+    if since is not None and (ended is None or ended <= since):
+        return False
+    return (row["outcome"] or "") == "rate_limited" and _neoffice_short_transient(row["metadata"])
+# //// END Neoffice ////
+
+
 WORKER_OUTPUT_SEP = " Worker's last output: "  # dead-worker error text: our words, then the worker's
 _PROTOCOL_VIOLATION_ERROR = (
     # Worker subprocess returned 0 but its task is still ``running`` in the DB — it exited without calling
@@ -1232,6 +1298,8 @@ class _CrashSweep:
     # Worker-exit observer payloads, fired only after every reclaim/accounting
     # txn has committed.
     exited_hook_payloads: list[dict] = field(default_factory=list)
+    # //// Neoffice — cards blocked on the transient_card question after the txn (#3118)
+    neoffice_said: list[str] = field(default_factory=list)
 
 
 def _reclaim_dead_workers(conn: sqlite3.Connection, board: Optional[str] = None) -> _CrashSweep:
@@ -1265,8 +1333,16 @@ def _reclaim_dead_workers(conn: sqlite3.Connection, board: Optional[str] = None)
             # A managed run's authority-recorded exit (its bound interpreter's, under this claim).
             exit_code = managed_run_exit_code(conn, row["id"], pid, row["claim_lock"])
             dead = _classify_dead_worker(pid, row["claim_lock"], exit_code, task_id=row["id"], board=board)
+            # //// Neoffice — the reason of a transient exit decides its spacing, and the second in a row is said (#3118)
+            if dead.rate_limited:
+                from hermes_cli.kanban_owner_recovery import neoffice_managed_run_transient_reason
+                transient_reason = neoffice_managed_run_transient_reason(conn, row["id"], pid, row["claim_lock"])
+                if transient_reason:
+                    dead.event_payload["transient_reason"] = transient_reason
             # //// Neoffice — past the cap, a transient exit of a card that sets max_retries counts (#2810)
             dead = _bounded_transient_requeue(conn, row["id"], dead)
+            # //// Neoffice — decided before this run is closed: the card's previous run (#3118)
+            say_it = _neoffice_second_short_transient(conn, row["id"], dead)
             apply_attempt_note(conn, row["id"], pid, dead)
             retry_status = _kb._retry_status_for_run(conn, row["id"])
             dead.event_payload["retry_status"] = retry_status
@@ -1308,6 +1384,9 @@ def _reclaim_dead_workers(conn: sqlite3.Connection, board: Optional[str] = None)
                 )
             if dead.rate_limited:
                 sweep.rate_limited.append(row["id"])
+                # //// Neoffice — blocked after the txn, on the sentence the person reads (#3118)
+                if say_it:
+                    sweep.neoffice_said.append(row["id"])
             else:
                 sweep.crashed.append(row["id"])
                 sweep.crash_details.append((row["id"], pid, row["claim_lock"], dead))
@@ -1405,6 +1484,14 @@ def detect_crashed_workers(conn: sqlite3.Connection, board: Optional[str] = None
     ``_last_rate_limited`` attribute (the return stays crashed-only).
     """
     sweep = _reclaim_dead_workers(conn, board=board)
+    # //// Neoffice — the second short transient exit in a row: the card is blocked on a sentence the person reads,
+    # //// through the subscribers' notifier, instead of a third silent run (#3118)
+    for task_id in sweep.neoffice_said:
+        try:
+            _kb.block_task(conn, task_id, reason=_neoffice_transient_block_reason(), kind="needs_input")
+        except Exception as exc:  # the card stays requeued, as before this change
+            _kb._log.warning("kanban: blocking %s after a second transient exit failed (%s)", task_id, exc)
+    # //// END Neoffice ////
     # Outside the main txn: account each crash and maybe trip the breaker.
     auto_blocked = _account_crashes(conn, sweep.crash_details) if sweep.crash_details else []
     # Side-channel attributes keep the public ``list[str]`` return stable;
@@ -1678,6 +1765,9 @@ def check_respawn_guard(
     # //// Neoffice — a transient exit counted past the cap (#2810) is the same exit, spaced like the free ones
     if latest_run is not None and (latest_run["outcome"] == "rate_limited"
                                    or _kb._json_dict(latest_run["metadata"]).get("transient_requeues")):
+        # //// Neoffice — a transient exit that is no quota waits seconds, not the quota cooldown (#3118)
+        if latest_run["outcome"] == "rate_limited" and _neoffice_short_transient(latest_run["metadata"]):
+            rl_cooldown = _neoffice_short_retry_seconds()
         if rl_cooldown <= 0:
             # Cooldown disabled — respawn immediately, skipping blocker_auth so
             # the stamped rate-limit text doesn't re-trap the task.

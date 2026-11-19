@@ -290,16 +290,22 @@ def _run_worker_turns(agent, frame, history):
                                           **({'turn_author': author} if author is not None else {}))
     from hermes_cli.turn_exit import credential_failure_flags, turn_exit_code
     code, last_output = 1, ''
+    # //// Neoffice — the turn's failure reason goes with a transient exit, so the dispatcher can tell a quota wall
+    # //// from an error the model may not repeat (neoffice-maintenance#3118); remove with the dispatcher's use of it.
+    reason = None
     try:
         result = _run_task_turns(agent, frame, history, context)
         code = turn_exit_code(result, kanban_worker=True)
         last_output = str(result.get('final_response') or '')[-500:] if isinstance(result, dict) else ''
+        # //// Neoffice — the reason recorded with a transient exit (#3118)
+        reason = result.get('failure_reason') if isinstance(result, dict) else None
         return result
     except Exception as exc:
         code = turn_exit_code(None, kanban_worker=True, **credential_failure_flags(exc))
         raise
     finally:
-        _record_worker_result(context, code, last_output)
+        _record_worker_result(context, code, last_output, transient_reason=reason)
+    # //// END Neoffice ////
 
 
 def record_start_failure(frame, exc):
@@ -312,7 +318,8 @@ def record_start_failure(frame, exc):
     _record_worker_result(context, turn_exit_code(None, kanban_worker=True, **credential_failure_flags(exc)), '')
 
 
-def _record_worker_result(context, code, last_output):
+# //// Neoffice — transient_reason: the failure reason of a transient exit, recorded with it (#3118)
+def _record_worker_result(context, code, last_output, transient_reason=None):
     _TURNS_DONE.set()
     import os
     from hermes_cli.kanban_db_connect import connect_closing
@@ -321,9 +328,12 @@ def _record_worker_result(context, code, last_output):
         if _bound_worker_matches(conn, context):
             # Closing a run clears its claim/PID and replaces metadata; keep the
             # result in the immutable attempt event stream instead.
-            kb._append_event(conn, context['task_id'], 'worker_result',
-                {'pid': os.getpid(), 'claim_lock': context['claim_lock'], 'exit_code': code,
-                 'last_output': last_output}, run_id=context['run_id'])
+            payload = {'pid': os.getpid(), 'claim_lock': context['claim_lock'], 'exit_code': code,
+                       'last_output': last_output}
+            if code == kb.KANBAN_RATE_LIMIT_EXIT_CODE and isinstance(transient_reason, str) and transient_reason:
+                payload['transient_reason'] = transient_reason
+            kb._append_event(conn, context['task_id'], 'worker_result', payload, run_id=context['run_id'])
+# //// END Neoffice ////
 
 
 def record_worker_loss(policy, reason, *, pid=None, bound=False):
