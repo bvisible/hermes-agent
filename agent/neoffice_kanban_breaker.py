@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -304,6 +306,111 @@ def neoffice_terminal_call_text(tool_calls: Any) -> str:
     return ""
 
 
+# //// Neoffice — the last answer asked once more WITHOUT tools (neoffice-maintenance#3016). With the tools declared,
+# //// a worker asked for its answer at a guardrail stop sometimes called another tool instead (frappe_calc 10 times,
+# //// frappe_entry_check 2, wiki_search 1 on the accounting exam of 18.11): the call is neither run nor read, the
+# //// answer came back empty twice and the card ended done on the canned stop text. With the profile key
+# //// tool_loop_guardrails.neoffice_final_answer_without_tools, the second attempt sends tool_choice "none": the
+# //// tools stay declared, so the cached prefix holds (the 25.09 measure: ~2 s instead of a 14 s re-prefill), but no
+# //// call can be made. The model may then write a call as TEXT (on 25.09, without tools, it wrote its kanban_block
+# //// that way): a written kanban_complete or kanban_block is read for its answer. A written lookup says, by its
+# //// structure alone, that the model meant to go on: that is no answer, even after a sentence that reads like one,
+# //// so the card is blocked and the text the model wrote around the call (without its markup) is the block's
+# //// reason, delivered to the person: nothing is lost, and nothing reads as done when it is not.
+def neoffice_final_answer_without_tools(agent: Any) -> bool:
+    """Whether the profile turned the tool-less second attempt on (off when the agent has no guardrail config)."""
+    config = getattr(getattr(agent, "_tool_guardrails", None), "config", None)
+    return bool(getattr(config, "neoffice_final_answer_without_tools", False))
+
+
+_WRITTEN_FUNCTION = re.compile(r"<function=([^>\s]+)>(.*?)(?:</function>|\Z)", re.DOTALL)
+_WRITTEN_PARAMETER = re.compile(r"<parameter=([^>\s]+)>\s*(.*?)\s*</parameter>", re.DOTALL)
+_WRITTEN_JSON_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_WRITTEN_MARKUP = re.compile(r"<tool_call>.*?(?:</tool_call>|\Z)|<function=[^>\s]+>.*?(?:</function>|\Z)", re.DOTALL)
+_FENCE = re.compile(r"```(?:[^\n`]*\n)?(.*?)```", re.DOTALL)  # one code block at a time, its info line optional
+
+
+def neoffice_written_call_text(content: Any) -> str | None:
+    """The answer inside calls the model wrote as text (qwen3_coder XML or a JSON <tool_call>).
+
+    None when the text holds no written call; "" when its written calls hold no kanban_complete or kanban_block
+    answer: the model meant to go on, which is no answer (neoffice_written_lookup_text keeps what it wrote around
+    them, for the block)."""
+    text = content if isinstance(content, str) else ""
+    if "<function=" not in text and "<tool_call>" not in text:
+        return None
+    calls = [SimpleNamespace(name=name, arguments=dict(_WRITTEN_PARAMETER.findall(body)))
+             for name, body in _WRITTEN_FUNCTION.findall(text)]
+    for raw in _WRITTEN_JSON_CALL.findall(text):
+        value = _neoffice_json_args(raw)
+        if value.get("name"):
+            calls.append(SimpleNamespace(name=str(value["name"]), arguments=value.get("arguments") or {}))
+    return neoffice_terminal_call_text(calls)
+
+
+def neoffice_written_lookup_text(content: Any) -> str:
+    """What the model wrote around calls written as text, without their markup and without a code fence left empty:
+    the reason a card stopped on written lookups is blocked with, read by the person. An unclosed call runs to the
+    end of the text (the model stops in it)."""
+    text = re.sub(r"<think>.*?</think>\s*", "", content if isinstance(content, str) else "", flags=re.DOTALL)
+    return _FENCE.sub(lambda block: block.group(0) if block.group(1).strip() else "",
+                      _WRITTEN_MARKUP.sub("", text)).strip()
+
+
+def neoffice_unanswered_text(agent: Any) -> str:
+    """The text a worker wrote around the lookups it wrote instead of answering, at the last guardrail summary."""
+    return getattr(agent, "_neoffice_unanswered_text", "") or ""
+
+
+def neoffice_worker_without_tools(agent: Any) -> bool:
+    """The key is on and this is a kanban worker's own turn (not a fork turn such as the skill review)."""
+    return (bool((os.environ.get("HERMES_KANBAN_TASK") or "").strip()) and not getattr(agent, "_turn_origin", None)
+            and neoffice_final_answer_without_tools(agent))
+
+
+def neoffice_worker_answer_from_text(agent: Any, content: Any) -> str | None:
+    """For the iteration-limit summary: the answer of a call a worker wrote as text; for written lookups, the text
+    written around them without their markup ("" when there is none: no answer, upstream's retry and stop text
+    follow); None when the key is off, outside a worker, or when the text holds no written call (upstream's read then
+    stands).
+
+    Nothing is blocked on this path: with the key off upstream sends the content as written, so a real answer
+    followed by a written lookup reaches the person; here it does too, without the markup."""
+    if not neoffice_worker_without_tools(agent):
+        return None
+    text = re.sub(r"<think>.*?</think>\s*", "", content if isinstance(content, str) else "", flags=re.DOTALL).strip()
+    answer = neoffice_written_call_text(text)
+    return neoffice_written_lookup_text(text) if answer == "" else answer
+
+
+def neoffice_block_unanswered(agent: Any, text: str) -> bool:
+    """With the key on, a worker the guardrail stopped with no answer blocks its card on the stop text.
+
+    Left alone, the auto-complete net (turn_finalizer) completed the card done on that canned text: 13 cards of the
+    accounting exam read as answered. Blocked, the card says it was not answered and the person reads the same text.
+    False outside a kanban worker, in a fork turn, with the key off, or when the block is refused."""
+    task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    reason = (text or "").strip()
+    if not reason or not neoffice_worker_without_tools(agent):
+        return False
+    try:
+        import json
+
+        from tools.kanban_tools import _handle_block
+
+        outcome = _handle_block({"reason": reason[:4000]})
+        error = (json.loads(outcome) or {}).get("error") if isinstance(outcome, str) else None
+    except Exception:  # the turn still ends; the net then completes the card as before
+        logger.warning("kanban worker %s: blocking the unanswered card failed", task_id, exc_info=True)
+        return False
+    if error:
+        logger.warning("kanban worker %s: blocking the unanswered card was refused: %s", task_id, str(error)[:300])
+        return False
+    logger.info("kanban worker %s: stopped without an answer, the card is blocked, not done", task_id)
+    return True
+# //// END Neoffice ////
+
+
 def neoffice_worker_answer_from_calls(agent: Any, tool_calls: Any) -> str:
     """A kanban worker's answer written as its terminal call, for upstream's summary read.
 
@@ -319,16 +426,17 @@ def neoffice_worker_answer_from_calls(agent: Any, tool_calls: Any) -> str:
     return neoffice_terminal_call_text(tool_calls)
 
 
-def _neoffice_summary_attempt(agent: Any, api_messages: list, request_id: str, seen: list):
+def _neoffice_summary_attempt(agent: Any, api_messages: list, request_id: str, seen: list, without_tools: bool = False):
     """Upstream's chat-completions summary call (tools kept), read for a terminal kanban call.
 
-    ``seen`` collects what each empty attempt returned, for the warning."""
-    import re
-
+    ``seen`` collects what each empty attempt returned, for the warning. ``without_tools`` sends tool_choice "none"
+    and reads a call written as text (see neoffice_final_answer_without_tools)."""
     from agent import chat_completion_helpers as _cch
 
     kwargs = agent._build_api_kwargs(api_messages)
     _cch.sanitize_outbound_kwargs(agent, kwargs)
+    if without_tools:
+        kwargs = dict(kwargs, tool_choice="none")
 
     def _attempt(retry_count: int) -> str:
         client = agent._ensure_primary_openai_client(reason="neoffice_guardrail_summary")
@@ -344,6 +452,13 @@ def _neoffice_summary_attempt(agent: Any, api_messages: list, request_id: str, s
         text = neoffice_terminal_call_text(normalized.tool_calls)
         if not text:
             text = re.sub(r"<think>.*?</think>\s*", "", normalized.content or "", flags=re.DOTALL).strip()
+        written = neoffice_written_call_text(text) if without_tools and text else None
+        if written is not None:
+            if not written:
+                seen.append("a lookup written as text")
+                agent._neoffice_unanswered_text = neoffice_written_lookup_text(text)
+                return ""
+            text = written
         if not text:
             names = [str(getattr(getattr(tc, "function", None) or tc, "name", "") or "?")
                      for tc in (normalized.tool_calls or ())]
@@ -360,6 +475,7 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
     task_id = (os.environ.get("HERMES_KANBAN_TASK") or "").strip()
     if not task_id or getattr(agent, "_turn_origin", None):  # a fork turn's text reaches nobody
         return ""
+    agent._neoffice_unanswered_text = ""  # set by an attempt that comes back as written lookups
     import uuid
     from contextlib import suppress
 
@@ -377,8 +493,11 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
         build = _cch._SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode)  # other transports: upstream's text read
         attempt = build(agent, api_messages, request_id) if build else _neoffice_summary_attempt(
             agent, api_messages, request_id, seen)
-        for retry_count in (0, 1):
-            text = (attempt(retry_count) or "").strip()
+        attempts = [attempt, attempt]
+        if not build and neoffice_final_answer_without_tools(agent):  # see neoffice_final_answer_without_tools
+            attempts[1] = _neoffice_summary_attempt(agent, api_messages, request_id, seen, without_tools=True)
+        for retry_count, current in enumerate(attempts):
+            text = (current(retry_count) or "").strip()
             if text:
                 outcome = "success"
                 logger.info("kanban worker %s: guardrail stop on %s answered with what it found (%d chars)",

@@ -149,6 +149,10 @@ class ToolCallGuardrailConfig:
     # //// (``mcp__<server>__wiki_search``). Empty, the default: nothing changes. Drop this field if upstream makes
     # //// idempotent_tools configurable.
     neoffice_doctrine_tools: frozenset[str] = frozenset()
+    # //// Neoffice — a kanban worker's last answer is asked once more WITHOUT tools when the summary request (at a
+    # //// guardrail stop or at the iteration limit) came back with a lookup call (neoffice-maintenance#3016). Read by
+    # //// agent/neoffice_kanban_breaker.py and agent/chat_completion_helpers.py. False, the default: nothing changes.
+    neoffice_final_answer_without_tools: bool = False
     # //// END Neoffice ////
 
     @classmethod
@@ -175,6 +179,8 @@ class ToolCallGuardrailConfig:
             str(name).strip() for name in doctrine if str(name).strip()
         ) if isinstance(doctrine, (list, tuple, set, frozenset)) else frozenset()
         return cls(loop_caps=LoopCapConfig.from_mapping(data.get("loop_caps")), neoffice_doctrine_tools=doctrine_tools,
+                   # //// Neoffice — see neoffice_final_answer_without_tools ////
+                   neoffice_final_answer_without_tools=_as_bool(data.get("neoffice_final_answer_without_tools"), False),
                    **flags, **thresholds)
 
 

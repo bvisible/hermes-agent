@@ -2209,11 +2209,15 @@ def _summary_text(agent, response, **normalize_kwargs) -> str:
     # //// also when asked for plain text, and the discard below threw it away: 19 cards on
     # //// osiris (2026-09-19..24) ended on "I reached the iteration limit and couldn't generate
     # //// a summary." The text of that terminal call is the summary (workers only, not fork turns).
-    from agent.neoffice_kanban_breaker import neoffice_worker_answer_from_calls
+    from agent.neoffice_kanban_breaker import neoffice_worker_answer_from_calls, neoffice_worker_answer_from_text
 
     worker_answer = neoffice_worker_answer_from_calls(agent, normalized.tool_calls)
     if worker_answer:
         return worker_answer
+    # //// Neoffice — with tool_choice "none" (the second attempt below) a call comes back written as text (#3016).
+    written = neoffice_worker_answer_from_text(agent, normalized.content)
+    if written is not None:
+        return written
     # //// END Neoffice ////
     if normalized.tool_calls:
         # No summary path executes tool calls; log so a tool-only response that falls into the
@@ -2266,9 +2270,17 @@ def _chat_summary_attempt(agent, api_messages: list, api_request_id: str):
     def _attempt(retry_count: int) -> str:
         # Use the ordinary request-local lifecycle: a summary can be interrupted
         # during a long prefill without closing the shared primary client.
+        # //// Neoffice — a kanban worker's retry is asked without tools when the profile turns it on (#3016): the
+        # //// first attempt keeps upstream's request; our server is vLLM, whose "none" keeps the tools in the prompt.
+        from agent.neoffice_kanban_breaker import neoffice_worker_without_tools
+
+        request = dict(summary_kwargs, tool_choice="none") if retry_count and neoffice_worker_without_tools(agent) \
+            else summary_kwargs
+        # //// upstream's call, sent with that request.
         response = _managed_summary_call(
-            agent, api_request_id, summary_kwargs, agent._interruptible_api_call,
+            agent, api_request_id, request, agent._interruptible_api_call,
             retry_count=retry_count)
+        # //// END Neoffice ////
         return _summary_text(agent, response)
     return _attempt
 

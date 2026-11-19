@@ -186,9 +186,20 @@ def run_tool_round(
         _turn_exit_reason = "guardrail_halt"
         final_response = agent._toolguard_controlled_halt_response(decision)
         # //// Neoffice — a kanban worker answers with what it found, see neoffice_guardrail_summary.
-        from agent.neoffice_kanban_breaker import neoffice_guardrail_summary
+        from agent.neoffice_kanban_breaker import (
+            neoffice_block_unanswered,
+            neoffice_guardrail_summary,
+            neoffice_unanswered_text,
+        )
 
-        final_response = neoffice_guardrail_summary(agent, messages, decision) or final_response
+        _neoffice_answer = neoffice_guardrail_summary(agent, messages, decision)
+        final_response = _neoffice_answer or final_response
+        # //// Neoffice — no answer: with the key on, the card is blocked, never left for the auto-complete net to
+        # //// close done (#3016, see neoffice_block_unanswered). Its reason, which the person reads, is what the
+        # //// model wrote around the lookups it wrote instead of answering, else the stop text.
+        if not _neoffice_answer:
+            final_response = neoffice_unanswered_text(agent) or final_response
+            neoffice_block_unanswered(agent, final_response)
         # //// END Neoffice ////
         agent._emit_diagnostic_status(f"⚠️ Tool guardrail halted {decision.tool_name}: {decision.code}")
         append_message(messages, {"role": "assistant", "content": final_response})
