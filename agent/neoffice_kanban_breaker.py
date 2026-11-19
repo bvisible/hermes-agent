@@ -152,7 +152,19 @@ def neoffice_kanban_no_progress_breaker(
         # A real business/MCP tool ran, so the turn produced genuine work and the
         # auto-complete net may deliver its result. Structural signal, not a text guess.
         if progress == "progress":
+            # //// Neoffice — a read that declares its final answer closes the card (neoffice_close_on_final_read).
+            first_business_round = not getattr(agent, "_kanban_made_progress", False)
+            # //// END Neoffice ////
             agent._kanban_made_progress = True
+            # //// Neoffice — no model turn to rewrite what the task's first and only read already answered.
+            if first_business_round:
+                answer = neoffice_close_on_final_read(agent, kanban_task, assistant_message, messages)
+                if answer:
+                    final_response = answer
+                    _turn_exit_reason = "neoffice_final_read"
+                    messages.append({"role": "assistant", "content": answer})
+                    return _verdict("break")
+            # //// END Neoffice ////
             # //// Neoffice — the hesitation budget: told once to finish or ask, then to finish.
             nudge = neoffice_hesitation_nudge(agent._kanban_tool_rounds)
             if nudge:
@@ -408,6 +420,149 @@ def neoffice_block_unanswered(agent: Any, text: str) -> bool:
         return False
     logger.info("kanban worker %s: stopped without an answer, the card is blocked, not done", task_id)
     return True
+# //// END Neoffice ////
+
+
+# //// Neoffice — a read that declares its final answer closes the card, without a model turn (#3081).
+# //// A one-call read of nora (a ranking, a total) already answers the question; the worker's next model
+# //// turn only rewrote it into kanban_complete: 2.5 to 4 s more per question through a pole. The contract: the
+# //// tool puts `final_answer`, a ready sentence of the facts it just read (what was read, for whom, over which
+# //// period) in the person's language, at the top of its result, only from its own code and only when its read is
+# //// complete. Two marks are needed, neither a guess of the code: the profile names the tools allowed to close a card
+# //// by their full MCP name (`kanban.neoffice_final_read_tools`, a list, absent by default: nothing changes), and the
+# //// router, which read the whole request, marked the task as one read when it created it (a task event
+# //// `neoffice_answer_shape` {"shape": "one_read"} with no run). A request that asks two things is not marked, so
+# //// its first read never closes it. The card then closes only when the task's first business round is a single
+# //// call to a named tool whose result carries the field, through kanban_complete's own handler and guards; any
+# //// refusal leaves the usual model turn. Such a card skips the worker's memory and skill review
+# //// (turn_finalizer._neoffice_worker_task_done reads only kanban_complete and text endings), on purpose: a read
+# //// that states its own answer teaches the pole nothing, and the review would cost a model call.
+NEOFFICE_FINAL_ANSWER_MAX = 1500
+NEOFFICE_ANSWER_SHAPE_EVENT = "neoffice_answer_shape"
+
+
+def neoffice_final_read_tools(config: Any = None) -> frozenset:
+    """The full MCP tool names the profile lets close a card with their own answer; empty when the key is absent or is
+    not a list (a single name given as a string is refused, like any other malformed value). A name without the
+    `mcp__` prefix is dropped: it names no MCP tool, but would name a built-in tool of that name."""
+    try:
+        if config is None:
+            from hermes_cli.config import load_config
+
+            config = load_config()
+        names = ((config or {}).get("kanban") or {}).get("neoffice_final_read_tools") or []
+    except Exception:
+        return frozenset()
+    if not isinstance(names, (list, tuple)):
+        return frozenset()
+    return frozenset(name.strip() for name in names if isinstance(name, str) and name.strip().startswith("mcp__"))
+
+
+def neoffice_final_read_answer(assistant_message: Any, messages: Any, names: frozenset) -> str:
+    """The `final_answer` of the round's single call when the profile names its tool, '' otherwise.
+
+    Only the exact full name counts (`mcp__<server>__<tool>`): a tool of the same name on another server never
+    closes a card. The tool message holds the MCP client's rendering, {"result": "<the server's text>"}, whose text
+    is the JSON nora returned, or the server's {"_truncated": ...} envelope when the result was cut: a cut result never
+    answers."""
+    import json
+
+    calls = getattr(assistant_message, "tool_calls", None) or []
+    if not names or len(calls) != 1:
+        return ""
+    call = calls[0]
+    name = getattr(getattr(call, "function", None), "name", "") or ""
+    if name not in names:
+        return ""
+    call_id = getattr(call, "id", None)
+    content = next(
+        (m.get("content") for m in reversed(messages or [])
+         if isinstance(m, dict) and m.get("role") == "tool" and call_id and m.get("tool_call_id") == call_id),
+        None,
+    )
+    if not isinstance(content, str):
+        return ""
+    try:
+        outer = json.loads(content)
+        read = outer.get("result") if isinstance(outer, dict) else None
+        if isinstance(read, str):
+            read = json.loads(read)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(read, dict) or read.get("_truncated") or read.get("success") is False or read.get("error"):
+        return ""
+    answer = read.get("final_answer")
+    answer = answer.strip() if isinstance(answer, str) else ""
+    return answer if 0 < len(answer) <= NEOFFICE_FINAL_ANSWER_MAX else ""
+
+
+def neoffice_task_reads_once(task_id: str) -> bool:
+    """Whether the task was marked as one read when it was created: its first `neoffice_answer_shape` event with no
+    run says {"shape": "one_read"}. False when there is none or it cannot be read, and once a run of the task ended
+    completed or blocked: a task reopened, or unblocked by the person's answer, carries an ask the router did not
+    read (a re-run after a crash or a timeout keeps the mark, its request is the same)."""
+    import json
+
+    try:
+        from hermes_cli import kanban_db_connect as _kbc
+
+        conn = _kbc.connect()
+        try:
+            row = conn.execute("SELECT payload FROM task_events WHERE task_id = ? AND kind = ? AND run_id IS NULL "
+                               "AND NOT EXISTS (SELECT 1 FROM task_runs WHERE task_id = ? "
+                               "AND outcome IN ('completed', 'blocked')) ORDER BY id LIMIT 1",
+                               (task_id, NEOFFICE_ANSWER_SHAPE_EVENT, task_id)).fetchone()
+        finally:
+            conn.close()
+        payload = json.loads(row[0]) if row and row[0] else {}
+    except Exception:
+        return False
+    return isinstance(payload, dict) and payload.get("shape") == "one_read"
+
+
+def _neoffice_card_status(task_id: str) -> Any:
+    """The card's live status, None when it cannot be read."""
+    try:
+        from hermes_cli import kanban_db as _kb
+        from hermes_cli import kanban_db_connect as _kbc
+
+        conn = _kbc.connect()
+        try:
+            return getattr(_kb.get_task(conn, task_id), "status", None)
+        finally:
+            conn.close()
+    except Exception:
+        return None
+
+
+def neoffice_close_on_final_read(agent: Any, task_id: str, assistant_message: Any, messages: Any) -> str:
+    """Close the worker's card on its single read's final answer: that answer when the card closed, '' otherwise.
+
+    The card closes through kanban_complete's own handler, so its guards (a preview handed off as done, a document
+    name no tool returned, the accounting checks) still decide. A goal-mode card keeps upstream's continuation."""
+    if os.environ.get("HERMES_KANBAN_GOAL_MODE") == "1":
+        return ""
+    answer = neoffice_final_read_answer(assistant_message, messages, neoffice_final_read_tools())
+    if not answer or not neoffice_task_reads_once(task_id):
+        return ""
+    try:
+        import json
+
+        from tools.kanban_tools import _handle_complete
+
+        outcome = _handle_complete({"summary": answer}, session_id=getattr(agent, "session_id", None))
+        error = (json.loads(outcome) or {}).get("error") if isinstance(outcome, str) else None
+    except Exception:  # the usual model turn follows
+        logger.warning("kanban worker %s: closing the card on the read's own answer failed", task_id, exc_info=True)
+        return ""
+    if error:
+        logger.warning("kanban worker %s: closing the card on the read's own answer was refused: %s",
+                       task_id, str(error)[:300])
+        return ""
+    if _neoffice_card_status(task_id) == "running":
+        return ""
+    logger.info("kanban worker %s: its read answered by itself, the card is closed without a model turn", task_id)
+    return answer
 # //// END Neoffice ////
 
 
