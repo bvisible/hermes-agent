@@ -639,6 +639,8 @@ def _content_dual_emits_structured(result, structured) -> bool:
     copy in *a* block and a server may add a status line next to it. Deterministic equality, not a
     richness heuristic: a prose summary or a reorganised rendering fails it and keeps its
     ``structuredContent`` (#115430)."""
+    # //// Neoffice — backport of upstream PR 148982 (merged 2026-11-14), identical code:
+    # //// the next upstream merge brings it; drop this marker then.
     return any(_text_is_value(text, structured) for text in _text_blocks(result))
 
 
@@ -687,6 +689,8 @@ def _json_type_stable_equal(left, right) -> bool:
     return type(left) is type(right) and left == right
 
 
+# //// Neoffice — backport of upstream PR 148982 (merged 2026-11-14), identical code:
+# //// the next upstream merge brings it; drop this marker then.
 def _render_call_tool_result(result, server_name: str, image_paths: Optional[list[str]] = None, *,
                              for_model: bool = False) -> str:
     """Pure: ``CallToolResult`` -> handler JSON (``image_paths``, when given, receives the files this
@@ -709,6 +713,8 @@ def _render_call_tool_result(result, server_name: str, image_paths: Optional[lis
     meta = _strip_reserved_meta_keys(mcp_field(result, "meta", "meta"))
     # A str here is the over-cap truncation stand-in (wire structuredContent is always an object): next to
     # usable text it would be a second multi-MB copy — the flood #56059 caps — so it only fills an empty result.
+    # //// Neoffice — backport of upstream PR 148982 (merged 2026-11-14), identical code:
+    # //// the next upstream merge brings it; drop this marker then.
     if structured is not None and usable_parts > 0:
         if isinstance(structured, str) or _content_dual_emits_structured(result, structured):
             structured = None
@@ -1017,6 +1023,8 @@ def _make_tool_handler(server_name: str, tool_name: str, tool_timeout: float, *,
             if getattr(server, "_mark_session_proven", None) is not None:  # round-trip done: transport healthy
                 server._mark_session_proven()
             image_paths.clear()
+            # //// Neoffice — backport of upstream PR 148982 (merged 2026-11-14), identical code:
+            # //// the next upstream merge brings it; drop this marker then.
             return _render_call_tool_result(result, server_name, image_paths, for_model=native_images)
 
         def _on_failure(exc):
