@@ -280,6 +280,9 @@ def assemble_api_request(
         request_pressure_tokens = _pressure_with_real_floor(
             agent.context_compressor, request_pressure_tokens
         )
+    # //// Neoffice — the pressure of the request about to be sent, read if it comes back as an empty stream (#3118).
+    # //// Remove with turn_api_error._neoffice_classification_tokens.
+    agent._neoffice_request_pressure = request_pressure_tokens
     return AssembledRequest(
         "fallthrough", api_messages, tools_for_api, _moa_prepared_request,
         pending_moa_prepared_request, approx_tokens, request_pressure_tokens, approx_tokens * 4,

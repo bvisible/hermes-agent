@@ -276,6 +276,19 @@ REPLIES = {
         "en": "My answer was too long and was cut off before the end; could you ask in smaller steps, "
               "for example one part at a time?",
     },
+    # //// Neoffice — the question a card asks when its request could not fit in the model's window even after
+    # //// compaction (neoffice-maintenance#3118, agent/kanban_turn_recovery.py): the REQUEST was too long, not the
+    # //// answer. One question, a semicolon, no number, as truncated_card. Remove with its use there.
+    "overflow_card": {
+        "fr": "Votre demande m'a fait lire trop de documents pour y répondre d'un coup ; pouvez-vous la reposer "
+              "en plus court, un sujet ou une période à la fois ?",
+        "de": "Ihre Anfrage hat mich zu viele Dokumente lesen lassen, um sie in einem Zug zu beantworten; können "
+              "Sie sie kürzer stellen, ein Thema oder einen Zeitraum nach dem anderen?",
+        "it": "La sua richiesta mi ha fatto leggere troppi documenti per rispondere in una volta; può riformularla "
+              "più breve, un argomento o un periodo alla volta?",
+        "en": "Your request made me read too many documents to answer it in one go; could you ask it again more "
+              "briefly, one topic or one period at a time?",
+    },
 }
 
 

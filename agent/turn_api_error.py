@@ -124,7 +124,8 @@ def handle_api_error(
     _ctx_len = getattr(_compressor, "context_length", 200000) if _compressor else 200000
     classified = classify_api_error(
         api_error, provider=getattr(agent, "provider", "") or "",
-        model=getattr(agent, "model", "") or "", approx_tokens=approx_tokens,
+        model=getattr(agent, "model", "") or "",
+        approx_tokens=_neoffice_classification_tokens(agent, api_error, approx_tokens),  # //// Neoffice — #3118 ////
         context_length=_ctx_len, num_messages=len(api_messages) if api_messages else 0,
         base_url=str(getattr(agent, "base_url", "") or ""),
         api_key=getattr(agent, "api_key", None),
@@ -438,3 +439,18 @@ def settle_unrecovered_error(
         # instead of re-firing the stale request.
         return _verdict("break")
     return _verdict("fallthrough")
+
+
+# //// Neoffice — added function (neoffice-maintenance#3118): the size an error is judged against. Remove with the
+# //// window test of error_classifier._neoffice_empty_stream.
+def _neoffice_classification_tokens(agent: Any, api_error: Any, approx_tokens: Any) -> Any:
+    """An empty stream is judged against the pressure of the request that drew it (usage-anchored, recorded by
+    turn_request_assembly), not the rough history figure, which undercounts it: error_classifier._neoffice_empty_stream
+    reads an empty stream on a request over the window as an overflow. Every other error keeps upstream's input."""
+    from agent.errors import EmptyStreamError
+
+    if isinstance(api_error, EmptyStreamError):
+        pressure = getattr(agent, "_neoffice_request_pressure", None)
+        if isinstance(pressure, int) and pressure > (approx_tokens or 0):
+            return pressure
+    return approx_tokens

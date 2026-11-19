@@ -1123,10 +1123,23 @@ _V_EMPTY_STREAM = _v(_R.server_error, retryable=False, should_fallback=True)
 
 
 def _neoffice_empty_stream(c: _Ctx) -> Optional[Verdict]:
-    """An EmptyStreamError, by type (see the block above)."""
-    from agent.errors import EmptyStreamError
+    """An EmptyStreamError, by type (see the block above).
 
-    return _V_EMPTY_STREAM if isinstance(c.error, EmptyStreamError) else None
+    On a kanban worker's request whose size reaches the context window it is the server's answer to an overflow (a
+    self-hosted server answered such requests with an empty stream, neoffice-maintenance#3118): upstream's overflow
+    path then compacts and retries, where a transient verdict sent the same request again later. A person's chat
+    keeps the transient verdict."""
+    from agent.errors import EmptyStreamError
+    # //// Neoffice — a card's turn only (#3118); remove with the window test below
+    from agent.kanban_turn_recovery import kanban_task_id
+
+    if not isinstance(c.error, EmptyStreamError):
+        return None
+    # //// Neoffice — a card's empty stream on a request over the window is an overflow (#3118). Remove when the
+    # //// serving relay answers an overflow with the server's length error (neoffice-maintenance#3130).
+    if kanban_task_id() is not None and c.context_length > 0 and c.approx_tokens >= c.context_length:
+        return _V_CONTEXT_OVERFLOW
+    return _V_EMPTY_STREAM
 # //// END Neoffice ////
 
 

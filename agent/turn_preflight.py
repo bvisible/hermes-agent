@@ -94,13 +94,24 @@ def run_preflight_compression(
     _compression_cooldown = getattr(
         compressor, "get_active_compression_failure_cooldown", lambda: None
     )()
+    # //// Neoffice — on a kanban worker's own turn, a request whose usage-anchored pressure reaches the context
+    # //// window cannot fit: it is a proven overflow, not an estimate to defer (neoffice-maintenance#3118). Upstream
+    # //// skipped compaction while a summary-failure cooldown was armed, whatever the pressure, and sent the request:
+    # //// a self-hosted server answered it with an empty stream, read as a transient error. It now gets the one real
+    # //// attempt a provider-proven overflow gets (bypass_cooldown), bounded by the attempt budget, and fails closed
+    # //// below when nothing can compact it: the card is then blocked with a question to its person. Only a card:
+    # //// in a person's chat, upstream's exhaustion resets the session, so a chat keeps upstream's gate. Only an
+    # //// anchored figure: upstream holds that a rough estimate past the window is no proof. Remove when upstream
+    # //// treats a request over the window as proven.
+    _neoffice_cannot_fit = _neoffice_request_cannot_fit(agent, compressor, request_pressure_tokens)
+    # //// END Neoffice ////
     if (
         _eligible
         and not _review_fork_first_request_pending(agent)
-        and (not v._preflight_compression_blocked or provider_overflow_preflight)
-        and (not defer_preflight(request_pressure_tokens) or provider_overflow_preflight)
-        and not _compression_cooldown
-        and compressor.should_compress(request_pressure_tokens)
+        and (not v._preflight_compression_blocked or provider_overflow_preflight or _neoffice_cannot_fit)
+        and (not defer_preflight(request_pressure_tokens) or provider_overflow_preflight or _neoffice_cannot_fit)
+        and (not _compression_cooldown or _neoffice_cannot_fit)  # //// Neoffice — #3118 ////
+        and (_neoffice_cannot_fit or compressor.should_compress(request_pressure_tokens))  # //// Neoffice — #3118 ////
     ):
         # Managed local runtime: grow the context window before compressing (last
         # resort). Only for a llamacpp provider at the supervised base_url.
@@ -148,6 +159,7 @@ def run_preflight_compression(
         v.messages, v.active_system_prompt = agent._compress_context(
             v.messages, system_message, approx_tokens=request_pressure_tokens,
             task_id=effective_task_id, trigger="pre_api",
+            bypass_cooldown=_neoffice_cannot_fit,  # //// Neoffice — the one real attempt of a proven overflow (#3118)
         )
         if context_compression_timed_out(agent):
             # Progress-aware timeout: never reached the provider — refund the
@@ -219,11 +231,26 @@ def run_preflight_compression(
             if callable(_warn_fn):
                 _warn_fn(request_pressure_tokens, _ctx_len)
 
-    if provider_overflow_preflight:
+    # //// Neoffice — a card's request is never sent over the window when compaction could have run (#3118);
+    # //// compaction disabled, upstream warns and sends. Remove with _neoffice_request_cannot_fit.
+    if provider_overflow_preflight or (_neoffice_cannot_fit and agent.compression_enabled):
         # Any other gate blocking the forced preflight (e.g. uncompressible one-
         # message request) must fail closed: the request is proven not to fit.
         return _done("return", _exhausted_result())
     return _done("fallthrough")
+
+
+# //// Neoffice — added function (neoffice-maintenance#3118): see run_preflight_compression. Remove with its use.
+def _neoffice_request_cannot_fit(agent: Any, compressor: Any, request_pressure_tokens: Any) -> bool:
+    """A kanban worker's own turn, whose usage-anchored request pressure reaches the compressor's context window."""
+    from agent.kanban_turn_recovery import kanban_task_id
+
+    if kanban_task_id() is None or getattr(agent, "_turn_origin", None):
+        return False
+    if getattr(agent, "_request_pressure_anchored", False) is not True:
+        return False
+    window = int(getattr(compressor, "context_length", 0) or 0)
+    return window > 0 and isinstance(request_pressure_tokens, int) and request_pressure_tokens >= window
 
 
 @dataclass

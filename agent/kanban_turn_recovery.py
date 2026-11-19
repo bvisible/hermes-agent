@@ -346,9 +346,22 @@ def _emit_recovery_skipped(emit: Optional[Callable[[str], None]], task_id: Optio
 # //// one write), with the branding catalog's sentence as its question, in the profile's language.
 # //// Never `done`: no real cut-off card turn has been observed yet, so what its text holds is not
 # //// known. Nothing is counted. Remove when upstream settles a truncated kanban turn itself.
+# //// Neoffice — the same for a turn whose request could not fit even after compaction (failure_reason
+# //// "context_overflow" with turn_exit_reason "context_compression_exhausted", neoffice-maintenance#3118), with its
+# //// own question: the request was too long, not the answer. A compaction that timed out (turn_exit_reason
+# //// "context_compression_timeout") carries the same failure_reason but says nothing of the request's size: it is
+# //// left as upstream books it. Remove when upstream settles an exhausted kanban turn itself.
+_NEOFFICE_BLOCKED_REASONS = {"truncated": "truncated_card", "context_overflow": "overflow_card"}
+_NEOFFICE_OVERFLOW_EXIT = "context_compression_exhausted"
+
+
 def _neoffice_block_truncated_turn(result: Any, *, task_id: Optional[str], check: Callable[[], bool]) -> bool:
     """Block the card ``needs_input`` when its latest turn was cut off; True when it now waits on a person."""
-    if not isinstance(result, dict) or result.get("failure_reason") != "truncated" or result.get("interrupted"):
+    # //// Neoffice — a cut-off answer, or a request that could not fit after compaction (#3118); remove as above
+    if (not isinstance(result, dict) or result.get("failure_reason") not in _NEOFFICE_BLOCKED_REASONS
+            or result.get("interrupted")):
+        return False
+    if result.get("failure_reason") == "context_overflow" and result.get("turn_exit_reason") != _NEOFFICE_OVERFLOW_EXIT:
         return False
     tid = _resolve_task_id(task_id)
     if tid is None or not check():
@@ -365,7 +378,8 @@ def _neoffice_block_truncated_turn(result: Any, *, task_id: Optional[str], check
             lang = get_language()
         except Exception:
             lang = None
-        raw = _handle_block({"task_id": tid, "reason": reply("truncated_card", lang), "kind": "needs_input"})
+        key = _NEOFFICE_BLOCKED_REASONS[result["failure_reason"]]  # //// Neoffice — #3118 ////
+        raw = _handle_block({"task_id": tid, "reason": reply(key, lang), "kind": "needs_input"})
     except Exception:  # never worse than before: the card is then booked as upstream books it
         logger.warning("kanban truncated turn: %s not blocked", tid, exc_info=True)
         return False
