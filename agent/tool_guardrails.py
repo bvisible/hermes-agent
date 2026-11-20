@@ -20,6 +20,11 @@ from agent.tool_result_classification import (
 )
 
 
+# //// Neoffice — the stop code of the doctrine read ceiling (#3125): one name for the guard, its message, the
+# //// summary request that agent/neoffice_kanban_breaker.py picks by it, and what an exam reads in
+# //// result["guardrail"]["code"] ////
+NEOFFICE_DOCTRINE_READ_CAP_CODE = "neoffice_doctrine_read_cap"
+
 IDEMPOTENT_TOOL_NAMES = frozenset({
     "read_file", "search_files", "web_search", "web_extract", "session_search", "skill_view", "skills_list",
     "browser_snapshot", "browser_console", "browser_get_images", "mcp_filesystem_read_file",
@@ -114,6 +119,9 @@ class LoopCapConfig:
 
     max_web_searches: int = _DEFAULT_MAX_WEB_SEARCHES_PER_TURN
     max_subagents: int = _DEFAULT_MAX_SUBAGENTS_PER_TURN
+    # //// Neoffice — a per-turn ceiling on reads of the profile's doctrine tools (neoffice_doctrine_tools), counted
+    # //// whatever their arguments (neoffice-maintenance#3125). 0, the default: no ceiling, nothing changes.
+    neoffice_max_doctrine_reads: int = 0
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any] | None) -> LoopCapConfig:
@@ -324,6 +332,12 @@ _DECISION_MESSAGES: dict[str, str] = {
         "Blocked delegate_task: this turn has already spawned {count} subagents (limit {cap}). "
         "This looks like a runaway delegation loop. Finish the work with the results you have and answer the user."
     ),
+    # //// Neoffice — the doctrine read ceiling's stop message says what the code knows (the number of searches and the
+    # //// limit) and what to do, never what the searches found (#3125) ////
+    NEOFFICE_DOCTRINE_READ_CAP_CODE: (
+        "Blocked {tool_name}: you have searched the doctrine {count} times this turn (limit {cap}). Stop searching: "
+        "answer from what you have already found and say what is still missing, or ask the user for what you need."
+    ),
 }
 
 _IDENTICAL_CALL_NOTICE = (
@@ -380,6 +394,7 @@ class ToolCallGuardrailController:
         self._persisted_result_paths: dict[str, str] = {}
         self._turn_web_search_count = 0
         self._turn_subagent_count = 0
+        self._turn_neoffice_doctrine_reads = 0  # //// Neoffice — the ceiling counts per turn (#3125) ////
 
     @property
     def halt_decision(self) -> ToolGuardrailDecision | None:
@@ -604,7 +619,8 @@ class ToolCallGuardrailController:
         the counter and return None. delegate_task control actions spawn nothing and keep working after the cap."""
         spec = _LOOP_CAPS.get(tool_name)
         if spec is None:
-            return None
+            # //// Neoffice — a tool with no upstream cap may be a doctrine read (#3125) ////
+            return self._neoffice_check_doctrine_cap(tool_name, args, signature)
         cap_field, count_attr, code = spec
         cap, count = getattr(self.config.loop_caps, cap_field), getattr(self, count_attr)
         increment = 1 if tool_name == "web_search" else (_subagent_spawn_count(args) if cap else 0)
@@ -612,6 +628,36 @@ class ToolCallGuardrailController:
             return self._decide("block", code, tool_name, count, signature, cap=cap)
         setattr(self, count_attr, count + increment)
         return None
+
+    # //// Neoffice — the doctrine read ceiling (neoffice-maintenance#3125). Measured on one pole's log over nine days:
+    # //// 6 of 2,263 turns read the doctrine more than 20 times (21 to 24 reads), with queries that changed at each
+    # //// call, which the no-progress detector (identical signature and result) does not see. The cause of those long
+    # //// turns is not established; this bounds them. It counts the calls to the tools the profile names in
+    # //// neoffice_doctrine_tools, direct or through the tool_search bridge (tool_call with calls=[{name, ...}]), and
+    # //// blocks the one past loop_caps.neoffice_max_doctrine_reads; it reads no query. Off (0) or without doctrine
+    # //// tools: nothing is counted. Remove if upstream makes loop caps configurable per tool.
+    def _neoffice_check_doctrine_cap(
+        self, tool_name: str, args: Mapping[str, Any], signature: ToolCallSignature,
+    ) -> ToolGuardrailDecision | None:
+        cap, names = self.config.loop_caps.neoffice_max_doctrine_reads, self.config.neoffice_doctrine_tools
+        if not cap or not names:
+            return None
+        from tools.tool_search_catalog import TOOL_CALL_NAME  # the bridge's name, one definition (read only when on)
+
+        if tool_name == TOOL_CALL_NAME:
+            inner = args.get("calls") if isinstance(args.get("calls"), list) else []
+            increment = sum(1 for call in inner if isinstance(call, Mapping)
+                            and is_neoffice_doctrine_tool(str(call.get("name") or ""), names))
+        else:
+            increment = 1 if is_neoffice_doctrine_tool(tool_name, names) else 0
+        if not increment:
+            return None
+        count = self._turn_neoffice_doctrine_reads
+        if count >= cap:
+            return self._decide("block", NEOFFICE_DOCTRINE_READ_CAP_CODE, tool_name, count, signature, cap=cap)
+        self._turn_neoffice_doctrine_reads = count + increment
+        return None
+    # //// END Neoffice ////
 
 
 def toolguard_synthetic_result(decision: ToolGuardrailDecision) -> str:

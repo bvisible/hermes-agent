@@ -280,7 +280,25 @@ NEOFFICE_GUARDRAIL_SUMMARY_REQUEST = (
     "found, saying plainly which part of the request you could not get. If you need something "
     "from the user to go on, call kanban_block with your question as the reason instead."
 )
+# //// Neoffice — the same request when the doctrine read ceiling stopped the worker (#3125): it states what happened
+# //// (it searched N times) and what to do, never what the searches found, which the code does not know ////
+NEOFFICE_DOCTRINE_CAP_SUMMARY_REQUEST = (
+    "The system stopped your doctrine searches: you have searched {count} times this turn. Do not search again, nor "
+    "call any other tool that looks something up. Finish now: call kanban_complete with your answer to the user as "
+    "the summary, in their language, from what you have ALREADY found, saying plainly which part of the request you "
+    "could not get. If you need something from the user to go on, call kanban_block with your question as the reason "
+    "instead."
+)
 NEOFFICE_TERMINAL_TEXT_KEYS = {"kanban_complete": ("summary", "result"), "kanban_block": ("reason",)}
+
+
+def neoffice_summary_request(decision: Any) -> str:
+    """The request a stopped worker receives: the doctrine read ceiling's own, else the stop's (#3125)."""
+    from agent.tool_guardrails import NEOFFICE_DOCTRINE_READ_CAP_CODE
+
+    if getattr(decision, "code", "") == NEOFFICE_DOCTRINE_READ_CAP_CODE:
+        return NEOFFICE_DOCTRINE_CAP_SUMMARY_REQUEST.format(count=getattr(decision, "count", 0))
+    return NEOFFICE_GUARDRAIL_SUMMARY_REQUEST.format(tool=getattr(decision, "tool_name", "") or "a tool")
 
 
 def _neoffice_json_args(raw: Any) -> dict:
@@ -642,7 +660,7 @@ def neoffice_guardrail_summary(agent: Any, messages: list, decision: Any) -> str
     outcome = "failed"
     tool = getattr(decision, "tool_name", "") or "a tool"
     seen: list = []
-    append_message(messages, {"role": "user", "content": NEOFFICE_GUARDRAIL_SUMMARY_REQUEST.format(tool=tool)})
+    append_message(messages, {"role": "user", "content": neoffice_summary_request(decision)})  # //// Neoffice — #3125
     try:
         api_messages = _cch._iteration_summary_api_messages(agent, messages)
         build = _cch._SUMMARY_ATTEMPT_BUILDERS.get(agent.api_mode)  # other transports: upstream's text read

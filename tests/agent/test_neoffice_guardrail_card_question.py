@@ -4,7 +4,8 @@
 doctrine section five times, the identical-call streak stopped it, and asked twice for its answer it called the same
 tool again. The board, the exam and the poles' film kept that text; the person read the delivery filter's generic
 sentence. The card now ends on the catalog's guardrail_card question, in the task's language, and nothing else changes:
-the same guardrail, the same summary requests, the same auto-complete net, the same delivery.
+the same guardrail, the same summary requests, the same auto-complete net, the same delivery. The last section plays
+the same floor for the doctrine read ceiling's stop (#3125).
 
 The real path: a real board in a temporary home, the real agent loop with its provider faked, the real guardrail, the
 real auto-complete net and kanban handlers, then the notifier's formatter and the webhook adapter's real send().
@@ -253,3 +254,77 @@ def test_the_question_is_one_question_with_no_colon_and_no_number(lang):
     assert ":" not in text, "the chat line already reads « ✋ <pole> : <question> »"
     assert not any(ch.isdigit() for ch in text) and "." not in text and "!" not in text
     assert strip_internal_mechanics(text, lang) == text, "the delivery filter leaves it as it is"
+
+
+# ── the doctrine read ceiling's stop reaches the same floor (#3125) ─────────────────────────
+
+def _capped_worker(cap=2, calls=5, **guardrails):
+    """The real loop with the doctrine read ceiling at ``cap``: ``cap + 1`` reads, each with DIFFERENT arguments (the
+    no-progress detector sees none of them), the ceiling blocks the last, then two summary requests answered with a
+    read again (a chat turn makes none). Returns the turn's result and the agent."""
+    config = _hard_stop_config(neoffice_doctrine_tools=["wiki_read"],
+                               loop_caps={"neoffice_max_doctrine_reads": cap}, **guardrails)
+    agent = _make_agent(TOOL, max_iterations=10, config=config)
+    agent._disable_streaming = True
+    agent._ensure_primary_openai_client = lambda *, reason: agent.client
+
+    def read(call_id, n):
+        args = json.dumps({"path": "wiki/concepts/a-page.md", "section": f"{n}. Another section"})
+        return _mock_response(content="", finish_reason="tool_calls", tool_calls=[_mock_tool_call(TOOL, args, call_id)])
+
+    reads = [read(f"c{i}", i) for i in range(1, cap + 2)]
+    asked = [read(f"s{i}", 90 + i) for i in range(1, 3)]
+    agent.client.chat.completions.create.side_effect = reads + asked
+    with (
+        patch("model_tools.handle_function_call", return_value=NOT_FOUND),
+        patch.object(agent, "_persist_session"),
+        patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("work kanban task")
+    assert agent.client.chat.completions.create.call_count == calls, "the reads up to the block, then the requests"
+    return result, agent
+
+
+def _user_messages_sent(agent):
+    calls = agent.client.chat.completions.create.call_args_list
+    return [m["content"] for call in calls for m in call.kwargs.get("messages", [])
+            if m.get("role") == "user" and isinstance(m.get("content"), str)]
+
+
+@pytest.mark.parametrize("lang", ["fr", "de"])
+def test_the_ceilings_stop_ends_the_card_on_the_same_question(board, lang):
+    """Ceiling at 2, three reads with three different arguments: the ceiling's own code, its own request, two empty
+    answers, and the card ends on the question in the task's language (keys off: done, as for the streak)."""
+    from agent.neoffice_kanban_breaker import NEOFFICE_DOCTRINE_CAP_SUMMARY_REQUEST
+    from neoffice_branding import reply
+
+    tid = board(_body(lang))
+    result, agent = _capped_worker(cap=2)
+    assert result["turn_exit_reason"] == "guardrail_halt"
+    assert (result["guardrail"]["code"], result["guardrail"]["count"]) == ("neoffice_doctrine_read_cap", 2)
+    task, _kinds, summary = _read(tid)
+    assert task.status == "done", "keys off, the auto-complete net still closes the card"
+    assert result["final_response"] == summary == reply("guardrail_card", lang)
+    assert NEOFFICE_DOCTRINE_CAP_SUMMARY_REQUEST.format(count=2) in _user_messages_sent(agent)
+
+
+def test_with_the_key_of_3016_the_ceilings_stop_blocks_the_card_on_the_same_question(board):
+    from neoffice_branding import reply
+
+    tid = board(_body("fr"))
+    result, _agent = _capped_worker(cap=2, neoffice_final_answer_without_tools=True)
+    task, kinds, _summary = _read(tid)
+    assert task.status == "blocked" and "blocked" in kinds and "completed" not in kinds
+    assert result["final_response"] == reply("guardrail_card", "fr")
+
+
+def test_a_chat_turn_stopped_by_the_ceiling_keeps_upstreams_text_which_the_delivery_filter_replaces(monkeypatch):
+    from neoffice_branding import reply, strip_internal_mechanics
+
+    monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+    result, _agent = _capped_worker(cap=2, calls=3)
+    assert result["guardrail"]["code"] == "neoffice_doctrine_read_cap"
+    final = result["final_response"]
+    assert final != reply("guardrail_card", "fr")
+    assert strip_internal_mechanics(final, "fr") == reply("guardrail_halt", "fr")
